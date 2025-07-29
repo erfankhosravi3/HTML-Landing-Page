@@ -1,0 +1,55 @@
+<svg width="150" height="150" viewBox="0 0 150 150" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background circle -->
+  <circle cx="75" cy="75" r="70" fill="#ffffff" stroke="#e9ecef" stroke-width="2"/>
+  
+  <!-- Rainbow -->
+  <path d="M 20 50 Q 75 15 130 50" stroke="#ffd700" stroke-width="10" fill="none"/>
+  <path d="M 20 58 Q 75 23 130 58" stroke="#ffa500" stroke-width="8" fill="none"/>
+  <path d="M 20 66 Q 75 31 130 66" stroke="#ff6b35" stroke-width="6" fill="none"/>
+  
+  <!-- Earth character -->
+  <circle cx="75" cy="85" r="28" fill="#87ceeb"/>
+  <!-- Land masses -->
+  <path d="M 60 75 Q 70 68 75 75 Q 80 82 90 75" fill="#90ee90" stroke="#228b22" stroke-width="1"/>
+  <path d="M 55 85 Q 65 78 70 85 Q 75 92 80 85 Q 85 78 95 85" fill="#90ee90" stroke="#228b22" stroke-width="1"/>
+  <path d="M 65 95 Q 70 88 75 95 Q 80 102 85 95" fill="#90ee90" stroke="#228b22" stroke-width="1"/>
+  
+  <!-- Face -->
+  <circle cx="68" cy="78" r="2.5" fill="#000"/>
+  <circle cx="82" cy="78" r="2.5" fill="#000"/>
+  <path d="M 68 90 Q 75 96 82 90" stroke="#000" stroke-width="2.5" fill="none"/>
+  
+  <!-- Arms and hands -->
+  <line x1="50" y1="85" x2="35" y2="70" stroke="#000" stroke-width="4"/>
+  <circle cx="32" cy="67" r="5" fill="#ffb6c1"/>
+  <circle cx="32" cy="67" r="2.5" fill="#fff"/>
+  
+  <line x1="100" y1="85" x2="115" y2="70" stroke="#000" stroke-width="4"/>
+  <circle cx="118" cy="67" r="5" fill="#ffb6c1"/>
+  <circle cx="118" cy="67" r="2.5" fill="#fff"/>
+  
+  <!-- Legs and shoes -->
+  <line x1="68" y1="113" x2="68" y2="130" stroke="#000" stroke-width="4"/>
+  <ellipse cx="68" cy="133" rx="7" ry="4" fill="#4169e1"/>
+  
+  <line x1="82" y1="113" x2="82" y2="130" stroke="#000" stroke-width="4"/>
+  <ellipse cx="82" cy="133" rx="7" ry="4" fill="#4169e1"/>
+  
+  <!-- Clouds -->
+  <ellipse cx="40" cy="40" rx="10" ry="6" fill="#fff" stroke="#87ceeb" stroke-width="1"/>
+  <ellipse cx="48" cy="36" rx="7" ry="5" fill="#fff" stroke="#87ceeb" stroke-width="1"/>
+  <ellipse cx="55" cy="40" rx="8" ry="5" fill="#fff" stroke="#87ceeb" stroke-width="1"/>
+  
+  <ellipse cx="110" cy="40" rx="10" ry="6" fill="#fff" stroke="#87ceeb" stroke-width="1"/>
+  <ellipse cx="118" cy="36" rx="7" ry="5" fill="#fff" stroke="#87ceeb" stroke-width="1"/>
+  <ellipse cx="125" cy="40" rx="8" ry="5" fill="#fff" stroke="#87ceeb" stroke-width="1"/>
+  
+  <ellipse cx="30" cy="100" rx="8" ry="5" fill="#fff" stroke="#87ceeb" stroke-width="1"/>
+  <ellipse cx="37" cy="96" rx="5" ry="4" fill="#fff" stroke="#87ceeb" stroke-width="1"/>
+  <ellipse cx="44" cy="100" rx="6" ry="4" fill="#fff" stroke="#87ceeb" stroke-width="1"/>
+  
+  <!-- Text: WEE WORLD -->
+  <text x="75" y="145" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#333">
+    WEE WORLD
+  </text>
+</svg>

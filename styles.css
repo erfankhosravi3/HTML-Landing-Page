@@ -1,0 +1,346 @@
+/* Reset and Base Styles */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: linear-gradient(135deg, #87ceeb 0%, #98d8e8 50%, #b0e0e6 100%);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    color: #333;
+    position: relative;
+    overflow-x: hidden;
+}
+
+/* Floating clouds background */
+body::before {
+    content: '';
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-image: 
+        radial-gradient(circle at 20% 20%, rgba(255, 255, 255, 0.3) 0%, transparent 50%),
+        radial-gradient(circle at 80% 30%, rgba(255, 255, 255, 0.2) 0%, transparent 50%),
+        radial-gradient(circle at 40% 70%, rgba(255, 255, 255, 0.3) 0%, transparent 50%),
+        radial-gradient(circle at 90% 80%, rgba(255, 255, 255, 0.2) 0%, transparent 50%);
+    pointer-events: none;
+    z-index: -1;
+}
+
+.container {
+    background: rgba(255, 255, 255, 0.95);
+    backdrop-filter: blur(10px);
+    border-radius: 25px;
+    max-width: 400px;
+    width: 100%;
+    box-shadow: 0 25px 50px rgba(0, 0, 0, 0.15);
+    text-align: center;
+    position: relative;
+    overflow: hidden;
+    border: 3px solid rgba(255, 255, 255, 0.3);
+}
+
+.container::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 6px;
+    background: linear-gradient(90deg, #ff6b35, #ffd700, #ff6b35);
+    border-radius: 25px 25px 0 0;
+}
+
+/* Profile Section */
+.profile-section {
+    position: relative;
+    margin-bottom: 30px;
+}
+
+.profile-image {
+    width: 100%;
+    height: 40vh;
+    min-height: 150px;
+    background-image: url('images/LOGOOO.png');
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    position: relative;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.profile-image::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(255, 255, 255, 0.05);
+    backdrop-filter: blur(1px);
+}
+
+.profile-image img {
+    display: none;
+}
+
+.company {
+    font-size: 20px;
+    color: #ff6b35;
+    margin: 25px 0 16px 0;
+    font-weight: 600;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+.bio {
+    font-size: 15px;
+    color: #555;
+    line-height: 1.7;
+    max-width: 320px;
+    margin: 0 auto 25px auto;
+    padding: 0 25px;
+}
+
+/* Links Section */
+.links-section {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+    margin-bottom: 30px;
+    padding: 0 25px;
+}
+
+.link-card {
+    display: flex;
+    align-items: center;
+    padding: 18px 22px;
+    background: linear-gradient(135deg, #fff 0%, #f8f9fa 100%);
+    border-radius: 15px;
+    text-decoration: none;
+    color: #333;
+    font-weight: 500;
+    transition: all 0.3s ease;
+    border: 2px solid #e1e5e9;
+    position: relative;
+    overflow: hidden;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.08);
+}
+
+.link-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.6), transparent);
+    transition: left 0.6s ease;
+}
+
+.link-card:hover::before {
+    left: 100%;
+}
+
+.link-card:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.15);
+    border-color: #ff6b35;
+}
+
+/* Link card icons */
+.link-card i {
+    font-size: 20px;
+    margin-right: 15px;
+    width: 24px;
+    text-align: center;
+    font-weight: 600;
+}
+
+.link-card span {
+    flex: 1;
+    text-align: left;
+    font-size: 16px;
+}
+
+/* Specific link card colors - LIGHT BACKGROUNDS */
+.phone {
+    border-left: 5px solid #25d366;
+    background: linear-gradient(135deg, #f0f9f0 0%, #e8f5e8 100%);
+}
+
+.phone i {
+    color: #25d366;
+}
+
+.address {
+    border-left: 5px solid #9c27b0;
+    background: linear-gradient(135deg, #f8f0ff 0%, #f0e6ff 100%);
+}
+
+.address i {
+    color: #9c27b0;
+}
+
+.email {
+    border-left: 5px solid #ea4335;
+    background: linear-gradient(135deg, #fff5f5 0%, #ffeaea 100%);
+}
+
+.email i {
+    color: #ea4335;
+}
+
+.website {
+    border-left: 5px solid #ff6b35;
+    background: linear-gradient(135deg, #fff8f0 0%, #ffe6d6 100%);
+}
+
+.website i {
+    color: #ff6b35;
+}
+
+.instagram {
+    border-left: 5px solid #e4405f;
+    background: linear-gradient(135deg, #fff5f8 0%, #ffe6f0 100%);
+}
+
+.instagram i {
+    color: #e4405f;
+}
+
+.facebook {
+    border-left: 5px solid #1877f2;
+    background: linear-gradient(135deg, #f0f5ff 0%, #e6f0ff 100%);
+}
+
+.facebook i {
+    color: #1877f2;
+}
+
+.linkedin {
+    border-left: 5px solid #0077b5;
+    background: linear-gradient(135deg, #f0f9ff 0%, #fff 100%);
+}
+
+.linkedin i {
+    color: #0077b5;
+}
+
+.youtube {
+    border-left: 5px solid #ff0000;
+    background: linear-gradient(135deg, #fef2f2 0%, #fff 100%);
+}
+
+.youtube i {
+    color: #ff0000;
+}
+
+/* Footer */
+.footer {
+    margin-top: 25px;
+    padding: 25px 25px 25px 25px;
+    border-top: 2px solid #f1f5f9;
+    background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+}
+
+.footer p {
+    font-size: 13px;
+    color: #64748b;
+    font-weight: 500;
+}
+
+/* Responsive Design */
+@media (max-width: 480px) {
+    .container {
+        margin: 10px;
+        border-radius: 20px;
+    }
+    
+    .link-card {
+        padding: 16px 18px;
+    }
+    
+    .link-card i {
+        font-size: 18px;
+        margin-right: 12px;
+    }
+    
+    .link-card span {
+        font-size: 15px;
+    }
+    
+    .profile-image {
+        height: 120px;
+    }
+    
+    .company {
+        font-size: 18px;
+    }
+    
+    .bio {
+        font-size: 14px;
+        padding: 0 20px;
+    }
+    
+    .links-section {
+        padding: 0 20px;
+    }
+    
+    .footer {
+        padding: 20px 20px 20px 20px;
+    }
+}
+
+/* Animation for page load */
+@keyframes fadeInUp {
+    from {
+        opacity: 0;
+        transform: translateY(40px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.container {
+    animation: fadeInUp 0.8s ease-out;
+}
+
+/* Hover effects for better interactivity */
+.link-card:active {
+    transform: translateY(-1px);
+    transition: transform 0.1s ease;
+}
+
+/* Focus states for accessibility */
+.link-card:focus {
+    outline: 3px solid #ff6b35;
+    outline-offset: 2px;
+}
+
+/* Loading state */
+.loading {
+    opacity: 0.7;
+    pointer-events: none;
+}
+
+/* Fun floating animation for background elements */
+@keyframes float {
+    0%, 100% { transform: translateY(0px); }
+    50% { transform: translateY(-10px); }
+}
+
+body::before {
+    animation: float 6s ease-in-out infinite;
+}
