@@ -261,43 +261,154 @@ body::before {
 
 /* Responsive Design */
 @media (max-width: 480px) {
+    body {
+        padding: 10px;
+        min-height: 100vh;
+    }
+    
     .container {
-        margin: 10px;
+        margin: 0;
         border-radius: 20px;
-    }
-    
-    .link-card {
-        padding: 16px 18px;
-    }
-    
-    .link-card i {
-        font-size: 18px;
-        margin-right: 12px;
-    }
-    
-    .link-card span {
-        font-size: 15px;
+        max-width: 100%;
+        width: 100%;
+        box-shadow: 0 15px 30px rgba(0, 0, 0, 0.1);
     }
     
     .profile-image {
-        height: 120px;
+        height: 35vh;
+        min-height: 120px;
     }
     
     .company {
         font-size: 18px;
+        margin: 20px 0 12px 0;
+        padding: 0 15px;
     }
     
     .bio {
         font-size: 14px;
+        line-height: 1.5;
         padding: 0 20px;
+        margin-bottom: 20px;
+        max-width: 100%;
     }
     
     .links-section {
-        padding: 0 20px;
+        padding: 0 15px;
+        gap: 12px;
+    }
+    
+    .link-card {
+        padding: 14px 16px;
+        border-radius: 12px;
+        margin-bottom: 8px;
+    }
+    
+    .link-card i {
+        font-size: 16px;
+        margin-right: 10px;
+        width: 20px;
+    }
+    
+    .link-card span {
+        font-size: 14px;
+        font-weight: 500;
     }
     
     .footer {
-        padding: 20px 20px 20px 20px;
+        padding: 20px 15px;
+        margin-top: 20px;
+    }
+    
+    .footer p {
+        font-size: 12px;
+    }
+}
+
+/* Extra small devices */
+@media (max-width: 360px) {
+    body {
+        padding: 5px;
+    }
+    
+    .container {
+        border-radius: 15px;
+    }
+    
+    .profile-image {
+        height: 30vh;
+        min-height: 100px;
+    }
+    
+    .company {
+        font-size: 16px;
+        margin: 15px 0 10px 0;
+    }
+    
+    .bio {
+        font-size: 13px;
+        padding: 0 15px;
+    }
+    
+    .links-section {
+        padding: 0 10px;
+        gap: 10px;
+    }
+    
+    .link-card {
+        padding: 12px 14px;
+        border-radius: 10px;
+    }
+    
+    .link-card i {
+        font-size: 15px;
+        margin-right: 8px;
+        width: 18px;
+    }
+    
+    .link-card span {
+        font-size: 13px;
+    }
+    
+    .footer {
+        padding: 15px 10px;
+    }
+    
+    .footer p {
+        font-size: 11px;
+    }
+}
+
+/* Landscape orientation on mobile */
+@media (max-width: 480px) and (orientation: landscape) {
+    body {
+        padding: 5px;
+    }
+    
+    .container {
+        max-width: 90%;
+        margin: 0 auto;
+    }
+    
+    .profile-image {
+        height: 25vh;
+        min-height: 80px;
+    }
+    
+    .company {
+        margin: 15px 0 8px 0;
+    }
+    
+    .bio {
+        margin-bottom: 15px;
+    }
+    
+    .links-section {
+        gap: 8px;
+    }
+    
+    .link-card {
+        padding: 10px 12px;
     }
 }
 
