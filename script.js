@@ -22,15 +22,13 @@ document.addEventListener('DOMContentLoaded', function() {
     
     img.src = 'images/LOGOOO.png';
     
-    // Click tracking for analytics with Google Scripts platform override
+    // Click tracking for analytics
     const links = document.querySelectorAll('.link-card');
     links.forEach(link => {
         link.addEventListener('click', function(e) {
             const linkType = this.classList[1]; // phone, email, website, etc.
             const href = this.getAttribute('href');
             console.log(`Link clicked: ${linkType} - ${href}`);
-            
-
             
             // Optional: Send analytics data
             if (typeof gtag !== 'undefined') {
@@ -40,30 +38,6 @@ document.addEventListener('DOMContentLoaded', function() {
                 });
             }
         });
-    });
-    
-    // Smooth scroll for anchor links
-    document.querySelectorAll('a[href^="#"]').forEach(anchor => {
-        anchor.addEventListener('click', function (e) {
-            e.preventDefault();
-            const target = document.querySelector(this.getAttribute('href'));
-            if (target) {
-                target.scrollIntoView({
-                    behavior: 'smooth',
-                    block: 'start'
-                });
-            }
-        });
-    });
-    
-    // Parallax effect for background
-    window.addEventListener('scroll', function() {
-        const scrolled = window.pageYOffset;
-        const parallax = document.querySelector('body::before');
-        if (parallax) {
-            const speed = scrolled * 0.5;
-            parallax.style.transform = `translateY(${speed}px)`;
-        }
     });
     
     // Touch feedback for mobile
@@ -77,17 +51,6 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     });
     
-    // Keyboard navigation
-    document.addEventListener('keydown', function(e) {
-        if (e.key === 'Tab') {
-            document.body.classList.add('keyboard-navigation');
-        }
-    });
-    
-    document.addEventListener('mousedown', function() {
-        document.body.classList.remove('keyboard-navigation');
-    });
-    
     // Page load analytics
     console.log('WEE WORLD Landing Page loaded');
     
@@ -99,39 +62,7 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
     
-    // Viewport tracking
-    let viewportHeight = window.innerHeight;
-    let viewportWidth = window.innerWidth;
-    
-    window.addEventListener('resize', function() {
-        viewportHeight = window.innerHeight;
-        viewportWidth = window.innerWidth;
-        console.log(`Viewport: ${viewportWidth}x${viewportHeight}`);
-    });
-    
-    // Optional: Copy functionality for contact info
-    const copyToClipboard = async (text) => {
-        try {
-            await navigator.clipboard.writeText(text);
-            console.log('Copied to clipboard:', text);
-        } catch (err) {
-            console.error('Failed to copy:', err);
-        }
-    };
-    
-
-    
-    // Theme preference detection
-    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)');
-    if (prefersDark.matches) {
-        document.body.classList.add('dark-mode');
-    }
-    
-
-    
-
-    
-    // Optional: Add loading animation
+    // Add loading animation
     const container = document.querySelector('.container');
     if (container) {
         container.style.opacity = '0';
@@ -144,18 +75,3 @@ document.addEventListener('DOMContentLoaded', function() {
         }, 100);
     }
 });
-
-// Optional: Add intersection observer for animations
-if ('IntersectionObserver' in window) {
-    const observer = new IntersectionObserver((entries) => {
-        entries.forEach(entry => {
-            if (entry.isIntersecting) {
-                entry.target.classList.add('animate-in');
-            }
-        });
-    });
-    
-    document.querySelectorAll('.link-card').forEach(card => {
-        observer.observe(card);
-    });
-}
