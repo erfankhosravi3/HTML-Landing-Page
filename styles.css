@@ -271,15 +271,6 @@ body::before {
     color: #1877f2;
 }
 
-.google-scripts {
-    border-left: 5px solid #4285f4;
-    background: linear-gradient(135deg, #f0f5ff 0%, #e6f0ff 100%);
-}
-
-.google-scripts i {
-    color: #4285f4;
-}
-
 .footer {
     margin-top: 20px;
     padding: 20px 25px;
