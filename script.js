@@ -30,31 +30,39 @@ document.addEventListener('DOMContentLoaded', function() {
             const href = this.getAttribute('href');
             console.log(`Link clicked: ${linkType} - ${href}`);
             
-            // Ensure phone and email links work properly on mobile
-            if (linkType === 'phone' || linkType === 'email') {
-                // Let the default behavior handle it
-                console.log(`Allowing default behavior for ${linkType} link`);
-            }
+            // Don't prevent default behavior - let all links work naturally
+            // This ensures phone, email, and external links work properly
             
-            // Optional: Send analytics data
-            if (typeof gtag !== 'undefined') {
-                gtag('event', 'click', {
-                    'event_category': 'link',
-                    'event_label': linkType
-                });
-            }
+            // Optional: Send analytics data (non-blocking)
+            setTimeout(() => {
+                if (typeof gtag !== 'undefined') {
+                    gtag('event', 'click', {
+                        'event_category': 'link',
+                        'event_label': linkType
+                    });
+                }
+            }, 0);
         });
     });
     
-    // Touch feedback for mobile
+    // Improved touch feedback for mobile with better performance
     links.forEach(link => {
-        link.addEventListener('touchstart', function() {
-            this.style.transform = 'scale(0.95)';
-        });
+        link.addEventListener('touchstart', function(e) {
+            this.style.transition = 'transform 0.1s ease';
+            this.style.transform = 'scale(0.98)';
+        }, { passive: true });
         
-        link.addEventListener('touchend', function() {
-            this.style.transform = '';
-        });
+        link.addEventListener('touchend', function(e) {
+            this.style.transform = 'scale(1)';
+            setTimeout(() => {
+                this.style.transition = '';
+            }, 100);
+        }, { passive: true });
+        
+        link.addEventListener('touchcancel', function(e) {
+            this.style.transform = 'scale(1)';
+            this.style.transition = '';
+        }, { passive: true });
     });
     
     // Page load analytics
