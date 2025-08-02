@@ -22,13 +22,39 @@ document.addEventListener('DOMContentLoaded', function() {
     
     img.src = 'images/LOGOOO.png';
     
-    // Click tracking for analytics
+    // Click tracking for analytics with Google Scripts handling
     const links = document.querySelectorAll('.link-card');
     links.forEach(link => {
         link.addEventListener('click', function(e) {
             const linkType = this.classList[1]; // phone, email, website, etc.
             const href = this.getAttribute('href');
             console.log(`Link clicked: ${linkType} - ${href}`);
+            
+            // Handle Google Scripts links to prevent page disruption
+            if (href && href.includes('script.google.com')) {
+                e.preventDefault();
+                
+                // Show loading state
+                const originalText = this.querySelector('span').textContent;
+                this.querySelector('span').textContent = 'Opening...';
+                this.style.opacity = '0.7';
+                
+                // Create a new window with specific features to prevent redirection issues
+                const newWindow = window.open(href, '_blank', 'noopener,noreferrer,width=1200,height=800,scrollbars=yes,resizable=yes');
+                
+                // If popup was blocked, try a different approach
+                if (!newWindow || newWindow.closed || typeof newWindow.closed == 'undefined') {
+                    console.log('Popup blocked, using direct navigation');
+                    // Use location.href to navigate directly
+                    window.location.href = href;
+                }
+                
+                // Restore original state after a delay
+                setTimeout(() => {
+                    this.querySelector('span').textContent = originalText;
+                    this.style.opacity = '1';
+                }, 2000);
+            }
             
             // Optional: Send analytics data
             if (typeof gtag !== 'undefined') {
