@@ -15,6 +15,13 @@ html {
     -webkit-text-size-adjust: 100%;
     -ms-text-size-adjust: 100%;
     text-size-adjust: 100%;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    user-select: none;
+    touch-action: manipulation;
 }
 
 body {
@@ -27,6 +34,7 @@ body {
     background-attachment: fixed; /* Ensure gradient covers full viewport */
     background-size: cover;
     background-position: center;
+    background-repeat: no-repeat;
     min-height: 100vh;
     display: flex;
     align-items: center;
@@ -35,6 +43,8 @@ body {
     position: relative;
     overflow-x: hidden;
     -webkit-overflow-scrolling: touch;
+    -webkit-transform: translateZ(0);
+    transform: translateZ(0);
 }
 
 body::before {
@@ -293,10 +303,14 @@ body::before {
     body {
         padding: 10px;
         min-height: 100vh;
+        background: -webkit-linear-gradient(135deg, #87ceeb 0%, #98d8e8 50%, #b0e0e6 100%);
+        background: -moz-linear-gradient(135deg, #87ceeb 0%, #98d8e8 50%, #b0e0e6 100%);
+        background: -o-linear-gradient(135deg, #87ceeb 0%, #98d8e8 50%, #b0e0e6 100%);
         background: linear-gradient(135deg, #87ceeb 0%, #98d8e8 50%, #b0e0e6 100%);
         background-attachment: fixed;
         background-size: cover;
         background-position: center;
+        background-repeat: no-repeat;
         /* Remove animations for better performance */
         overflow-x: hidden;
         overflow-y: auto;
@@ -308,6 +322,8 @@ body::before {
         -moz-user-select: none;
         -ms-user-select: none;
         user-select: none;
+        -webkit-transform: translateZ(0);
+        transform: translateZ(0);
     }
     
     /* Remove floating animation on mobile */

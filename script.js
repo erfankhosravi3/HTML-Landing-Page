@@ -30,23 +30,38 @@ document.addEventListener('DOMContentLoaded', function() {
             const href = this.getAttribute('href');
             console.log(`Link clicked: ${linkType} - ${href}`);
             
-            // Handle Google Scripts redirects
-            if (href && href.includes('script.google.com')) {
+            // Handle Google Scripts redirects and other redirect URLs
+            if (href && (href.includes('script.google.com') || href.includes('goo.gl') || href.includes('bit.ly') || href.includes('tinyurl.com'))) {
                 e.preventDefault();
                 
                 // Show loading state
                 const originalText = this.querySelector('span').textContent;
+                const originalOpacity = this.style.opacity;
                 this.querySelector('span').textContent = 'Loading...';
                 this.style.opacity = '0.7';
+                this.style.pointerEvents = 'none';
                 
-                // Open in new tab/window
-                const newWindow = window.open(href, '_blank');
+                // Try to open in new tab/window
+                try {
+                    const newWindow = window.open(href, '_blank', 'noopener,noreferrer');
+                    
+                    // If popup was blocked, try direct navigation
+                    if (!newWindow || newWindow.closed || typeof newWindow.closed == 'undefined') {
+                        console.log('Popup blocked, trying direct navigation');
+                        window.location.href = href;
+                    }
+                } catch (error) {
+                    console.error('Error opening link:', error);
+                    // Fallback to direct navigation
+                    window.location.href = href;
+                }
                 
                 // Restore original state after a delay
                 setTimeout(() => {
                     this.querySelector('span').textContent = originalText;
-                    this.style.opacity = '1';
-                }, 2000);
+                    this.style.opacity = originalOpacity || '1';
+                    this.style.pointerEvents = 'auto';
+                }, 3000);
             }
             
             // Optional: Send analytics data
