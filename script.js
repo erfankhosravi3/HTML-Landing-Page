@@ -30,46 +30,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const href = this.getAttribute('href');
             console.log(`Link clicked: ${linkType} - ${href}`);
             
-            // Handle Google Scripts with platform detection override
-            if (href && href.includes('script.google.com')) {
-                e.preventDefault();
-                
-                // Store original user agent
-                const originalUserAgent = navigator.userAgent;
-                
-                // Create desktop user agent override
-                const desktopUserAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36';
-                
-                // Override user agent for this request
-                Object.defineProperty(navigator, 'userAgent', {
-                    value: desktopUserAgent,
-                    writable: false
-                });
-                
-                // Open in new tab with desktop user agent
-                const newWindow = window.open(href, '_blank', 'noopener,noreferrer');
-                
-                // Restore original user agent after a short delay
-                setTimeout(() => {
-                    Object.defineProperty(navigator, 'userAgent', {
-                        value: originalUserAgent,
-                        writable: false
-                    });
-                }, 1000);
-                
-                // If popup was blocked, try direct navigation
-                if (!newWindow || newWindow.closed || typeof newWindow.closed == 'undefined') {
-                    console.log('Popup blocked, trying direct navigation with desktop user agent');
-                    // Create a temporary link element to trigger navigation
-                    const tempLink = document.createElement('a');
-                    tempLink.href = href;
-                    tempLink.target = '_blank';
-                    tempLink.rel = 'noopener noreferrer';
-                    document.body.appendChild(tempLink);
-                    tempLink.click();
-                    document.body.removeChild(tempLink);
-                }
-            }
+
             
             // Optional: Send analytics data
             if (typeof gtag !== 'undefined') {
@@ -158,18 +119,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     };
     
-    // Optional: Service Worker for offline support
-    if ('serviceWorker' in navigator) {
-        window.addEventListener('load', function() {
-            navigator.serviceWorker.register('/sw.js')
-                .then(function(registration) {
-                    console.log('SW registered: ', registration);
-                })
-                .catch(function(registrationError) {
-                    console.log('SW registration failed: ', registrationError);
-                });
-        });
-    }
+
     
     // Theme preference detection
     const prefersDark = window.matchMedia('(prefers-color-scheme: dark)');
@@ -177,18 +127,9 @@ document.addEventListener('DOMContentLoaded', function() {
         document.body.classList.add('dark-mode');
     }
     
-    // Performance monitoring
-    window.addEventListener('load', function() {
-        setTimeout(function() {
-            const loadTime = performance.timing.loadEventEnd - performance.timing.navigationStart;
-            console.log('Page load time:', loadTime + 'ms');
-        }, 0);
-    });
+
     
-    // Error tracking
-    window.addEventListener('error', function(e) {
-        console.error('Page error:', e.error);
-    });
+
     
     // Optional: Add loading animation
     const container = document.querySelector('.container');
