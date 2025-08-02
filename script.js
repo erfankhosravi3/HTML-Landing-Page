@@ -1,28 +1,65 @@
-// Wait for DOM to load
+// Interactive Features and Analytics
 document.addEventListener('DOMContentLoaded', function() {
     
-    // Add click tracking for analytics
-    const linkCards = document.querySelectorAll('.link-card');
+    // Canvas logo rendering for better quality
+    const canvas = document.getElementById('logoCanvas');
+    const ctx = canvas.getContext('2d');
+    const img = new Image();
     
-    linkCards.forEach(card => {
-        card.addEventListener('click', function(e) {
-            // Track link clicks (you can integrate with Google Analytics here)
+    img.onload = function() {
+        // Set canvas size to match image dimensions
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        
+        // Clear canvas
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        // Draw image with high quality settings
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    };
+    
+    img.src = 'images/LOGOOO.png';
+    
+    // Click tracking for analytics and Google Scripts handling
+    const links = document.querySelectorAll('.link-card');
+    links.forEach(link => {
+        link.addEventListener('click', function(e) {
             const linkType = this.classList[1]; // phone, email, website, etc.
-            const linkText = this.querySelector('span').textContent;
+            const href = this.getAttribute('href');
+            console.log(`Link clicked: ${linkType} - ${href}`);
             
-            console.log(`Link clicked: ${linkText} (${linkType})`);
+            // Handle Google Scripts redirects
+            if (href && href.includes('script.google.com')) {
+                e.preventDefault();
+                
+                // Show loading state
+                const originalText = this.querySelector('span').textContent;
+                this.querySelector('span').textContent = 'Loading...';
+                this.style.opacity = '0.7';
+                
+                // Open in new tab/window
+                const newWindow = window.open(href, '_blank');
+                
+                // Restore original state after a delay
+                setTimeout(() => {
+                    this.querySelector('span').textContent = originalText;
+                    this.style.opacity = '1';
+                }, 2000);
+            }
             
-            // Add loading state
-            this.classList.add('loading');
-            
-            // Remove loading state after a short delay
-            setTimeout(() => {
-                this.classList.remove('loading');
-            }, 1000);
+            // Optional: Send analytics data
+            if (typeof gtag !== 'undefined') {
+                gtag('event', 'click', {
+                    'event_category': 'link',
+                    'event_label': linkType
+                });
+            }
         });
     });
     
-    // Add smooth scroll behavior for any anchor links
+    // Smooth scroll for anchor links
     document.querySelectorAll('a[href^="#"]').forEach(anchor => {
         anchor.addEventListener('click', function (e) {
             e.preventDefault();
@@ -36,68 +73,70 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     });
     
-    // Add parallax effect to background (subtle)
+    // Parallax effect for background
     window.addEventListener('scroll', function() {
         const scrolled = window.pageYOffset;
-        const parallax = document.querySelector('body');
-        const speed = scrolled * 0.5;
-        
+        const parallax = document.querySelector('body::before');
         if (parallax) {
+            const speed = scrolled * 0.5;
             parallax.style.transform = `translateY(${speed}px)`;
         }
     });
     
-    // Add touch feedback for mobile devices
-    linkCards.forEach(card => {
-        card.addEventListener('touchstart', function() {
-            this.style.transform = 'scale(0.98)';
+    // Touch feedback for mobile
+    links.forEach(link => {
+        link.addEventListener('touchstart', function() {
+            this.style.transform = 'scale(0.95)';
         });
         
-        card.addEventListener('touchend', function() {
+        link.addEventListener('touchend', function() {
             this.style.transform = '';
         });
     });
     
-    // Add keyboard navigation support
+    // Keyboard navigation
     document.addEventListener('keydown', function(e) {
         if (e.key === 'Tab') {
-            // Ensure focus is visible
             document.body.classList.add('keyboard-navigation');
         }
     });
     
-    // Remove keyboard navigation class when mouse is used
     document.addEventListener('mousedown', function() {
         document.body.classList.remove('keyboard-navigation');
     });
     
-    // Add page load analytics
-    console.log('Business card page loaded');
+    // Page load analytics
+    console.log('WEE WORLD Landing Page loaded');
     
-    // Optional: Add viewport tracking
-    let hasBeenViewed = false;
-    
-    function checkIfViewed() {
-        if (!hasBeenViewed && window.innerHeight > 0) {
-            hasBeenViewed = true;
-            console.log('Business card viewed');
-        }
-    }
-    
-    // Check on load and scroll
-    window.addEventListener('load', checkIfViewed);
-    window.addEventListener('scroll', checkIfViewed);
-    
-    // Add copy functionality for contact info (optional)
-    const profileSection = document.querySelector('.profile-section');
-    if (profileSection) {
-        profileSection.addEventListener('click', function() {
-            // You could add a "copy contact info" feature here
-            console.log('Profile section clicked');
+    // Optional: Track page views
+    if (typeof gtag !== 'undefined') {
+        gtag('event', 'page_view', {
+            'page_title': 'WEE WORLD Landing Page',
+            'page_location': window.location.href
         });
     }
     
-    // Add service worker registration for offline support (optional)
+    // Viewport tracking
+    let viewportHeight = window.innerHeight;
+    let viewportWidth = window.innerWidth;
+    
+    window.addEventListener('resize', function() {
+        viewportHeight = window.innerHeight;
+        viewportWidth = window.innerWidth;
+        console.log(`Viewport: ${viewportWidth}x${viewportHeight}`);
+    });
+    
+    // Optional: Copy functionality for contact info
+    const copyToClipboard = async (text) => {
+        try {
+            await navigator.clipboard.writeText(text);
+            console.log('Copied to clipboard:', text);
+        } catch (err) {
+            console.error('Failed to copy:', err);
+        }
+    };
+    
+    // Optional: Service Worker for offline support
     if ('serviceWorker' in navigator) {
         window.addEventListener('load', function() {
             navigator.serviceWorker.register('/sw.js')
@@ -110,56 +149,50 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
     
-    // Add theme preference detection
+    // Theme preference detection
     const prefersDark = window.matchMedia('(prefers-color-scheme: dark)');
-    
-    function handleThemeChange(e) {
-        if (e.matches) {
-            // Dark mode is preferred
-            document.body.classList.add('dark-mode');
-        } else {
-            // Light mode is preferred
-            document.body.classList.remove('dark-mode');
-        }
+    if (prefersDark.matches) {
+        document.body.classList.add('dark-mode');
     }
     
-    prefersDark.addListener(handleThemeChange);
-    handleThemeChange(prefersDark);
-    
-    // Add performance monitoring
+    // Performance monitoring
     window.addEventListener('load', function() {
-        if ('performance' in window) {
-            const perfData = performance.getEntriesByType('navigation')[0];
-            console.log('Page load time:', perfData.loadEventEnd - perfData.loadEventStart, 'ms');
-        }
+        setTimeout(function() {
+            const loadTime = performance.timing.loadEventEnd - performance.timing.navigationStart;
+            console.log('Page load time:', loadTime + 'ms');
+        }, 0);
     });
+    
+    // Error tracking
+    window.addEventListener('error', function(e) {
+        console.error('Page error:', e.error);
+    });
+    
+    // Optional: Add loading animation
+    const container = document.querySelector('.container');
+    if (container) {
+        container.style.opacity = '0';
+        container.style.transform = 'translateY(20px)';
+        
+        setTimeout(function() {
+            container.style.transition = 'all 0.6s ease-out';
+            container.style.opacity = '1';
+            container.style.transform = 'translateY(0)';
+        }, 100);
+    }
 });
 
-// Add CSS for keyboard navigation
-const style = document.createElement('style');
-style.textContent = `
-    .keyboard-navigation .link-card:focus {
-        outline: 2px solid #667eea;
-        outline-offset: 2px;
-    }
+// Optional: Add intersection observer for animations
+if ('IntersectionObserver' in window) {
+    const observer = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            if (entry.isIntersecting) {
+                entry.target.classList.add('animate-in');
+            }
+        });
+    });
     
-    .dark-mode {
-        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-    }
-    
-    .dark-mode .container {
-        background: rgba(30, 30, 30, 0.95);
-        color: #fff;
-    }
-    
-    .dark-mode .name {
-        color: #fff;
-    }
-    
-    .dark-mode .link-card {
-        background: rgba(255, 255, 255, 0.1);
-        border-color: rgba(255, 255, 255, 0.2);
-        color: #fff;
-    }
-`;
-document.head.appendChild(style);
+    document.querySelectorAll('.link-card').forEach(card => {
+        observer.observe(card);
+    });
+}

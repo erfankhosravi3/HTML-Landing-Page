@@ -3,49 +3,70 @@
     margin: 0;
     padding: 0;
     box-sizing: border-box;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    user-select: none;
+}
+
+html {
+    -webkit-text-size-adjust: 100%;
+    -ms-text-size-adjust: 100%;
+    text-size-adjust: 100%;
 }
 
 body {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #87ceeb; /* Fallback color */
+    background: -webkit-linear-gradient(135deg, #87ceeb 0%, #98d8e8 50%, #b0e0e6 100%);
+    background: -moz-linear-gradient(135deg, #87ceeb 0%, #98d8e8 50%, #b0e0e6 100%);
+    background: -o-linear-gradient(135deg, #87ceeb 0%, #98d8e8 50%, #b0e0e6 100%);
     background: linear-gradient(135deg, #87ceeb 0%, #98d8e8 50%, #b0e0e6 100%);
+    background-attachment: fixed; /* Ensure gradient covers full viewport */
+    background-size: cover;
+    background-position: center;
     min-height: 100vh;
     display: flex;
     align-items: center;
     justify-content: center;
     padding: 20px;
-    color: #333;
     position: relative;
     overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
 }
 
-/* Floating clouds background */
 body::before {
     content: '';
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background-image: 
-        radial-gradient(circle at 20% 20%, rgba(255, 255, 255, 0.3) 0%, transparent 50%),
-        radial-gradient(circle at 80% 30%, rgba(255, 255, 255, 0.2) 0%, transparent 50%),
-        radial-gradient(circle at 40% 70%, rgba(255, 255, 255, 0.3) 0%, transparent 50%),
-        radial-gradient(circle at 90% 80%, rgba(255, 255, 255, 0.2) 0%, transparent 50%);
-    pointer-events: none;
+    position: absolute;
+    top: 10%;
+    left: 10%;
+    width: 100px;
+    height: 100px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 50%;
+    animation: float 6s ease-in-out infinite;
     z-index: -1;
 }
 
+@keyframes float {
+    0%, 100% { transform: translateY(0px) rotate(0deg); }
+    50% { transform: translateY(-20px) rotate(180deg); }
+}
+
 .container {
-    background: rgba(255, 255, 255, 0.95);
-    backdrop-filter: blur(10px);
+    background: #ffffff; /* Pure white to match logo background */
     border-radius: 25px;
+    padding: 0;
     max-width: 400px;
     width: 100%;
-    box-shadow: 0 25px 50px rgba(0, 0, 0, 0.15);
-    text-align: center;
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+    border: 3px solid rgba(255, 255, 255, 0.3);
     position: relative;
     overflow: hidden;
-    border: 3px solid rgba(255, 255, 255, 0.3);
+    animation: fadeInUp 1s ease-out;
+    min-height: 600px; /* Ensure enough height for all content */
 }
 
 .container::before {
@@ -57,26 +78,46 @@ body::before {
     height: 6px;
     background: linear-gradient(90deg, #ff6b35, #ffd700, #ff6b35);
     border-radius: 25px 25px 0 0;
+    z-index: 1;
 }
 
-/* Profile Section */
-.profile-section {
-    position: relative;
-    margin-bottom: 30px;
+@keyframes fadeInUp {
+    from {
+        opacity: 0;
+        transform: translateY(30px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
 }
 
+/* Profile Image Section */
 .profile-image {
     width: 100%;
-    height: 40vh;
-    min-height: 150px;
-    background-image: url('images/LOGOOO.png');
-    background-size: cover;
-    background-position: center;
-    background-repeat: no-repeat;
-    position: relative;
+    height: 35vh;
+    min-height: 200px;
+    background: #ffffff;
+    border-radius: 20px 20px 0 0;
     display: flex;
-    justify-content: center;
     align-items: center;
+    justify-content: center;
+    position: relative;
+    overflow: hidden;
+    margin-bottom: 0;
+}
+
+.profile-image canvas {
+    max-width: 100%;
+    max-height: 100%;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+    display: block;
+}
+
+.profile-image img {
+    display: none;
 }
 
 .profile-image::before {
@@ -90,86 +131,92 @@ body::before {
     backdrop-filter: blur(1px);
 }
 
-.profile-image img {
-    display: none;
+.profile-info {
+    padding: 0 30px;
+    text-align: center;
 }
 
 .company {
     font-size: 20px;
-    color: #ff6b35;
-    margin: 25px 0 16px 0;
     font-weight: 600;
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+    color: #ff6b35;
+    margin: 20px 0 12px 0;
+    text-shadow: 0 2px 4px rgba(255, 107, 53, 0.2);
+    text-align: center;
+    width: 100%;
 }
 
 .bio {
     font-size: 15px;
-    color: #555;
-    line-height: 1.7;
+    line-height: 1.6;
+    color: #64748b;
+    margin-bottom: 25px;
     max-width: 320px;
-    margin: 0 auto 25px auto;
-    padding: 0 25px;
+    margin-left: auto;
+    margin-right: auto;
+    padding: 0 10px;
+    text-align: center;
 }
 
-/* Links Section */
 .links-section {
+    padding: 0 25px 25px 25px;
     display: flex;
     flex-direction: column;
     gap: 15px;
-    margin-bottom: 30px;
-    padding: 0 25px;
 }
 
 .link-card {
     display: flex;
     align-items: center;
-    padding: 18px 22px;
-    background: linear-gradient(135deg, #fff 0%, #f8f9fa 100%);
+    padding: 18px 20px;
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.8) 0%, rgba(255, 255, 255, 0.6) 100%);
     border-radius: 15px;
     text-decoration: none;
     color: #333;
     font-weight: 500;
     transition: all 0.3s ease;
-    border: 2px solid #e1e5e9;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.05);
     position: relative;
     overflow: hidden;
-    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.08);
 }
 
 .link-card::before {
     content: '';
     position: absolute;
     top: 0;
-    left: -100%;
-    width: 100%;
-    height: 100%;
-    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.6), transparent);
-    transition: left 0.6s ease;
-}
-
-.link-card:hover::before {
-    left: 100%;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0.05) 100%);
+    opacity: 0;
+    transition: opacity 0.3s ease;
 }
 
 .link-card:hover {
-    transform: translateY(-3px);
-    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.15);
-    border-color: #ff6b35;
+    transform: translateY(-2px);
+    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
+    border-color: rgba(255, 255, 255, 0.5);
 }
 
-/* Link card icons */
+.link-card:hover::before {
+    opacity: 1;
+}
+
 .link-card i {
     font-size: 20px;
     margin-right: 15px;
     width: 24px;
     text-align: center;
     font-weight: 600;
+    position: relative;
+    z-index: 1;
 }
 
 .link-card span {
-    flex: 1;
-    text-align: left;
     font-size: 16px;
+    position: relative;
+    z-index: 1;
 }
 
 /* Specific link card colors - LIGHT BACKGROUNDS */
@@ -227,43 +274,45 @@ body::before {
     color: #1877f2;
 }
 
-.linkedin {
-    border-left: 5px solid #0077b5;
-    background: linear-gradient(135deg, #f0f9ff 0%, #fff 100%);
-}
-
-.linkedin i {
-    color: #0077b5;
-}
-
-.youtube {
-    border-left: 5px solid #ff0000;
-    background: linear-gradient(135deg, #fef2f2 0%, #fff 100%);
-}
-
-.youtube i {
-    color: #ff0000;
-}
-
-/* Footer */
 .footer {
-    margin-top: 25px;
-    padding: 25px 25px 25px 25px;
-    border-top: 2px solid #f1f5f9;
-    background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+    margin-top: 20px;
+    padding: 20px 25px;
+    text-align: center;
+    border-top: 1px solid rgba(0, 0, 0, 0.1);
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.8) 0%, rgba(255, 255, 255, 0.6) 100%);
 }
 
 .footer p {
-    font-size: 13px;
+    font-size: 12px;
     color: #64748b;
-    font-weight: 500;
+    font-weight: 400;
 }
 
-/* Responsive Design */
+/* Responsive Design - FIXED MOBILE ISSUES */
 @media (max-width: 480px) {
     body {
         padding: 10px;
         min-height: 100vh;
+        background: linear-gradient(135deg, #87ceeb 0%, #98d8e8 50%, #b0e0e6 100%);
+        background-attachment: fixed;
+        background-size: cover;
+        background-position: center;
+        /* Remove animations for better performance */
+        overflow-x: hidden;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+        touch-action: manipulation;
+        -webkit-touch-callout: none;
+        -webkit-user-select: none;
+        -khtml-user-select: none;
+        -moz-user-select: none;
+        -ms-user-select: none;
+        user-select: none;
+    }
+    
+    /* Remove floating animation on mobile */
+    body::before {
+        display: none;
     }
     
     .container {
@@ -272,17 +321,51 @@ body::before {
         max-width: 100%;
         width: 100%;
         box-shadow: 0 15px 30px rgba(0, 0, 0, 0.1);
+        background: #ffffff; /* Pure white to match logo background */
+        border: 3px solid rgba(255, 255, 255, 0.3);
+        /* Remove animation for better performance */
+        animation: none;
+        transform: none;
+        min-height: auto; /* Remove fixed height on mobile */
+    }
+    
+    .container::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 6px;
+        background: linear-gradient(90deg, #ff6b35, #ffd700, #ff6b35);
+        border-radius: 20px 20px 0 0;
+        z-index: 1;
     }
     
     .profile-image {
-        height: 35vh;
-        min-height: 120px;
+        height: 40vh; /* Increased from 35vh */
+        min-height: 140px; /* Increased from 120px */
+        background: #ffffff; /* Pure white background */
+    }
+    
+    .profile-image canvas {
+        max-width: 100%;
+        max-height: 100%;
+        width: auto;
+        height: auto;
+        object-fit: contain;
+        transform: scale(1.2); /* Make it 20% bigger */
+    }
+    
+    .profile-image img {
+        display: none; /* Hide the img element, use canvas instead */
     }
     
     .company {
         font-size: 18px;
         margin: 20px 0 12px 0;
         padding: 0 15px;
+        color: #ff6b35;
+        text-align: center;
     }
     
     .bio {
@@ -291,6 +374,8 @@ body::before {
         padding: 0 20px;
         margin-bottom: 20px;
         max-width: 100%;
+        color: #64748b;
+        text-align: center;
     }
     
     .links-section {
@@ -299,33 +384,36 @@ body::before {
     }
     
     .link-card {
-        padding: 14px 16px;
+        padding: 16px 18px;
         border-radius: 12px;
-        margin-bottom: 8px;
+        /* Reduce hover effects on mobile for better performance */
+        transition: transform 0.2s ease;
+    }
+    
+    .link-card:hover {
+        transform: translateY(-1px);
     }
     
     .link-card i {
-        font-size: 16px;
-        margin-right: 10px;
+        font-size: 18px;
+        margin-right: 12px;
         width: 20px;
     }
     
     .link-card span {
-        font-size: 14px;
-        font-weight: 500;
+        font-size: 15px;
     }
     
     .footer {
-        padding: 20px 15px;
-        margin-top: 20px;
+        margin-top: 15px;
+        padding: 15px 20px;
     }
     
     .footer p {
-        font-size: 12px;
+        font-size: 11px;
     }
 }
 
-/* Extra small devices */
 @media (max-width: 360px) {
     body {
         padding: 5px;
@@ -335,9 +423,26 @@ body::before {
         border-radius: 15px;
     }
     
+    .container::before {
+        border-radius: 15px 15px 0 0;
+    }
+    
     .profile-image {
         height: 30vh;
         min-height: 100px;
+        background: #ffffff; /* Pure white background */
+    }
+    
+    .profile-image canvas {
+        max-width: 100%;
+        max-height: 100%;
+        width: auto;
+        height: auto;
+        object-fit: contain;
+    }
+    
+    .profile-image img {
+        display: none; /* Hide the img element, use canvas instead */
     }
     
     .company {
@@ -348,46 +453,38 @@ body::before {
     .bio {
         font-size: 13px;
         padding: 0 15px;
+        margin-bottom: 15px;
     }
     
     .links-section {
-        padding: 0 10px;
+        padding: 0 12px;
         gap: 10px;
     }
     
     .link-card {
-        padding: 12px 14px;
+        padding: 14px 16px;
         border-radius: 10px;
     }
     
     .link-card i {
-        font-size: 15px;
-        margin-right: 8px;
+        font-size: 16px;
+        margin-right: 10px;
         width: 18px;
     }
     
     .link-card span {
-        font-size: 13px;
-    }
-    
-    .footer {
-        padding: 15px 10px;
-    }
-    
-    .footer p {
-        font-size: 11px;
+        font-size: 14px;
     }
 }
 
-/* Landscape orientation on mobile */
-@media (max-width: 480px) and (orientation: landscape) {
+@media (max-height: 600px) and (orientation: landscape) {
     body {
         padding: 5px;
     }
     
     .container {
-        max-width: 90%;
-        margin: 0 auto;
+        max-height: 95vh;
+        overflow-y: auto;
     }
     
     .profile-image {
@@ -408,50 +505,6 @@ body::before {
     }
     
     .link-card {
-        padding: 10px 12px;
+        padding: 12px 16px;
     }
-}
-
-/* Animation for page load */
-@keyframes fadeInUp {
-    from {
-        opacity: 0;
-        transform: translateY(40px);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
-}
-
-.container {
-    animation: fadeInUp 0.8s ease-out;
-}
-
-/* Hover effects for better interactivity */
-.link-card:active {
-    transform: translateY(-1px);
-    transition: transform 0.1s ease;
-}
-
-/* Focus states for accessibility */
-.link-card:focus {
-    outline: 3px solid #ff6b35;
-    outline-offset: 2px;
-}
-
-/* Loading state */
-.loading {
-    opacity: 0.7;
-    pointer-events: none;
-}
-
-/* Fun floating animation for background elements */
-@keyframes float {
-    0%, 100% { transform: translateY(0px); }
-    50% { transform: translateY(-10px); }
-}
-
-body::before {
-    animation: float 6s ease-in-out infinite;
 }
