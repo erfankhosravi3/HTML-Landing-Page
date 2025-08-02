@@ -220,10 +220,23 @@ body::before {
 .phone {
     border-left: 5px solid #25d366;
     background: linear-gradient(135deg, #f0f9f0 0%, #e8f5e8 100%);
+    -webkit-tap-highlight-color: #25d366;
+    cursor: pointer;
 }
 
 .phone i {
     color: #25d366;
+}
+
+.email {
+    border-left: 5px solid #ea4335;
+    background: linear-gradient(135deg, #fff5f5 0%, #ffeaea 100%);
+    -webkit-tap-highlight-color: #ea4335;
+    cursor: pointer;
+}
+
+.email i {
+    color: #ea4335;
 }
 
 .address {

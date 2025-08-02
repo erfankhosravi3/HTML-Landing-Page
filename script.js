@@ -22,7 +22,7 @@ document.addEventListener('DOMContentLoaded', function() {
     
     img.src = 'images/LOGOOO.png';
     
-    // Click tracking for analytics with Google Scripts handling
+    // Click tracking for analytics with mobile link handling
     const links = document.querySelectorAll('.link-card');
     links.forEach(link => {
         link.addEventListener('click', function(e) {
@@ -30,7 +30,11 @@ document.addEventListener('DOMContentLoaded', function() {
             const href = this.getAttribute('href');
             console.log(`Link clicked: ${linkType} - ${href}`);
             
-
+            // Ensure phone and email links work properly on mobile
+            if (linkType === 'phone' || linkType === 'email') {
+                // Let the default behavior handle it
+                console.log(`Allowing default behavior for ${linkType} link`);
+            }
             
             // Optional: Send analytics data
             if (typeof gtag !== 'undefined') {
