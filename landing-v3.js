@@ -1,6 +1,6 @@
 // Landing Page Version 3 - Ultra Simple (No iframe needed)
 document.addEventListener('DOMContentLoaded', function() {
-    console.log('WEE WORLD - Ultra Simple Version Active - Cache v1000004');
+    console.log('WEE WORLD - Ultra Simple Version Active - Cache v9999999');
     
     // Canvas logo rendering
     const canvas = document.getElementById('logoCanvas');
