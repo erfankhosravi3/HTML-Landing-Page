@@ -5,17 +5,7 @@
     box-sizing: border-box;
 }
 
-/* Iframe-specific styles for Google Scripts compatibility */
-html, body {
-    width: 100% !important;
-    height: 100% !important;
-    overflow-x: hidden !important;
-    -webkit-text-size-adjust: 100% !important;
-    -ms-text-size-adjust: 100% !important;
-    text-size-adjust: 100% !important;
-}
-
-/* Force proper scaling in iframe environments */
+/* Force mobile scaling in iframe/sandbox environments */
 @media screen and (max-width: 768px) {
     html {
         zoom: 1 !important;
