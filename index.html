@@ -10,7 +10,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
-        /* Force proper iframe layout - prevent compressed display */
+        /* Force exact regular version appearance in iframe */
         html, body {
             width: 100% !important;
             height: auto !important;
@@ -18,62 +18,73 @@
             overflow-x: hidden !important;
             margin: 0 !important;
             padding: 0 !important;
-            font-size: 16px !important;
+            font-size: 18px !important;
             background: linear-gradient(135deg, #87ceeb 0%, #98d8e8 50%, #b0e0e6 100%) !important;
             background-attachment: fixed !important;
+            background-size: cover !important;
         }
         
         .container {
-            width: 100% !important;
-            max-width: 100% !important;
-            margin: 0 auto !important;
-            padding: 20px !important;
-            min-height: 100vh !important;
+            width: 90% !important;
+            max-width: 500px !important;
+            margin: 20px auto !important;
+            padding: 30px !important;
+            min-height: auto !important;
             background: rgba(255, 255, 255, 0.95) !important;
-            border-radius: 20px !important;
+            border-radius: 25px !important;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1) !important;
         }
         
         .profile-image {
             height: auto !important;
-            min-height: 180px !important;
-            max-height: 250px !important;
+            min-height: 250px !important;
+            max-height: 300px !important;
             display: flex !important;
             align-items: center !important;
             justify-content: center !important;
+            margin-bottom: 20px !important;
         }
         
         .profile-image canvas {
             max-width: 100% !important;
             height: auto !important;
-            max-height: 200px !important;
+            max-height: 250px !important;
             width: auto !important;
         }
         
         .link-card {
-            padding: 18px 22px !important;
-            font-size: 18px !important;
-            margin-bottom: 15px !important;
+            padding: 22px 25px !important;
+            font-size: 20px !important;
+            margin-bottom: 18px !important;
+            border-radius: 15px !important;
         }
         
         .link-card i {
-            font-size: 22px !important;
-            margin-right: 18px !important;
+            font-size: 24px !important;
+            margin-right: 20px !important;
         }
         
         .link-card span {
-            font-size: 18px !important;
+            font-size: 20px !important;
         }
         
         .company {
-            font-size: 24px !important;
-            margin: 25px 0 20px 0 !important;
+            font-size: 28px !important;
+            margin: 30px 0 25px 0 !important;
             font-weight: 600 !important;
+            text-align: center !important;
         }
         
         .bio {
-            font-size: 18px !important;
-            margin-bottom: 30px !important;
-            line-height: 1.5 !important;
+            font-size: 20px !important;
+            margin-bottom: 35px !important;
+            line-height: 1.6 !important;
+            text-align: center !important;
+        }
+        
+        .footer {
+            margin-top: 30px !important;
+            font-size: 16px !important;
         }
     </style>
 </head>
