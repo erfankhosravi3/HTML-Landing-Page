@@ -114,6 +114,8 @@ document.addEventListener('DOMContentLoaded', function() {
         } catch (e) {
             console.log('WEE WORLD - Cross-origin access blocked (expected)');
         }
+    } else {
+        console.log('WEE WORLD - Running in regular mode - using original sizes');
     }
     
     // Canvas logo rendering
