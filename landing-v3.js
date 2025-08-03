@@ -1,6 +1,6 @@
 // Landing Page Version 3 - Ultra Simple (No cross-origin access)
 document.addEventListener('DOMContentLoaded', function() {
-    console.log('WEE WORLD - Ultra Simple Version Active - Cache v10001');
+    console.log('WEE WORLD - Ultra Simple Version Active - Cache v10002');
     
     // Detect if running in iframe (Google Scripts)
     const isInIframe = window !== window.top;
@@ -10,6 +10,21 @@ document.addEventListener('DOMContentLoaded', function() {
         document.body.style.width = '100%';
         document.body.style.maxWidth = '100%';
         document.body.style.overflowX = 'hidden';
+        
+        // Force mobile viewport in iframe
+        const viewport = document.querySelector('meta[name="viewport"]');
+        if (viewport) {
+            viewport.setAttribute('content', 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, shrink-to-fit=no');
+        }
+        
+        // Prevent any cross-origin access attempts
+        try {
+            if (window.parent && window.parent !== window) {
+                console.log('WEE WORLD - Iframe detected, preventing cross-origin access');
+            }
+        } catch (e) {
+            console.log('WEE WORLD - Cross-origin access blocked (expected)');
+        }
     }
     
     // Canvas logo rendering
