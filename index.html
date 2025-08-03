@@ -5,10 +5,21 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, shrink-to-fit=no">
     <meta name="format-detection" content="telephone=yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="HandheldFriendly" content="true">
+    <meta name="MobileOptimized" content="width">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <!-- Allow embedding in frames for Google Scripts compatibility -->
     <meta name="robots" content="noindex, nofollow">
+    <style>
+        /* Inline critical mobile CSS to ensure it loads first */
+        @media screen and (max-width: 768px) {
+            html { zoom: 1 !important; -webkit-text-size-adjust: none !important; }
+            body { zoom: 1 !important; width: 100vw !important; max-width: 100vw !important; overflow-x: hidden !important; }
+        }
+    </style>
     <title>WEE WORLD - Early Childhood Enrichment Hub</title>
-    <link rel="stylesheet" href="styles.css?v=100">
+    <link rel="stylesheet" href="styles.css?v=20250803">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
@@ -63,6 +74,6 @@
         </div>
     </div>
 
-    <script src="app-clean.js?v=1"></script>
+    <script src="landing-v3.js?v=1"></script>
 </body>
 </html>
