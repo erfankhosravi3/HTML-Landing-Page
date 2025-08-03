@@ -1,15 +1,30 @@
 // Landing Page Version 3 - Ultra Simple (No cross-origin access)
 document.addEventListener('DOMContentLoaded', function() {
-    console.log('WEE WORLD - Ultra Simple Version Active - Cache v20240803040000');
+    console.log('WEE WORLD - Ultra Simple Version Active - Cache v20240803040100');
     
     // Detect if running in iframe (Google Scripts)
     const isInIframe = window !== window.top;
     if (isInIframe) {
         console.log('WEE WORLD - Running in Google Scripts iframe - applying iframe-safe mode');
-        // Apply iframe-safe styling
+        
+        // Apply iframe-safe styling for proper display
+        document.documentElement.style.width = '100%';
+        document.documentElement.style.height = '100%';
         document.body.style.width = '100%';
+        document.body.style.height = '100%';
         document.body.style.maxWidth = '100%';
         document.body.style.overflowX = 'hidden';
+        document.body.style.margin = '0';
+        document.body.style.padding = '0';
+        
+        // Force container to be full width
+        const container = document.querySelector('.container');
+        if (container) {
+            container.style.width = '100%';
+            container.style.maxWidth = '100%';
+            container.style.margin = '0 auto';
+            container.style.padding = '20px';
+        }
         
         // Force mobile viewport in iframe
         const viewport = document.querySelector('meta[name="viewport"]');
