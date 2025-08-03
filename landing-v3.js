@@ -1,6 +1,16 @@
 // Landing Page Version 3 - Ultra Simple (No cross-origin access)
 document.addEventListener('DOMContentLoaded', function() {
-    console.log('WEE WORLD - Ultra Simple Version Active - Cache v10000');
+    console.log('WEE WORLD - Ultra Simple Version Active - Cache v10001');
+    
+    // Detect if running in iframe (Google Scripts)
+    const isInIframe = window !== window.top;
+    if (isInIframe) {
+        console.log('WEE WORLD - Running in Google Scripts iframe - applying iframe-safe mode');
+        // Apply iframe-safe styling
+        document.body.style.width = '100%';
+        document.body.style.maxWidth = '100%';
+        document.body.style.overflowX = 'hidden';
+    }
     
     // Canvas logo rendering
     const canvas = document.getElementById('logoCanvas');
