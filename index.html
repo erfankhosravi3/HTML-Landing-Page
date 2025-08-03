@@ -6,17 +6,19 @@
     <meta name="format-detection" content="telephone=yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <title>WEE WORLD - Early Childhood Enrichment Hub</title>
-    <link rel="stylesheet" href="styles.css?v=20240803040100">
+    <link rel="stylesheet" href="styles.css?v=999999">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
-        /* Iframe-specific overrides for Google Scripts */
+        /* Force proper iframe layout - prevent compressed display */
         html, body {
             width: 100% !important;
-            height: 100% !important;
+            height: auto !important;
+            min-height: 100vh !important;
             overflow-x: hidden !important;
             margin: 0 !important;
             padding: 0 !important;
+            font-size: 16px !important;
         }
         
         .container {
@@ -24,6 +26,44 @@
             max-width: 100% !important;
             margin: 0 auto !important;
             padding: 20px !important;
+            min-height: 100vh !important;
+        }
+        
+        .profile-image {
+            height: auto !important;
+            min-height: 120px !important;
+            max-height: 200px !important;
+        }
+        
+        .profile-image canvas {
+            max-width: 100% !important;
+            height: auto !important;
+            max-height: 150px !important;
+        }
+        
+        .link-card {
+            padding: 16px 20px !important;
+            font-size: 16px !important;
+            margin-bottom: 12px !important;
+        }
+        
+        .link-card i {
+            font-size: 20px !important;
+            margin-right: 15px !important;
+        }
+        
+        .link-card span {
+            font-size: 16px !important;
+        }
+        
+        .company {
+            font-size: 20px !important;
+            margin: 20px 0 15px 0 !important;
+        }
+        
+        .bio {
+            font-size: 16px !important;
+            margin-bottom: 25px !important;
         }
     </style>
 </head>
@@ -78,6 +118,6 @@
         </div>
     </div>
 
-    <script src="landing-v3.js?v=20240803040100"></script>
+    <script src="landing-v3.js?v=999999"></script>
 </body>
 </html>
