@@ -1,6 +1,6 @@
-// Landing Page Version 3 - No cross-origin access
+// Landing Page Version 3 - Ultra Simple (No cross-origin access)
 document.addEventListener('DOMContentLoaded', function() {
-    console.log('WEE WORLD - Updated After Git Push');
+    console.log('WEE WORLD - Ultra Simple Version Active');
     
     // Canvas logo rendering
     const canvas = document.getElementById('logoCanvas');
@@ -20,7 +20,7 @@ document.addEventListener('DOMContentLoaded', function() {
         img.src = 'images/LOGOOO.png';
     }
     
-    // Basic touch feedback
+    // Simple touch feedback
     const links = document.querySelectorAll('.link-card');
     links.forEach(link => {
         link.addEventListener('touchstart', function() {
