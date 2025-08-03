@@ -78,6 +78,48 @@
     }
 }
 
+/* IFRAME ENHANCEMENT - Make content bigger when loaded in iframe */
+@media screen and (max-width: 480px) {
+    /* Target iframe content specifically */
+    iframe body .bio,
+    iframe .bio {
+        font-size: 24px !important;
+        line-height: 1.6 !important;
+        color: #64748b !important;
+        margin-bottom: 25px !important;
+        max-width: 320px !important;
+        margin-left: auto !important;
+        margin-right: auto !important;
+        padding: 0 10px !important;
+        text-align: center !important;
+    }
+    
+    iframe body .link-card span,
+    iframe .link-card span {
+        font-size: 22px !important;
+        position: relative !important;
+        z-index: 1 !important;
+    }
+    
+    iframe body .link-card i,
+    iframe .link-card i {
+        font-size: 24px !important;
+        margin-right: 15px !important;
+        width: 24px !important;
+        text-align: center !important;
+        font-weight: 600 !important;
+        position: relative !important;
+        z-index: 1 !important;
+    }
+    
+    iframe body .link-card,
+    iframe .link-card {
+        padding: 20px 22px !important;
+        border-radius: 15px !important;
+        font-size: 22px !important;
+    }
+}
+
 html {
     -webkit-text-size-adjust: 100%;
     -ms-text-size-adjust: 100%;
