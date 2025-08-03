@@ -22,16 +22,13 @@ document.addEventListener('DOMContentLoaded', function() {
     
     img.src = 'images/LOGOOO.png';
     
-    // Click tracking for analytics with mobile link handling
+    // Simple click tracking for analytics - no special handling
     const links = document.querySelectorAll('.link-card');
     links.forEach(link => {
         link.addEventListener('click', function(e) {
             const linkType = this.classList[1]; // phone, email, website, etc.
             const href = this.getAttribute('href');
             console.log(`Link clicked: ${linkType} - ${href}`);
-            
-            // Don't prevent default behavior - let all links work naturally
-            // This ensures phone, email, and external links work properly
             
             // Optional: Send analytics data (non-blocking)
             setTimeout(() => {
