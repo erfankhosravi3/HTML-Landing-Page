@@ -1,6 +1,6 @@
-// Minimal script to avoid any cross-origin issues
+// Clean script with no cross-origin access
 document.addEventListener('DOMContentLoaded', function() {
-    console.log('WEE WORLD Landing Page loaded');
+    console.log('WEE WORLD Landing Page loaded - Clean Version');
     
     // Canvas logo rendering
     const canvas = document.getElementById('logoCanvas');
