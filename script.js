@@ -1,6 +1,16 @@
 // Interactive Features and Analytics
 document.addEventListener('DOMContentLoaded', function() {
     
+    // Handle frame embedding (Google Scripts compatibility)
+    const isInFrame = window !== window.top;
+    if (isInFrame) {
+        console.log('Page is running in a frame - Google Scripts detected');
+        // Ensure proper scaling in frame
+        document.body.style.width = '100%';
+        document.body.style.maxWidth = '100%';
+        document.body.style.overflowX = 'hidden';
+    }
+    
     // Canvas logo rendering for better quality
     const canvas = document.getElementById('logoCanvas');
     const ctx = canvas.getContext('2d');
