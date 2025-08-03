@@ -1,6 +1,6 @@
 // Landing Page Version 3 - Ultra Simple (No cross-origin access)
 document.addEventListener('DOMContentLoaded', function() {
-    console.log('WEE WORLD - Ultra Simple Version Active - Cache v1000001');
+    console.log('WEE WORLD - Ultra Simple Version Active - Cache v1000002');
     
     // Detect if running in iframe (Google Scripts)
     const isInIframe = window !== window.top;
