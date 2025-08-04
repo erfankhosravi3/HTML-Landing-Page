@@ -863,8 +863,5 @@ function doGet(e) {
   `;
 
   return HtmlService.createHtmlOutput(html)
-    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
-    .addMetaTag('viewport', 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no')
-    .addMetaTag('format-detection', 'telephone=yes')
-    .addMetaTag('apple-mobile-web-app-capable', 'yes');
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 } 
