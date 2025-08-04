@@ -607,12 +607,12 @@ function doGet(e) {
 
           <!-- Contact Links -->
           <div class="links-section">
-            <a href="tel:+12029333219" class="link-card phone" onclick="handlePhoneClick(event)">
+            <a href="tel:+12029333219" class="link-card phone">
               <i class="fas fa-phone"></i>
               <span>Get A Wee More Info Now!</span>
             </a>
             
-            <a href="mailto:hello@weeworldchildrenhub.com" class="link-card email" onclick="handleEmailClick(event)">
+            <a href="mailto:hello@weeworldchildrenhub.com?subject=WEE%20WORLD%20Information%20Request&body=Hi%20WEE%20WORLD%20team%2C%0A%0AI%20would%20like%20to%20learn%20more%20about%20your%20services.%0A%0AThank%20you!" class="link-card email">
               <i class="fas fa-envelope"></i>
               <span>Email Wee!</span>
             </a>
@@ -651,38 +651,7 @@ function doGet(e) {
             
             // Logo is now loaded directly from GitHub - no JavaScript needed
             
-            // Handle phone and email clicks for Google Scripts compatibility
-            function handlePhoneClick(event) {
-              event.preventDefault();
-              const phoneNumber = '+12029333219';
-              
-              // Try multiple methods to open phone
-              if (navigator.userAgent.match(/iPhone|iPad|iPod/i)) {
-                window.location.href = 'tel:' + phoneNumber;
-              } else if (navigator.userAgent.match(/Android/i)) {
-                window.location.href = 'tel:' + phoneNumber;
-              } else {
-                // Fallback for desktop or other devices
-                window.open('tel:' + phoneNumber, '_blank');
-              }
-            }
-            
-            function handleEmailClick(event) {
-              event.preventDefault();
-              const emailAddress = 'hello@weeworldchildrenhub.com';
-              const subject = 'WEE WORLD Information Request';
-              const body = 'Hi WEE WORLD team,\n\nI would like to learn more about your services.\n\nThank you!';
-              
-              // Try multiple methods to open email
-              if (navigator.userAgent.match(/iPhone|iPad|iPod/i)) {
-                window.location.href = 'mailto:' + emailAddress + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
-              } else if (navigator.userAgent.match(/Android/i)) {
-                window.location.href = 'mailto:' + emailAddress + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
-              } else {
-                // Fallback for desktop or other devices
-                window.open('mailto:' + emailAddress + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body), '_blank');
-              }
-            }
+            // Phone and email links now use direct tel: and mailto: protocols for better mobile compatibility
             
             // Enhanced touch feedback with haptic-like effects
             const links = document.querySelectorAll('.link-card');
