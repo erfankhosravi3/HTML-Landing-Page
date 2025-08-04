@@ -88,6 +88,7 @@ function doGet(e) {
       <!DOCTYPE html>
       <html lang="en">
       <head>
+        <base target="_top">
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
         <meta name="format-detection" content="telephone=yes">
@@ -607,12 +608,12 @@ function doGet(e) {
 
           <!-- Contact Links -->
           <div class="links-section">
-            <a href="tel:+12029333219" class="link-card phone">
+            <a href="tel:+12029333219" target="_top" class="link-card phone">
               <i class="fas fa-phone"></i>
               <span>Get A Wee More Info Now!</span>
             </a>
             
-            <a href="mailto:hello@weeworldchildrenhub.com?subject=WEE%20WORLD%20Information%20Request&body=Hi%20WEE%20WORLD%20team%2C%0A%0AI%20would%20like%20to%20learn%20more%20about%20your%20services.%0A%0AThank%20you!" class="link-card email">
+            <a href="mailto:hello@weeworldchildrenhub.com?subject=WEE%20WORLD%20Information%20Request&body=Hi%20WEE%20WORLD%20team%2C%0A%0AI%20would%20like%20to%20learn%20more%20about%20your%20services.%0A%0AThank%20you!" target="_top" class="link-card email">
               <i class="fas fa-envelope"></i>
               <span>Email Wee!</span>
             </a>
@@ -653,25 +654,30 @@ function doGet(e) {
             
             // Phone and email links now use direct tel: and mailto: protocols for better mobile compatibility
             
-            // Mobile-specific phone and email handling for Google Scripts
+            // Enhanced phone and email handling with window.top navigation
             const phoneLink = document.querySelector('.link-card.phone');
             const emailLink = document.querySelector('.link-card.email');
             
             if (phoneLink) {
               phoneLink.addEventListener('click', function(e) {
-                // For mobile devices, try multiple methods to open phone
+                // For mobile devices, use window.top to break out of iframe
                 if (/Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)) {
                   e.preventDefault();
-                  // Try multiple approaches for mobile
+                  // Use window.top to break out of iframe
                   try {
-                    window.location.href = 'tel:+12029333219';
+                    window.top.location.href = 'tel:+12029333219';
                   } catch (err) {
-                    // Fallback: copy to clipboard and show alert
-                    navigator.clipboard.writeText('+12029333219').then(() => {
-                      alert('Phone number copied to clipboard: +12029333219');
-                    }).catch(() => {
-                      alert('Call us at: +12029333219');
-                    });
+                    // Fallback: try regular window.location
+                    try {
+                      window.location.href = 'tel:+12029333219';
+                    } catch (err2) {
+                      // Final fallback: copy to clipboard
+                      navigator.clipboard.writeText('+12029333219').then(() => {
+                        alert('Phone number copied to clipboard: +12029333219');
+                      }).catch(() => {
+                        alert('Call us at: +12029333219');
+                      });
+                    }
                   }
                 } else {
                   // For desktop, show phone number
@@ -683,22 +689,28 @@ function doGet(e) {
             
             if (emailLink) {
               emailLink.addEventListener('click', function(e) {
-                // For mobile devices, try multiple methods to open email
+                // For mobile devices, use window.top to break out of iframe
                 if (/Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)) {
                   e.preventDefault();
                   const emailAddress = 'hello@weeworldchildrenhub.com';
                   const subject = 'WEE WORLD Information Request';
                   const body = 'Hi WEE WORLD team,\n\nI would like to learn more about your services.\n\nThank you!';
                   
+                  // Use window.top to break out of iframe
                   try {
-                    window.location.href = 'mailto:' + emailAddress + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
+                    window.top.location.href = 'mailto:' + emailAddress + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
                   } catch (err) {
-                    // Fallback: copy email to clipboard and show alert
-                    navigator.clipboard.writeText(emailAddress).then(() => {
-                      alert('Email copied to clipboard: ' + emailAddress);
-                    }).catch(() => {
-                      alert('Email us at: ' + emailAddress);
-                    });
+                    // Fallback: try regular window.location
+                    try {
+                      window.location.href = 'mailto:' + emailAddress + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
+                    } catch (err2) {
+                      // Final fallback: copy email to clipboard
+                      navigator.clipboard.writeText(emailAddress).then(() => {
+                        alert('Email copied to clipboard: ' + emailAddress);
+                      }).catch(() => {
+                        alert('Email us at: ' + emailAddress);
+                      });
+                    }
                   }
                 } else {
                   // For desktop, show email
