@@ -586,52 +586,150 @@ function doGet(e) {
         </div>
 
         <script>
-          // Canvas logo rendering with embedded SVG fallback
-          const canvas = document.getElementById('logoCanvas');
-          if (canvas) {
-            const ctx = canvas.getContext('2d');
+          // Landing Page Version 4 - Complete with all JavaScript features
+          document.addEventListener('DOMContentLoaded', function() {
+            console.log('WEE WORLD - Version 4 Active - Cache v9999999 - Complete JavaScript Features');
             
-            // Create a simple WEE WORLD logo since we can't access external images
-            const logoText = 'WEE WORLD';
-            ctx.fillStyle = '#ff6b35';
-            ctx.font = 'bold 24px Inter';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText(logoText, 150, 75);
+            // Canvas logo rendering with enhanced styling
+            const canvas = document.getElementById('logoCanvas');
+            if (canvas) {
+              const ctx = canvas.getContext('2d');
+              
+              // Create a beautiful WEE WORLD logo with gradient and styling
+              const logoText = 'WEE WORLD';
+              const gradient = ctx.createLinearGradient(0, 0, 300, 0);
+              gradient.addColorStop(0, '#ff6b35');
+              gradient.addColorStop(0.5, '#ff8c42');
+              gradient.addColorStop(1, '#ff6b35');
+              
+              // Clear canvas and set background
+              ctx.fillStyle = '#ffffff';
+              ctx.fillRect(0, 0, 300, 150);
+              
+              // Add subtle background pattern
+              ctx.fillStyle = 'rgba(255, 107, 53, 0.05)';
+              for (let i = 0; i < 300; i += 20) {
+                ctx.fillRect(i, 0, 1, 150);
+              }
+              
+              // Draw main logo text with gradient
+              ctx.fillStyle = gradient;
+              ctx.font = 'bold 28px Inter';
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'middle';
+              ctx.fillText(logoText, 150, 75);
+              
+              // Add text shadow effect
+              ctx.shadowColor = 'rgba(255, 107, 53, 0.3)';
+              ctx.shadowBlur = 4;
+              ctx.shadowOffsetX = 2;
+              ctx.shadowOffsetY = 2;
+              ctx.fillText(logoText, 150, 75);
+              
+              // Reset shadow
+              ctx.shadowColor = 'transparent';
+              ctx.shadowBlur = 0;
+              ctx.shadowOffsetX = 0;
+              ctx.shadowOffsetY = 0;
+              
+              // Add decorative elements
+              ctx.strokeStyle = '#ff6b35';
+              ctx.lineWidth = 2;
+              ctx.beginPath();
+              ctx.moveTo(50, 100);
+              ctx.lineTo(250, 100);
+              ctx.stroke();
+              
+              // Add small decorative dots
+              ctx.fillStyle = '#ff6b35';
+              ctx.beginPath();
+              ctx.arc(80, 100, 3, 0, 2 * Math.PI);
+              ctx.arc(150, 100, 3, 0, 2 * Math.PI);
+              ctx.arc(220, 100, 3, 0, 2 * Math.PI);
+              ctx.fill();
+            }
             
-            // Add a simple background
-            ctx.fillStyle = '#ffffff';
-            ctx.fillRect(0, 0, 300, 150);
-            ctx.fillStyle = '#ff6b35';
-            ctx.font = 'bold 24px Inter';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText(logoText, 150, 75);
-          }
-          
-          // Simple touch feedback
-          const links = document.querySelectorAll('.link-card');
-          links.forEach(link => {
-            link.addEventListener('touchstart', function() {
-              this.style.transform = 'scale(0.98)';
-            }, { passive: true });
+            // Enhanced touch feedback with haptic-like effects
+            const links = document.querySelectorAll('.link-card');
+            links.forEach(link => {
+              // Touch feedback
+              link.addEventListener('touchstart', function() {
+                this.style.transform = 'scale(0.95)';
+                this.style.transition = 'transform 0.1s ease';
+                
+                // Add ripple effect
+                const ripple = document.createElement('div');
+                ripple.style.position = 'absolute';
+                ripple.style.borderRadius = '50%';
+                ripple.style.background = 'rgba(255, 255, 255, 0.6)';
+                ripple.style.transform = 'scale(0)';
+                ripple.style.animation = 'ripple 0.6s linear';
+                ripple.style.left = '50%';
+                ripple.style.top = '50%';
+                ripple.style.width = '20px';
+                ripple.style.height = '20px';
+                ripple.style.marginLeft = '-10px';
+                ripple.style.marginTop = '-10px';
+                ripple.style.pointerEvents = 'none';
+                this.appendChild(ripple);
+                
+                setTimeout(() => {
+                  if (ripple.parentNode) {
+                    ripple.parentNode.removeChild(ripple);
+                  }
+                }, 600);
+              }, { passive: true });
+              
+              link.addEventListener('touchend', function() {
+                this.style.transform = 'scale(1)';
+                this.style.transition = 'transform 0.2s ease';
+              }, { passive: true });
+              
+              // Mouse hover effects
+              link.addEventListener('mouseenter', function() {
+                this.style.transform = 'translateY(-3px) scale(1.02)';
+                this.style.boxShadow = '0 12px 30px rgba(0, 0, 0, 0.15)';
+              });
+              
+              link.addEventListener('mouseleave', function() {
+                this.style.transform = 'translateY(0) scale(1)';
+                this.style.boxShadow = '0 4px 15px rgba(0, 0, 0, 0.05)';
+              });
+            });
             
-            link.addEventListener('touchend', function() {
-              this.style.transform = 'scale(1)';
-            }, { passive: true });
+            // Enhanced fade in with staggered animation
+            const container = document.querySelector('.container');
+            if (container) {
+              container.style.opacity = '0';
+              container.style.transform = 'translateY(30px)';
+              
+              setTimeout(function() {
+                container.style.transition = 'opacity 0.8s ease, transform 0.8s ease';
+                container.style.opacity = '1';
+                container.style.transform = 'translateY(0)';
+              }, 200);
+            }
+            
+            // Add ripple animation CSS
+            const style = document.createElement('style');
+            style.textContent = '@keyframes ripple { to { transform: scale(4); opacity: 0; } }';
+            document.head.appendChild(style);
+            
+            // Add smooth scrolling for better UX
+            document.documentElement.style.scrollBehavior = 'smooth';
+            
+            // Add loading animation for better perceived performance
+            const profileImage = document.querySelector('.profile-image');
+            if (profileImage) {
+              profileImage.style.opacity = '0';
+              setTimeout(function() {
+                profileImage.style.transition = 'opacity 0.6s ease';
+                profileImage.style.opacity = '1';
+              }, 400);
+            }
+            
+            console.log('WEE WORLD site detected - complete JavaScript features loaded');
           });
-          
-          // Simple fade in
-          const container = document.querySelector('.container');
-          if (container) {
-            container.style.opacity = '0';
-            setTimeout(function() {
-              container.style.transition = 'opacity 0.5s ease';
-              container.style.opacity = '1';
-            }, 100);
-          }
-          
-          console.log('WEE WORLD site detected - exact copy of real landing page');
         </script>
       </body>
       </html>
