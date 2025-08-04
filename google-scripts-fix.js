@@ -89,7 +89,7 @@ function doGet(e) {
       <html lang="en">
       <head>
         <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
         <meta name="format-detection" content="telephone=yes">
         <meta name="apple-mobile-web-app-capable" content="yes">
         <title>WEE WORLD - Early Childhood Enrichment Hub</title>
@@ -101,25 +101,6 @@ function doGet(e) {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
-          }
-          
-          /* Force mobile scaling prevention */
-          @media screen and (max-width: 768px) {
-            html {
-              zoom: 1 !important;
-              -webkit-text-size-adjust: none !important;
-              -ms-text-size-adjust: none !important;
-              text-size-adjust: none !important;
-            }
-            
-            body {
-              zoom: 1 !important;
-              transform: scale(1) !important;
-              transform-origin: 0 0 !important;
-              width: 100vw !important;
-              min-width: 100vw !important;
-              max-width: 100vw !important;
-            }
           }
 
           html {
@@ -426,7 +407,6 @@ function doGet(e) {
               -webkit-text-size-adjust: none !important;
               -ms-text-size-adjust: none !important;
               text-size-adjust: none !important;
-              font-size: 16px !important;
             }
             
             body {
@@ -454,68 +434,6 @@ function doGet(e) {
               min-width: 100vw !important;
               max-width: 100vw !important;
             }
-            
-            .container {
-              margin: 0 !important;
-              border-radius: 20px !important;
-              max-width: 100% !important;
-              width: 100% !important;
-              box-shadow: 0 15px 30px rgba(0, 0, 0, 0.1) !important;
-              background: #ffffff !important;
-              border: 3px solid rgba(255, 255, 255, 0.3) !important;
-              animation: none !important;
-              transform: none !important;
-              min-height: auto !important;
-              font-size: 16px !important;
-            }
-            
-            .profile-image {
-              height: 40vh !important;
-              min-height: 140px !important;
-            }
-            
-            .company {
-              font-size: 18px !important;
-              margin: 20px 0 12px 0 !important;
-              padding: 0 15px !important;
-            }
-            
-            .bio {
-              font-size: 14px !important;
-              padding: 0 20px !important;
-              margin-bottom: 20px !important;
-            }
-            
-            .links-section {
-              padding: 0 15px !important;
-              gap: 12px !important;
-            }
-            
-            .link-card {
-              padding: 16px 18px !important;
-              border-radius: 12px !important;
-              font-size: 15px !important;
-            }
-            
-            .link-card i {
-              font-size: 18px !important;
-              margin-right: 12px !important;
-              width: 20px !important;
-            }
-            
-            .link-card span {
-              font-size: 15px !important;
-            }
-            
-            .footer {
-              margin-top: 20px;
-              padding: 20px 15px;
-            }
-            
-            .footer p {
-              font-size: 12px;
-            }
-          }
             
             body::before {
               display: none !important;
@@ -711,12 +629,12 @@ function doGet(e) {
 
             <a href="https://www.instagram.com/weeworldchildrenhub/?igsh=MXgxaGp2Z2Fsc2lwMw%3D%3D" class="link-card instagram" target="_blank">
               <i class="fab fa-instagram"></i>
-              <span>Wee Instagram!</span>
+              <span>Instagram Wee</span>
             </a>
 
             <a href="https://www.facebook.com/profile.php?id=61570066343703" class="link-card facebook" target="_blank">
               <i class="fab fa-facebook"></i>
-              <span>Wee Facebook!</span>
+              <span>Facebook Wee</span>
             </a>
           </div>
 
