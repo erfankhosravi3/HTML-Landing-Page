@@ -218,7 +218,12 @@ function doGet(e) {
           }
 
           .profile-image img {
-            display: none;
+            max-width: 100%;
+            max-height: 100%;
+            width: auto;
+            height: auto;
+            object-fit: contain;
+            display: block;
           }
 
           .profile-image::before {
@@ -581,7 +586,7 @@ function doGet(e) {
           <!-- Profile Section -->
           <div class="profile-section">
             <div class="profile-image">
-              <img src="https://github.com/erfankhosravi3/weeworld-assets/raw/980c33c32d89ef61a85fd0f2b73743a97296a953/final%202.png" alt="WEE WORLD Logo" style="width:300px;height:150px;display:block;">
+              <img src="https://github.com/erfankhosravi3/weeworld-assets/raw/980c33c32d89ef61a85fd0f2b73743a97296a953/final%202.png" alt="WEE WORLD Logo" style="max-width:100%;max-height:100%;width:auto;height:auto;object-fit:contain;display:block;">
             </div>
             <p class="company">Where Little Dreams Take Flight</p>
             <p class="bio">Welcome to WEE WORLD! We nurture curious minds, spark imaginations, and build confident little learners. Our experienced teachers create a safe, loving environment where every child thrives.</p>
