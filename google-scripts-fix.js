@@ -653,6 +653,61 @@ function doGet(e) {
             
             // Phone and email links now use direct tel: and mailto: protocols for better mobile compatibility
             
+            // Mobile-specific phone and email handling for Google Scripts
+            const phoneLink = document.querySelector('.link-card.phone');
+            const emailLink = document.querySelector('.link-card.email');
+            
+            if (phoneLink) {
+              phoneLink.addEventListener('click', function(e) {
+                // For mobile devices, try multiple methods to open phone
+                if (/Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)) {
+                  e.preventDefault();
+                  // Try multiple approaches for mobile
+                  try {
+                    window.location.href = 'tel:+12029333219';
+                  } catch (err) {
+                    // Fallback: copy to clipboard and show alert
+                    navigator.clipboard.writeText('+12029333219').then(() => {
+                      alert('Phone number copied to clipboard: +12029333219');
+                    }).catch(() => {
+                      alert('Call us at: +12029333219');
+                    });
+                  }
+                } else {
+                  // For desktop, show phone number
+                  e.preventDefault();
+                  alert('Call us at: +12029333219');
+                }
+              });
+            }
+            
+            if (emailLink) {
+              emailLink.addEventListener('click', function(e) {
+                // For mobile devices, try multiple methods to open email
+                if (/Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)) {
+                  e.preventDefault();
+                  const emailAddress = 'hello@weeworldchildrenhub.com';
+                  const subject = 'WEE WORLD Information Request';
+                  const body = 'Hi WEE WORLD team,\n\nI would like to learn more about your services.\n\nThank you!';
+                  
+                  try {
+                    window.location.href = 'mailto:' + emailAddress + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
+                  } catch (err) {
+                    // Fallback: copy email to clipboard and show alert
+                    navigator.clipboard.writeText(emailAddress).then(() => {
+                      alert('Email copied to clipboard: ' + emailAddress);
+                    }).catch(() => {
+                      alert('Email us at: ' + emailAddress);
+                    });
+                  }
+                } else {
+                  // For desktop, show email
+                  e.preventDefault();
+                  alert('Email us at: hello@weeworldchildrenhub.com');
+                }
+              });
+            }
+            
             // Enhanced touch feedback with haptic-like effects
             const links = document.querySelectorAll('.link-card');
             links.forEach(link => {
@@ -808,5 +863,8 @@ function doGet(e) {
   `;
 
   return HtmlService.createHtmlOutput(html)
-    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no')
+    .addMetaTag('format-detection', 'telephone=yes')
+    .addMetaTag('apple-mobile-web-app-capable', 'yes');
 } 
