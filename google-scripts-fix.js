@@ -581,8 +581,7 @@ function doGet(e) {
           <!-- Profile Section -->
           <div class="profile-section">
             <div class="profile-image">
-              <canvas id="logoCanvas" width="300" height="150"></canvas>
-              <img src="images/LOGOOO.png" alt="WEE WORLD Logo" onerror="this.src='images/logo.jpg'" style="display: none;">
+              <img src="https://github.com/erfankhosravi3/weeworld-assets/raw/980c33c32d89ef61a85fd0f2b73743a97296a953/final%202.png" alt="WEE WORLD Logo" style="width:300px;height:150px;display:block;">
             </div>
             <p class="company">Where Little Dreams Take Flight</p>
             <p class="bio">Welcome to WEE WORLD! We nurture curious minds, spark imaginations, and build confident little learners. Our experienced teachers create a safe, loving environment where every child thrives.</p>
@@ -600,7 +599,7 @@ function doGet(e) {
               <span>Email Wee!</span>
             </a>
 
-            <a href="https://www.google.com/maps/place/WEE+WORLD+Early+Childhood+Enrichment+Hub/@38.966367,-77.1242977,14z/data=!4m10!1m2!2m1!1s4400+Jenifer+St+NW+Suite+3+%26+250+Washington+DC+20015!3m6!1s0x89b7c9bea27f97f1:0xa9dcc7b3889450f8!8m2!3d38.958625!4d-77.0865747!15sCjQ0NDAwIEplbmlmZXIgU3QgTlcgU3VpdGUgMyAmIDI1MCBXYXNoaW5ndG9uIERDIDIwMDE1WjYiNDQ0MDAgamVuaWZlciBzdCBudyBzdWl0ZSAzICYgMjUwIHdhc2hpbmd0b24gZGMgMjAwMTWSARFjaGlsZF9jYXJlX2FnZW5jeaoBcAoIL20vMHJoNmsQASoHIgMyNTAoADIfEAEiG4daDm63GcIbz6YVfB6p_UVfURyy7dmGvg1G4DI4EAIiNDQ0MDAgamVuaWZlciBzdCBudyBzdWl0ZSAzICYgMjUwIHdhc2hpbmd0b24gZGMgMjAwMTXgAQA!16s%2Fg%2F11xgfywh42?entry=ttu&g_ep=EgoyMDI1MDczMC4wIKXMDSoASAFQAw%3D%3D" class="link-card address" target="_blank">
+            <a href="https://www.google.com/maps/place/WEE+WORLD+Early+Childhood+Enrichment+Hub/@38.966367,-77.1242977,14z/data=!4m10!1m2!2m1!1s4400+Jenifer+St+NW+Suite+3+%26+250+Washington+DC+20015!3m6!1s0x89b7c9bea27f97f1:0xa9dcc7b3889450f8!8m2!3d38.958625!4d-77.0865747!15sCjQ0NDAwIEplbmlmZXIgU3QgTlcgU3VpdGUgMyAmIDI1MCBXYXNoaW5ndG9uIERDIDIwMDE1WjYiNDQ0MDA gamVuaWZlciBzdCBudyBzdWl0ZSAzICYgMjUwIHdhc2hpbmd0b24gZGMgMjAwMTWSARFjaGlsZF9jYXJlX2FnZW5jeaoBcAoIL20vMHJoNmsQASoHIgMyNTAoADIfEAEiG4daDm63GcIbz6YVfB6p_UVfURyy7dmGvg1G4DI4EAIiNDQ0MDA gamVuaWZlciBzdCBudyBzdWl0ZSAzICYgMjUwIHdhc2hpbmd0b24gZGMgMjAwMTXgAQA!16s%2Fg%2F11xgfywh42?entry=ttu&g_ep=EgoyMDI1MDczMC4wIKXMDSoASAFQAw%3D%3D" class="link-card address" target="_blank">
               <i class="fas fa-map-marker-alt"></i>
               <span>Visit Wee!: 4400 Jenifer St NW Suite 3 & 250, Washington, DC 20015</span>
             </a>
@@ -632,42 +631,7 @@ function doGet(e) {
           document.addEventListener('DOMContentLoaded', function() {
             console.log('WEE WORLD - Version 4 Active - Cache v9999999 - Complete JavaScript Features');
             
-            // Canvas logo rendering - create a simple logo since external images don't work in Google Scripts
-            const canvas = document.getElementById('logoCanvas');
-            if (canvas) {
-              const ctx = canvas.getContext('2d');
-              
-              // Set canvas size
-              canvas.width = 300;
-              canvas.height = 150;
-              
-              // Clear canvas with white background
-              ctx.fillStyle = '#ffffff';
-              ctx.fillRect(0, 0, 300, 150);
-              
-              // Draw WEE WORLD text
-              ctx.fillStyle = '#ff6b35';
-              ctx.font = 'bold 36px Inter';
-              ctx.textAlign = 'center';
-              ctx.textBaseline = 'middle';
-              ctx.fillText('WEE WORLD', 150, 75);
-              
-              // Add a subtle decorative line
-              ctx.strokeStyle = '#ff6b35';
-              ctx.lineWidth = 2;
-              ctx.beginPath();
-              ctx.moveTo(50, 100);
-              ctx.lineTo(250, 100);
-              ctx.stroke();
-              
-              // Add small decorative dots
-              ctx.fillStyle = '#ff6b35';
-              ctx.beginPath();
-              ctx.arc(80, 100, 3, 0, 2 * Math.PI);
-              ctx.arc(150, 100, 3, 0, 2 * Math.PI);
-              ctx.arc(220, 100, 3, 0, 2 * Math.PI);
-              ctx.fill();
-            }
+            // Logo is now loaded directly from GitHub - no JavaScript needed
             
             // Enhanced touch feedback with haptic-like effects
             const links = document.querySelectorAll('.link-card');
