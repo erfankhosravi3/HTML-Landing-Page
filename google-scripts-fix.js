@@ -218,7 +218,12 @@ function doGet(e) {
           }
 
           .profile-image img {
-            display: none;
+            max-width: 100%;
+            max-height: 100%;
+            width: auto;
+            height: auto;
+            object-fit: contain;
+            display: block;
           }
 
           .profile-image::before {
@@ -557,8 +562,8 @@ function doGet(e) {
           <!-- Profile Section -->
           <div class="profile-section">
             <div class="profile-image">
-              <canvas id="logoCanvas" width="300" height="150"></canvas>
-              <img src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMzAwIiBoZWlnaHQ9IjE1MCIgdmlld0JveD0iMCAwIDMwMCAxNTAiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxyZWN0IHdpZHRoPSIzMDAiIGhlaWdodD0iMTUwIiBmaWxsPSJ3aGl0ZSIvPgo8dGV4dCB4PSIxNTAiIHk9Ijc1IiBmb250LWZhbWlseT0iSW50ZXIiIGZvbnQtc2l6ZT0iMjQiIGZvbnQtd2VpZ2h0PSI2MDAiIGZpbGw9IiNmZjZiMzUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGR5PSIuM2VtIj5XRUUgV09STERfPC90ZXh0Pgo8L3N2Zz4K" alt="WEE WORLD Logo" style="display: none;">
+              <canvas id="logoCanvas" width="300" height="150" style="display: none;"></canvas>
+              <img src="images/LOGOOO.png" alt="WEE WORLD Logo" onerror="this.style.display='none'; document.getElementById('logoCanvas').style.display='block';">
             </div>
             <p class="company">Where Little Dreams Take Flight</p>
             <p class="bio">Welcome to WEE WORLD! We nurture curious minds, spark imaginations, and build confident little learners. Our experienced teachers create a safe, loving environment where every child thrives.</p>
@@ -608,33 +613,36 @@ function doGet(e) {
           document.addEventListener('DOMContentLoaded', function() {
             console.log('WEE WORLD - Version 4 Active - Cache v9999999 - Complete JavaScript Features');
             
-            // Canvas logo rendering - EXACT copy of real site
+            // Logo handling - let the image load naturally like the real site
             const canvas = document.getElementById('logoCanvas');
-            if (canvas) {
-              const ctx = canvas.getContext('2d');
-              const img = new Image();
+            const logoImg = document.querySelector('.profile-image img');
+            
+            if (canvas && logoImg) {
+              // Hide canvas initially, show image
+              canvas.style.display = 'none';
+              logoImg.style.display = 'block';
               
-              img.onload = function() {
-                canvas.width = img.naturalWidth;
-                canvas.height = img.naturalHeight;
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
-                ctx.imageSmoothingEnabled = true;
-                ctx.imageSmoothingQuality = 'high';
-                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+              // Let the image load naturally
+              logoImg.onload = function() {
+                logoImg.style.display = 'block';
+                canvas.style.display = 'none';
               };
               
-              // Since we can't access external images in Google Scripts, create a simple logo
-              // This mimics the real logo as closely as possible
-              const logoText = 'WEE WORLD';
-              ctx.fillStyle = '#ffffff';
-              ctx.fillRect(0, 0, 300, 150);
-              
-              // Draw logo text in the brand color
-              ctx.fillStyle = '#ff6b35';
-              ctx.font = 'bold 32px Inter';
-              ctx.textAlign = 'center';
-              ctx.textBaseline = 'middle';
-              ctx.fillText(logoText, 150, 75);
+              logoImg.onerror = function() {
+                // If image fails to load, show canvas with simple text
+                canvas.style.display = 'block';
+                logoImg.style.display = 'none';
+                
+                const ctx = canvas.getContext('2d');
+                const logoText = 'WEE WORLD';
+                ctx.fillStyle = '#ffffff';
+                ctx.fillRect(0, 0, 300, 150);
+                ctx.fillStyle = '#ff6b35';
+                ctx.font = 'bold 32px Inter';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(logoText, 150, 75);
+              };
             }
             
             // Enhanced touch feedback with haptic-like effects
