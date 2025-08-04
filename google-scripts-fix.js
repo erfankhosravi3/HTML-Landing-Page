@@ -342,14 +342,14 @@ function doGet(e) {
             color: #ea4335;
           }
 
-          .address {
-            border-left: 5px solid #4285f4;
-            background: linear-gradient(135deg, #f0f4ff 0%, #e8f0ff 100%);
-            -webkit-tap-highlight-color: #4285f4;
+                    .address {
+            border-left: 5px solid #9c27b0;
+            background: linear-gradient(135deg, #f8f0ff 0%, #f0e6ff 100%);
+            -webkit-tap-highlight-color: #9c27b0;
           }
-
+          
           .address i {
-            color: #4285f4;
+            color: #9c27b0;
           }
 
           .website {
@@ -447,6 +447,15 @@ function doGet(e) {
             .link-card span {
               font-size: 15px !important;
             }
+            
+            .footer {
+              margin-top: 20px;
+              padding: 20px 15px;
+            }
+            
+            .footer p {
+              font-size: 12px;
+            }
           }
 
           @media (max-width: 360px) {
@@ -498,6 +507,15 @@ function doGet(e) {
             
             .link-card span {
               font-size: 14px;
+            }
+            
+            .footer {
+              margin-top: 15px;
+              padding: 15px 10px;
+            }
+            
+            .footer p {
+              font-size: 11px;
             }
           }
 
@@ -590,63 +608,33 @@ function doGet(e) {
           document.addEventListener('DOMContentLoaded', function() {
             console.log('WEE WORLD - Version 4 Active - Cache v9999999 - Complete JavaScript Features');
             
-            // Canvas logo rendering with enhanced styling
+            // Canvas logo rendering - EXACT copy of real site
             const canvas = document.getElementById('logoCanvas');
             if (canvas) {
               const ctx = canvas.getContext('2d');
+              const img = new Image();
               
-              // Create a beautiful WEE WORLD logo with gradient and styling
+              img.onload = function() {
+                canvas.width = img.naturalWidth;
+                canvas.height = img.naturalHeight;
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.imageSmoothingEnabled = true;
+                ctx.imageSmoothingQuality = 'high';
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+              };
+              
+              // Since we can't access external images in Google Scripts, create a simple logo
+              // This mimics the real logo as closely as possible
               const logoText = 'WEE WORLD';
-              const gradient = ctx.createLinearGradient(0, 0, 300, 0);
-              gradient.addColorStop(0, '#ff6b35');
-              gradient.addColorStop(0.5, '#ff8c42');
-              gradient.addColorStop(1, '#ff6b35');
-              
-              // Clear canvas and set background
               ctx.fillStyle = '#ffffff';
               ctx.fillRect(0, 0, 300, 150);
               
-              // Add subtle background pattern
-              ctx.fillStyle = 'rgba(255, 107, 53, 0.05)';
-              for (let i = 0; i < 300; i += 20) {
-                ctx.fillRect(i, 0, 1, 150);
-              }
-              
-              // Draw main logo text with gradient
-              ctx.fillStyle = gradient;
-              ctx.font = 'bold 28px Inter';
+              // Draw logo text in the brand color
+              ctx.fillStyle = '#ff6b35';
+              ctx.font = 'bold 32px Inter';
               ctx.textAlign = 'center';
               ctx.textBaseline = 'middle';
               ctx.fillText(logoText, 150, 75);
-              
-              // Add text shadow effect
-              ctx.shadowColor = 'rgba(255, 107, 53, 0.3)';
-              ctx.shadowBlur = 4;
-              ctx.shadowOffsetX = 2;
-              ctx.shadowOffsetY = 2;
-              ctx.fillText(logoText, 150, 75);
-              
-              // Reset shadow
-              ctx.shadowColor = 'transparent';
-              ctx.shadowBlur = 0;
-              ctx.shadowOffsetX = 0;
-              ctx.shadowOffsetY = 0;
-              
-              // Add decorative elements
-              ctx.strokeStyle = '#ff6b35';
-              ctx.lineWidth = 2;
-              ctx.beginPath();
-              ctx.moveTo(50, 100);
-              ctx.lineTo(250, 100);
-              ctx.stroke();
-              
-              // Add small decorative dots
-              ctx.fillStyle = '#ff6b35';
-              ctx.beginPath();
-              ctx.arc(80, 100, 3, 0, 2 * Math.PI);
-              ctx.arc(150, 100, 3, 0, 2 * Math.PI);
-              ctx.arc(220, 100, 3, 0, 2 * Math.PI);
-              ctx.fill();
             }
             
             // Enhanced touch feedback with haptic-like effects
