@@ -357,14 +357,14 @@ function doGet(e) {
             color: #9c27b0;
           }
 
-          .website {
-            border-left: 5px solid #34a853;
-            background: linear-gradient(135deg, #f0fff0 0%, #e8ffe8 100%);
-            -webkit-tap-highlight-color: #34a853;
+                    .website {
+            border-left: 5px solid #ff6b35;
+            background: linear-gradient(135deg, #fff8f0 0%, #ffe6d6 100%);
+            -webkit-tap-highlight-color: #ff6b35;
           }
-
+          
           .website i {
-            color: #34a853;
+            color: #ff6b35;
           }
 
           .instagram {
@@ -405,6 +405,25 @@ function doGet(e) {
             body {
               padding: 10px !important;
               font-size: 16px !important;
+              min-height: 100vh !important;
+              background: linear-gradient(135deg, #87ceeb 0%, #98d8e8 50%, #b0e0e6 100%) !important;
+              background-attachment: fixed !important;
+              background-size: cover !important;
+              background-position: center !important;
+              background-repeat: no-repeat !important;
+              overflow-x: hidden !important;
+              overflow-y: auto !important;
+              -webkit-overflow-scrolling: touch !important;
+              touch-action: manipulation !important;
+              -webkit-touch-callout: none !important;
+              -webkit-user-select: none !important;
+              user-select: none !important;
+              -webkit-transform: translateZ(0) !important;
+              transform: translateZ(0) !important;
+            }
+            
+            body::before {
+              display: none !important;
             }
             
             .container {
@@ -412,6 +431,11 @@ function doGet(e) {
               border-radius: 20px !important;
               max-width: 100% !important;
               width: 100% !important;
+              box-shadow: 0 15px 30px rgba(0, 0, 0, 0.1) !important;
+              background: #ffffff !important;
+              border: 3px solid rgba(255, 255, 255, 0.3) !important;
+              animation: none !important;
+              transform: none !important;
               min-height: auto !important;
             }
             
@@ -562,8 +586,7 @@ function doGet(e) {
           <!-- Profile Section -->
           <div class="profile-section">
             <div class="profile-image">
-              <canvas id="logoCanvas" width="300" height="150" style="display: none;"></canvas>
-              <img src="images/LOGOOO.png" alt="WEE WORLD Logo" onerror="this.style.display='none'; document.getElementById('logoCanvas').style.display='block';">
+              <img src="images/LOGOOO.png" alt="WEE WORLD Logo">
             </div>
             <p class="company">Where Little Dreams Take Flight</p>
             <p class="bio">Welcome to WEE WORLD! We nurture curious minds, spark imaginations, and build confident little learners. Our experienced teachers create a safe, loving environment where every child thrives.</p>
@@ -613,37 +636,8 @@ function doGet(e) {
           document.addEventListener('DOMContentLoaded', function() {
             console.log('WEE WORLD - Version 4 Active - Cache v9999999 - Complete JavaScript Features');
             
-            // Logo handling - let the image load naturally like the real site
-            const canvas = document.getElementById('logoCanvas');
-            const logoImg = document.querySelector('.profile-image img');
-            
-            if (canvas && logoImg) {
-              // Hide canvas initially, show image
-              canvas.style.display = 'none';
-              logoImg.style.display = 'block';
-              
-              // Let the image load naturally
-              logoImg.onload = function() {
-                logoImg.style.display = 'block';
-                canvas.style.display = 'none';
-              };
-              
-              logoImg.onerror = function() {
-                // If image fails to load, show canvas with simple text
-                canvas.style.display = 'block';
-                logoImg.style.display = 'none';
-                
-                const ctx = canvas.getContext('2d');
-                const logoText = 'WEE WORLD';
-                ctx.fillStyle = '#ffffff';
-                ctx.fillRect(0, 0, 300, 150);
-                ctx.fillStyle = '#ff6b35';
-                ctx.font = 'bold 32px Inter';
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'middle';
-                ctx.fillText(logoText, 150, 75);
-              };
-            }
+            // Logo handling - completely natural loading like real site
+            // No regulation - let the image load naturally as the iframe normally would
             
             // Enhanced touch feedback with haptic-like effects
             const links = document.querySelectorAll('.link-card');
