@@ -446,21 +446,49 @@ function doGet(e) {
               min-height: auto !important;
             }
             
+            .container::before {
+              content: '' !important;
+              position: absolute !important;
+              top: 0 !important;
+              left: 0 !important;
+              right: 0 !important;
+              height: 6px !important;
+              background: linear-gradient(90deg, #ff6b35, #ffd700, #ff6b35) !important;
+              border-radius: 20px 20px 0 0 !important;
+              z-index: 1 !important;
+            }
+            
             .profile-image {
               height: 40vh !important;
               min-height: 140px !important;
+              background: #ffffff !important;
+            }
+            
+            .profile-image img {
+              max-width: 100% !important;
+              max-height: 100% !important;
+              width: auto !important;
+              height: auto !important;
+              object-fit: contain !important;
+              transform: scale(1.2) !important;
             }
             
             .company {
               font-size: 18px !important;
               margin: 20px 0 12px 0 !important;
               padding: 0 15px !important;
+              color: #ff6b35 !important;
+              text-align: center !important;
             }
             
             .bio {
               font-size: 14px !important;
+              line-height: 1.5 !important;
               padding: 0 20px !important;
               margin-bottom: 20px !important;
+              max-width: 100% !important;
+              color: #64748b !important;
+              text-align: center !important;
             }
             
             .links-section {
