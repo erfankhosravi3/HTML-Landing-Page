@@ -629,12 +629,12 @@ function doGet(e) {
 
             <a href="https://www.instagram.com/weeworldchildrenhub/?igsh=MXgxaGp2Z2Fsc2lwMw%3D%3D" class="link-card instagram" target="_blank">
               <i class="fab fa-instagram"></i>
-              <span>Instagram Wee</span>
+              <span>Wee Instagram!</span>
             </a>
 
             <a href="https://www.facebook.com/profile.php?id=61570066343703" class="link-card facebook" target="_blank">
               <i class="fab fa-facebook"></i>
-              <span>Facebook Wee</span>
+              <span>Wee Facebook!</span>
             </a>
           </div>
 
