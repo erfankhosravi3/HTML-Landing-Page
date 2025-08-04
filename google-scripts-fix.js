@@ -404,10 +404,9 @@ function doGet(e) {
           /* EXACT MOBILE STYLING FROM REAL SITE */
           @media (max-width: 480px) {
             html {
-              zoom: 1 !important;
-              -webkit-text-size-adjust: none !important;
-              -ms-text-size-adjust: none !important;
-              text-size-adjust: none !important;
+              -webkit-text-size-adjust: 100%;
+              -ms-text-size-adjust: 100%;
+              text-size-adjust: 100%;
             }
             
             body {
@@ -428,12 +427,6 @@ function doGet(e) {
               user-select: none !important;
               -webkit-transform: translateZ(0) !important;
               transform: translateZ(0) !important;
-              zoom: 1 !important;
-              transform: scale(1) !important;
-              transform-origin: 0 0 !important;
-              width: 100vw !important;
-              min-width: 100vw !important;
-              max-width: 100vw !important;
             }
             
             body::before {
