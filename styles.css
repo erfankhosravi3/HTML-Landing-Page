@@ -78,15 +78,27 @@
     }
 }
 
-/* IFRAME ENHANCEMENT - Make content bigger when loaded in iframe */
+/* IFRAME ENHANCEMENT - Scale up the entire iframe content */
 @media screen and (max-width: 480px) {
-    /* Target iframe content specifically */
+    /* Scale up the iframe itself */
+    iframe {
+        transform: scale(3) !important;
+        transform-origin: top left !important;
+        width: 33.33% !important;
+        height: 33.33% !important;
+        border: none !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    
+    /* Alternative: try to target iframe content with extreme specificity */
     iframe body .bio,
     iframe .bio,
     iframe * .bio,
     iframe div .bio,
-    iframe p.bio {
-        font-size: 42px !important;
+    iframe p.bio,
+    iframe p {
+        font-size: 126px !important; /* 3x bigger than 42px */
         line-height: 1.6 !important;
         color: #64748b !important;
         margin-bottom: 25px !important;
@@ -101,8 +113,9 @@
     iframe .link-card span,
     iframe * .link-card span,
     iframe div .link-card span,
-    iframe a .link-card span {
-        font-size: 45px !important;
+    iframe a .link-card span,
+    iframe span {
+        font-size: 135px !important; /* 3x bigger than 45px */
         position: relative !important;
         z-index: 1 !important;
     }
@@ -111,10 +124,11 @@
     iframe .link-card i,
     iframe * .link-card i,
     iframe div .link-card i,
-    iframe a .link-card i {
-        font-size: 48px !important;
+    iframe a .link-card i,
+    iframe i {
+        font-size: 144px !important; /* 3x bigger than 48px */
         margin-right: 20px !important;
-        width: 48px !important;
+        width: 144px !important;
         text-align: center !important;
         font-weight: 600 !important;
         position: relative !important;
@@ -125,28 +139,11 @@
     iframe .link-card,
     iframe * .link-card,
     iframe div .link-card,
-    iframe a.link-card {
-        padding: 30px 35px !important;
-        border-radius: 20px !important;
-        font-size: 45px !important;
-    }
-    
-    /* Alternative approach - target by tag names */
-    iframe p {
-        font-size: 42px !important;
-    }
-    
-    iframe span {
-        font-size: 45px !important;
-    }
-    
-    iframe i {
-        font-size: 48px !important;
-    }
-    
+    iframe a.link-card,
     iframe a {
-        padding: 30px 35px !important;
-        font-size: 45px !important;
+        padding: 90px 105px !important; /* 3x bigger than 30px 35px */
+        border-radius: 60px !important; /* 3x bigger than 20px */
+        font-size: 135px !important; /* 3x bigger than 45px */
     }
 }
 

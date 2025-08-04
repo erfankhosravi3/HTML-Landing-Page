@@ -56,14 +56,12 @@ document.addEventListener('DOMContentLoaded', function() {
                             const style = iframeDoc.createElement('style');
                             style.textContent = `
                                 @media screen and (max-width: 480px) {
-                                    .bio, p.bio { font-size: 42px !important; }
-                                    .link-card span, a span { font-size: 45px !important; }
-                                    .link-card i, a i { font-size: 48px !important; }
-                                    .link-card, a.link-card { padding: 30px 35px !important; font-size: 45px !important; }
-                                    p { font-size: 42px !important; }
-                                    span { font-size: 45px !important; }
-                                    i { font-size: 48px !important; }
-                                    a { padding: 30px 35px !important; font-size: 45px !important; }
+                                    .bio, p.bio, p { font-size: 126px !important; }
+                                    .link-card span, a span, span { font-size: 135px !important; }
+                                    .link-card i, a i, i { font-size: 144px !important; }
+                                    .link-card, a.link-card, a { padding: 90px 105px !important; font-size: 135px !important; }
+                                    body { transform: scale(3) !important; transform-origin: top left !important; }
+                                    * { font-size: 126px !important; }
                                 }
                             `;
                             iframeDoc.head.appendChild(style);
