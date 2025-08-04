@@ -41,4 +41,47 @@ document.addEventListener('DOMContentLoaded', function() {
             container.style.opacity = '1';
         }, 100);
     }
+    
+    // IFRAME ENHANCEMENT - Try to inject styles into iframes
+    function enhanceIframeContent() {
+        const iframes = document.querySelectorAll('iframe');
+        iframes.forEach(iframe => {
+            try {
+                // Wait for iframe to load
+                iframe.addEventListener('load', function() {
+                    try {
+                        const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
+                        if (iframeDoc) {
+                            // Inject CSS to make content bigger
+                            const style = iframeDoc.createElement('style');
+                            style.textContent = `
+                                @media screen and (max-width: 480px) {
+                                    .bio, p.bio { font-size: 42px !important; }
+                                    .link-card span, a span { font-size: 45px !important; }
+                                    .link-card i, a i { font-size: 48px !important; }
+                                    .link-card, a.link-card { padding: 30px 35px !important; font-size: 45px !important; }
+                                    p { font-size: 42px !important; }
+                                    span { font-size: 45px !important; }
+                                    i { font-size: 48px !important; }
+                                    a { padding: 30px 35px !important; font-size: 45px !important; }
+                                }
+                            `;
+                            iframeDoc.head.appendChild(style);
+                            console.log('Iframe styles injected successfully');
+                        }
+                    } catch (e) {
+                        console.log('Could not inject styles into iframe (cross-origin):', e.message);
+                    }
+                });
+            } catch (e) {
+                console.log('Iframe enhancement failed:', e.message);
+            }
+        });
+    }
+    
+    // Try to enhance iframes
+    enhanceIframeContent();
+    
+    // Also try periodically in case iframes load later
+    setInterval(enhanceIframeContent, 2000);
 });

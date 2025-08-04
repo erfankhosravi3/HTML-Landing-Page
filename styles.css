@@ -82,7 +82,10 @@
 @media screen and (max-width: 480px) {
     /* Target iframe content specifically */
     iframe body .bio,
-    iframe .bio {
+    iframe .bio,
+    iframe * .bio,
+    iframe div .bio,
+    iframe p.bio {
         font-size: 42px !important;
         line-height: 1.6 !important;
         color: #64748b !important;
@@ -95,14 +98,20 @@
     }
     
     iframe body .link-card span,
-    iframe .link-card span {
+    iframe .link-card span,
+    iframe * .link-card span,
+    iframe div .link-card span,
+    iframe a .link-card span {
         font-size: 45px !important;
         position: relative !important;
         z-index: 1 !important;
     }
     
     iframe body .link-card i,
-    iframe .link-card i {
+    iframe .link-card i,
+    iframe * .link-card i,
+    iframe div .link-card i,
+    iframe a .link-card i {
         font-size: 48px !important;
         margin-right: 20px !important;
         width: 48px !important;
@@ -113,9 +122,30 @@
     }
     
     iframe body .link-card,
-    iframe .link-card {
+    iframe .link-card,
+    iframe * .link-card,
+    iframe div .link-card,
+    iframe a.link-card {
         padding: 30px 35px !important;
         border-radius: 20px !important;
+        font-size: 45px !important;
+    }
+    
+    /* Alternative approach - target by tag names */
+    iframe p {
+        font-size: 42px !important;
+    }
+    
+    iframe span {
+        font-size: 45px !important;
+    }
+    
+    iframe i {
+        font-size: 48px !important;
+    }
+    
+    iframe a {
+        padding: 30px 35px !important;
         font-size: 45px !important;
     }
 }
