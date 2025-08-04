@@ -821,6 +821,58 @@ function doGet(e) {
             }
             
             console.log('WEE WORLD site detected - complete JavaScript features loaded');
+            
+            // Force mobile styling to bypass Google Scripts sandbox
+            if (/Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)) {
+              // Force logo scaling
+              const logoImg = document.querySelector('.profile-image img');
+              if (logoImg) {
+                logoImg.style.transform = 'scale(1.2)';
+                logoImg.style.maxWidth = '100%';
+                logoImg.style.maxHeight = '100%';
+                logoImg.style.width = 'auto';
+                logoImg.style.height = 'auto';
+                logoImg.style.objectFit = 'contain';
+              }
+              
+              // Force container styling
+              const container = document.querySelector('.container');
+              if (container) {
+                container.style.margin = '0';
+                container.style.borderRadius = '20px';
+                container.style.maxWidth = '100%';
+                container.style.width = '100%';
+                container.style.boxShadow = '0 15px 30px rgba(0, 0, 0, 0.1)';
+                container.style.background = '#ffffff';
+                container.style.border = '3px solid rgba(255, 255, 255, 0.3)';
+                container.style.animation = 'none';
+                container.style.transform = 'none';
+                container.style.minHeight = 'auto';
+              }
+              
+              // Force text colors
+              const company = document.querySelector('.company');
+              if (company) {
+                company.style.color = '#ff6b35';
+                company.style.textAlign = 'center';
+              }
+              
+              const bio = document.querySelector('.bio');
+              if (bio) {
+                bio.style.color = '#64748b';
+                bio.style.textAlign = 'center';
+                bio.style.lineHeight = '1.5';
+                bio.style.maxWidth = '100%';
+              }
+              
+              // Force profile image background
+              const profileImage = document.querySelector('.profile-image');
+              if (profileImage) {
+                profileImage.style.background = '#ffffff';
+              }
+              
+              console.log('Forced mobile styling applied via JavaScript');
+            }
           });
         </script>
       </body>
