@@ -218,12 +218,7 @@ function doGet(e) {
           }
 
           .profile-image img {
-            max-width: 100%;
-            max-height: 100%;
-            width: auto;
-            height: auto;
-            object-fit: contain;
-            display: block;
+            display: none;
           }
 
           .profile-image::before {
@@ -586,7 +581,8 @@ function doGet(e) {
           <!-- Profile Section -->
           <div class="profile-section">
             <div class="profile-image">
-              <img src="images/LOGOOO.png" alt="WEE WORLD Logo">
+              <canvas id="logoCanvas" width="300" height="150"></canvas>
+              <img src="images/LOGOOO.png" alt="WEE WORLD Logo" onerror="this.src='images/logo.jpg'" style="display: none;">
             </div>
             <p class="company">Where Little Dreams Take Flight</p>
             <p class="bio">Welcome to WEE WORLD! We nurture curious minds, spark imaginations, and build confident little learners. Our experienced teachers create a safe, loving environment where every child thrives.</p>
@@ -636,8 +632,23 @@ function doGet(e) {
           document.addEventListener('DOMContentLoaded', function() {
             console.log('WEE WORLD - Version 4 Active - Cache v9999999 - Complete JavaScript Features');
             
-            // Logo handling - completely natural loading like real site
-            // No regulation - let the image load naturally as the iframe normally would
+            // Canvas logo rendering - EXACT copy of real site
+            const canvas = document.getElementById('logoCanvas');
+            if (canvas) {
+              const ctx = canvas.getContext('2d');
+              const img = new Image();
+              
+              img.onload = function() {
+                canvas.width = img.naturalWidth;
+                canvas.height = img.naturalHeight;
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.imageSmoothingEnabled = true;
+                ctx.imageSmoothingQuality = 'high';
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+              };
+              
+              img.src = 'images/LOGOOO.png';
+            }
             
             // Enhanced touch feedback with haptic-like effects
             const links = document.querySelectorAll('.link-card');
