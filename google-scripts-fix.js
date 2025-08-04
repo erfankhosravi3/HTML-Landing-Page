@@ -632,22 +632,41 @@ function doGet(e) {
           document.addEventListener('DOMContentLoaded', function() {
             console.log('WEE WORLD - Version 4 Active - Cache v9999999 - Complete JavaScript Features');
             
-            // Canvas logo rendering - EXACT copy of real site
+            // Canvas logo rendering - create a simple logo since external images don't work in Google Scripts
             const canvas = document.getElementById('logoCanvas');
             if (canvas) {
               const ctx = canvas.getContext('2d');
-              const img = new Image();
               
-              img.onload = function() {
-                canvas.width = img.naturalWidth;
-                canvas.height = img.naturalHeight;
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
-                ctx.imageSmoothingEnabled = true;
-                ctx.imageSmoothingQuality = 'high';
-                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-              };
+              // Set canvas size
+              canvas.width = 300;
+              canvas.height = 150;
               
-              img.src = 'images/LOGOOO.png';
+              // Clear canvas with white background
+              ctx.fillStyle = '#ffffff';
+              ctx.fillRect(0, 0, 300, 150);
+              
+              // Draw WEE WORLD text
+              ctx.fillStyle = '#ff6b35';
+              ctx.font = 'bold 36px Inter';
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'middle';
+              ctx.fillText('WEE WORLD', 150, 75);
+              
+              // Add a subtle decorative line
+              ctx.strokeStyle = '#ff6b35';
+              ctx.lineWidth = 2;
+              ctx.beginPath();
+              ctx.moveTo(50, 100);
+              ctx.lineTo(250, 100);
+              ctx.stroke();
+              
+              // Add small decorative dots
+              ctx.fillStyle = '#ff6b35';
+              ctx.beginPath();
+              ctx.arc(80, 100, 3, 0, 2 * Math.PI);
+              ctx.arc(150, 100, 3, 0, 2 * Math.PI);
+              ctx.arc(220, 100, 3, 0, 2 * Math.PI);
+              ctx.fill();
             }
             
             // Enhanced touch feedback with haptic-like effects
