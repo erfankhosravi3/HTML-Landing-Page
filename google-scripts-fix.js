@@ -77,14 +77,15 @@ function doGet(e) {
   scansSh.getRange(rowIndex, 2).setValue(counterIdStr);
   scansSh.getRange(rowIndex, 3).setValue(latestInfo);
 
-  // Check if this is a WEE WORLD URL and apply site-specific styling
+  // ===== SITE-SPECIFIC STYLING MODULES =====
+  
+  // Check if this is a WEE WORLD URL
   const isWeeWorldSite = dest.includes('landingpage.weeworldchildrenhub.com');
   
-  // Site-specific styling function for WEE WORLD
-  function getWeeWorldStyling() {
+  // Base styling for all sites
+  function getBaseStyling() {
     return `
       <style>
-        /* WEE WORLD SPECIFIC - Exact same styling as main site with massive mobile text */
         * {
           margin: 0;
           padding: 0;
@@ -288,8 +289,15 @@ function doGet(e) {
           color: #94a3b8;
           margin: 0;
         }
-        
-        /* MOBILE ENHANCEMENT - Make everything massive on mobile */
+      </style>
+    `;
+  }
+  
+  // WEE WORLD specific mobile enhancement
+  function getWeeWorldMobileEnhancement() {
+    return `
+      <style>
+        /* WEE WORLD MOBILE ENHANCEMENT - Massive text for mobile only */
         @media (max-width: 480px) {
           body {
             padding: 10px;
@@ -380,53 +388,23 @@ function doGet(e) {
     `;
   }
   
-  // WEE WORLD LANDING PAGE - Show complete landing page with massive mobile text
+  // Future site-specific modules can be added here
+  // function getOtherSiteStyling() { ... }
+  
+  // ===== HTML GENERATION =====
+  
+  // Generate HTML based on site type
   const html = `
     <!DOCTYPE html>
     <html>
     <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-      <title>WEE WORLD - Early Childhood Enrichment Hub</title>
+      <title>${isWeeWorldSite ? 'WEE WORLD - Early Childhood Enrichment Hub' : 'Redirecting...'}</title>
       <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
       <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-      ${isWeeWorldSite ? getWeeWorldStyling() : `
-      <style>
-        body { 
-          margin: 0; 
-          padding: 20px; 
-          font-family: Arial, sans-serif; 
-          text-align: center; 
-          background: linear-gradient(135deg, #87ceeb 0%, #98d8e8 50%, #b0e0e6 100%);
-          color: #333;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          min-height: 100vh;
-        }
-        .redirect-box {
-          background: white;
-          padding: 30px;
-          border-radius: 15px;
-          box-shadow: 0 10px 30px rgba(0,0,0,0.1);
-          max-width: 400px;
-          width: 90%;
-        }
-        .spinner {
-          border: 3px solid #f3f3f3;
-          border-top: 3px solid #3498db;
-          border-radius: 50%;
-          width: 30px;
-          height: 30px;
-          animation: spin 1s linear infinite;
-          margin: 20px auto;
-        }
-        @keyframes spin {
-          0% { transform: rotate(0deg); }
-          100% { transform: rotate(360deg); }
-        }
-      </style>
-      `}
+      ${getBaseStyling()}
+      ${isWeeWorldSite ? getWeeWorldMobileEnhancement() : ''}
     </head>
     <body>
       ${isWeeWorldSite ? `
