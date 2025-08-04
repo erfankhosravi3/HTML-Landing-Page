@@ -617,14 +617,14 @@ function doGet(e) {
         </style>
       </head>
       <body>
-        <div class="container">
+        <div class="container" style="background:#ffffff;border:3px solid rgba(255,255,255,0.3);border-radius:20px;box-shadow:0 15px 30px rgba(0,0,0,0.1);">
           <!-- Profile Section -->
           <div class="profile-section">
             <div class="profile-image">
-              <img src="https://github.com/erfankhosravi3/weeworld-assets/raw/980c33c32d89ef61a85fd0f2b73743a97296a953/final%202.png" alt="WEE WORLD Logo" style="max-width:100%;max-height:100%;width:auto;height:auto;object-fit:contain;display:block;">
+              <img src="https://github.com/erfankhosravi3/weeworld-assets/raw/980c33c32d89ef61a85fd0f2b73743a97296a953/final%202.png" alt="WEE WORLD Logo" style="max-width:100%;max-height:100%;width:auto;height:auto;object-fit:contain;display:block;transform:scale(1.2);background:#ffffff;">
             </div>
-            <p class="company">Where Little Dreams Take Flight</p>
-            <p class="bio">Welcome to WEE WORLD! We nurture curious minds, spark imaginations, and build confident little learners. Our experienced teachers create a safe, loving environment where every child thrives.</p>
+            <p class="company" style="color:#ff6b35;text-align:center;">Where Little Dreams Take Flight</p>
+            <p class="bio" style="color:#64748b;text-align:center;line-height:1.5;">Welcome to WEE WORLD! We nurture curious minds, spark imaginations, and build confident little learners. Our experienced teachers create a safe, loving environment where every child thrives.</p>
           </div>
 
           <!-- Contact Links -->
