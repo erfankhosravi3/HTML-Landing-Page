@@ -402,6 +402,13 @@ function doGet(e) {
 
           /* EXACT MOBILE STYLING FROM REAL SITE */
           @media (max-width: 480px) {
+            html {
+              zoom: 1 !important;
+              -webkit-text-size-adjust: none !important;
+              -ms-text-size-adjust: none !important;
+              text-size-adjust: none !important;
+            }
+            
             body {
               padding: 10px !important;
               font-size: 16px !important;
@@ -420,6 +427,12 @@ function doGet(e) {
               user-select: none !important;
               -webkit-transform: translateZ(0) !important;
               transform: translateZ(0) !important;
+              zoom: 1 !important;
+              transform: scale(1) !important;
+              transform-origin: 0 0 !important;
+              width: 100vw !important;
+              min-width: 100vw !important;
+              max-width: 100vw !important;
             }
             
             body::before {
@@ -596,7 +609,7 @@ function doGet(e) {
           <div class="links-section">
             <a href="tel:+12029333219" class="link-card phone">
               <i class="fas fa-phone"></i>
-              <span>Get A Wee More Info!</span>
+              <span>Get A Wee More Info Now!</span>
             </a>
             
             <a href="mailto:hello@weeworldchildrenhub.com" class="link-card email">
@@ -606,22 +619,22 @@ function doGet(e) {
 
             <a href="https://www.google.com/maps/place/WEE+WORLD+Early+Childhood+Enrichment+Hub/@38.966367,-77.1242977,14z/data=!4m10!1m2!2m1!1s4400+Jenifer+St+NW+Suite+3+%26+250+Washington+DC+20015!3m6!1s0x89b7c9bea27f97f1:0xa9dcc7b3889450f8!8m2!3d38.958625!4d-77.0865747!15sCjQ0NDAwIEplbmlmZXIgU3QgTlcgU3VpdGUgMyAmIDI1MCBXYXNoaW5ndG9uIERDIDIwMDE1WjYiNDQ0MDA gamVuaWZlciBzdCBudyBzdWl0ZSAzICYgMjUwIHdhc2hpbmd0b24gZGMgMjAwMTWSARFjaGlsZF9jYXJlX2FnZW5jeaoBcAoIL20vMHJoNmsQASoHIgMyNTAoADIfEAEiG4daDm63GcIbz6YVfB6p_UVfURyy7dmGvg1G4DI4EAIiNDQ0MDA gamVuaWZlciBzdCBudyBzdWl0ZSAzICYgMjUwIHdhc2hpbmd0b24gZGMgMjAwMTXgAQA!16s%2Fg%2F11xgfywh42?entry=ttu&g_ep=EgoyMDI1MDczMC4wIKXMDSoASAFQAw%3D%3D" class="link-card address" target="_blank">
               <i class="fas fa-map-marker-alt"></i>
-              <span>Visit Wee!: 4400 Jenifer St NW Suite 3 & 250, Washington, DC 20015</span>
+              <span>Visit Wee: 4400 Jenifer St NW Suite 3 & 250, Washington, DC 20015</span>
             </a>
 
             <a href="https://weeworldchildrenhub.com" class="link-card website" target="_blank">
               <i class="fas fa-globe"></i>
-              <span>Visit Website</span>
+              <span>Visit Weebsite!</span>
             </a>
 
             <a href="https://www.instagram.com/weeworldchildrenhub/?igsh=MXgxaGp2Z2Fsc2lwMw%3D%3D" class="link-card instagram" target="_blank">
               <i class="fab fa-instagram"></i>
-              <span>Instagram Wee!</span>
+              <span>Instagram Wee</span>
             </a>
 
             <a href="https://www.facebook.com/profile.php?id=61570066343703" class="link-card facebook" target="_blank">
               <i class="fab fa-facebook"></i>
-              <span>Facebook Wee!</span>
+              <span>Facebook Wee</span>
             </a>
           </div>
 
