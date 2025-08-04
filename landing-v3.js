@@ -1,6 +1,6 @@
-// Landing Page Version 3 - Ultra Simple (No iframe needed)
+// Landing Page Version 4 - Ultra Simple with Massive Iframe Enhancement
 document.addEventListener('DOMContentLoaded', function() {
-    console.log('WEE WORLD - Ultra Simple Version Active - Cache v9999999');
+    console.log('WEE WORLD - Version 4.1 Active - Cache v9999999 - Ultra Aggressive Iframe Enhancement v1.1');
     
     // Canvas logo rendering
     const canvas = document.getElementById('logoCanvas');
@@ -56,16 +56,18 @@ document.addEventListener('DOMContentLoaded', function() {
                             const style = iframeDoc.createElement('style');
                             style.textContent = `
                                 @media screen and (max-width: 480px) {
-                                    .bio, p.bio, p { font-size: 126px !important; }
-                                    .link-card span, a span, span { font-size: 135px !important; }
-                                    .link-card i, a i, i { font-size: 144px !important; }
-                                    .link-card, a.link-card, a { padding: 90px 105px !important; font-size: 135px !important; }
-                                    body { transform: scale(3) !important; transform-origin: top left !important; }
-                                    * { font-size: 126px !important; }
+                                    .bio, p.bio, p { font-size: 200px !important; }
+                                    .link-card span, a span, span { font-size: 220px !important; }
+                                    .link-card i, a i, i { font-size: 240px !important; }
+                                    .link-card, a.link-card, a { padding: 150px 180px !important; font-size: 220px !important; }
+                                    body { transform: scale(5) !important; transform-origin: top left !important; }
+                                    * { font-size: 200px !important; }
+                                    html { font-size: 200px !important; }
+                                    body { font-size: 200px !important; }
                                 }
                             `;
                             iframeDoc.head.appendChild(style);
-                            console.log('Iframe styles injected successfully');
+                            console.log('Iframe styles injected successfully - Version 4.1 v1.1 - Ultra aggressive text enhancement applied');
                         }
                     } catch (e) {
                         console.log('Could not inject styles into iframe (cross-origin):', e.message);

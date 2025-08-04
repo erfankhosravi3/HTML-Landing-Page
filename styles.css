@@ -80,70 +80,57 @@
 
 /* IFRAME ENHANCEMENT - Scale up the entire iframe content */
 @media screen and (max-width: 480px) {
-    /* Scale up the iframe itself */
+    /* Scale up the iframe itself - much more aggressive */
     iframe {
-        transform: scale(3) !important;
+        transform: scale(5) !important;
         transform-origin: top left !important;
-        width: 33.33% !important;
-        height: 33.33% !important;
+        width: 20% !important;
+        height: 20% !important;
         border: none !important;
         margin: 0 !important;
         padding: 0 !important;
+        position: relative !important;
+        z-index: 9999 !important;
     }
     
-    /* Alternative: try to target iframe content with extreme specificity */
-    iframe body .bio,
-    iframe .bio,
-    iframe * .bio,
-    iframe div .bio,
-    iframe p.bio,
+    /* Target any element inside iframe with extreme specificity */
+    iframe * {
+        font-size: 200px !important;
+        line-height: 1.2 !important;
+    }
+    
     iframe p {
-        font-size: 126px !important; /* 3x bigger than 42px */
-        line-height: 1.6 !important;
-        color: #64748b !important;
-        margin-bottom: 25px !important;
-        max-width: 320px !important;
-        margin-left: auto !important;
-        margin-right: auto !important;
-        padding: 0 10px !important;
-        text-align: center !important;
+        font-size: 200px !important;
+        margin: 20px 0 !important;
+        padding: 20px !important;
     }
     
-    iframe body .link-card span,
-    iframe .link-card span,
-    iframe * .link-card span,
-    iframe div .link-card span,
-    iframe a .link-card span,
     iframe span {
-        font-size: 135px !important; /* 3x bigger than 45px */
-        position: relative !important;
-        z-index: 1 !important;
+        font-size: 220px !important;
+        display: inline-block !important;
+        padding: 10px !important;
     }
     
-    iframe body .link-card i,
-    iframe .link-card i,
-    iframe * .link-card i,
-    iframe div .link-card i,
-    iframe a .link-card i,
     iframe i {
-        font-size: 144px !important; /* 3x bigger than 48px */
-        margin-right: 20px !important;
-        width: 144px !important;
-        text-align: center !important;
-        font-weight: 600 !important;
-        position: relative !important;
-        z-index: 1 !important;
+        font-size: 240px !important;
+        margin-right: 30px !important;
     }
     
-    iframe body .link-card,
-    iframe .link-card,
-    iframe * .link-card,
-    iframe div .link-card,
-    iframe a.link-card,
     iframe a {
-        padding: 90px 105px !important; /* 3x bigger than 30px 35px */
-        border-radius: 60px !important; /* 3x bigger than 20px */
-        font-size: 135px !important; /* 3x bigger than 45px */
+        padding: 50px 60px !important;
+        margin: 20px 0 !important;
+        border-radius: 30px !important;
+        font-size: 220px !important;
+        display: block !important;
+        text-decoration: none !important;
+    }
+    
+    /* Force all text to be huge */
+    iframe body,
+    iframe html {
+        font-size: 200px !important;
+        zoom: 5 !important;
+        -webkit-text-size-adjust: none !important;
     }
 }
 
