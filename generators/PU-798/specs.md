@@ -1,6 +1,6 @@
 # PU-798 — Spec Sheet
 
-**Source:** TM 9-6115-660-13&P (operator + field maintenance + RPSTL)
+**Source:** TM 9-6115-660-13&P (operator + field maintenance + RPSTL), TM 9-2330-202-14&P (trailer)
 
 ## Identification
 | Field | Value |
@@ -22,6 +22,7 @@ Related variants in same TM: PU-799, PU-798A, PU-799A, AN/MJQ-37, AN/MJQ-38.
 
 ## Documentation
 - `TM-9-6115-660-13P.pdf` — Operator, unit, direct-support maintenance + RPSTL (489 pages)
+- `trailer-M116A3/TM-9-2330-202-14P.pdf` — M101/M116/M116A3 trailer chassis manual (415 pages)
 
 ## Fleet units
 | Serial | Hours | Location | Notes |

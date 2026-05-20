@@ -1,6 +1,6 @@
 # AMMPS MEP-1050 — Spec Sheet
 
-**Source:** TM 9-6115-751-10 (operator)
+**Source:** TM 9-6115-751-10 (operator), TM 9-6115-751-24&P (field/sustainment)
 
 ## Identification
 | Field | Value |
@@ -44,7 +44,7 @@
 
 ## Documentation
 - `TM-9-6115-751-10_Operator.pdf` — Operator (288 pages)
-- TM 9-6115-751-24&P (field/sustainment) — not yet acquired
+- `TM-9-6115-751-24P_FieldMaint.pdf` — Field/sustainment maintenance + RPSTL (1328 pages, 1 JUL 2011)
 
 ## Fleet units
 | Serial | Hours @ last read | Location | Notes |
