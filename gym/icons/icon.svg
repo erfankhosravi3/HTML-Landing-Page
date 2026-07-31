@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- IronLog app icon: dark rounded square, green dumbbell -->
+  <rect x="0" y="0" width="512" height="512" rx="112" fill="#0b0d10"/>
+  <rect x="16" y="16" width="480" height="480" rx="100" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="4"/>
+  <g transform="rotate(-30 256 256)">
+    <!-- bar -->
+    <rect x="88" y="244" width="336" height="24" rx="12" fill="#30d158"/>
+    <!-- inner plates -->
+    <rect x="148" y="176" width="44" height="160" rx="22" fill="#30d158"/>
+    <rect x="320" y="176" width="44" height="160" rx="22" fill="#30d158"/>
+    <!-- outer plates -->
+    <rect x="104" y="204" width="32" height="104" rx="16" fill="#2ca350"/>
+    <rect x="376" y="204" width="32" height="104" rx="16" fill="#2ca350"/>
+    <!-- highlight notches on inner plates -->
+    <rect x="160" y="192" width="8" height="34" rx="4" fill="#0b0d10" opacity="0.35"/>
+    <rect x="332" y="192" width="8" height="34" rx="4" fill="#0b0d10" opacity="0.35"/>
+  </g>
+</svg>
