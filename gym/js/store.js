@@ -339,6 +339,7 @@
   const CARDIO_EFFORTS = ['easy', 'moderate', 'hard'];
   const CARDIO_SURFACES = ['road', 'trail', 'track', 'treadmill', 'sand'];
   const CARDIO_FOOTWEAR = ['boots', 'trainers'];
+  const CARDIO_REST_TYPES = ['jog', 'stand'];
   const MOBILITY_MODALITIES = ['static', 'dynamic', 'yoga', 'foam_roll'];
 
   function shallowCopy(o) {
@@ -383,6 +384,39 @@
     coerceEnum(out, 'footwear', CARDIO_FOOTWEAR);
     coerceStr(out, 'footNote');
     coerceStr(out, 'notes');
+    // P3 additive structure fields (unknown keys still pass through untouched).
+    coerceNum(out, 'elevationM');
+    coerceNum(out, 'rounds');
+    if ('intervals' in out) {
+      if (out.intervals && typeof out.intervals === 'object' && !Array.isArray(out.intervals)) {
+        const iv = shallowCopy(out.intervals);
+        coerceNum(iv, 'reps');
+        coerceNum(iv, 'distanceM');
+        coerceNum(iv, 'workSec');
+        coerceNum(iv, 'restSec');
+        coerceEnum(iv, 'restType', CARDIO_REST_TYPES);
+        out.intervals = iv;
+      } else {
+        delete out.intervals;
+      }
+    }
+    if ('stations' in out) {
+      if (Array.isArray(out.stations)) {
+        out.stations = out.stations
+          .filter(function (st) { return st && typeof st === 'object'; })
+          .map(function (st) {
+            const c = shallowCopy(st);
+            coerceStr(c, 'exerciseId');
+            coerceStr(c, 'name');
+            coerceNum(c, 'reps');
+            coerceNum(c, 'durationSec');
+            coerceNum(c, 'weightKg');
+            return c;
+          });
+      } else {
+        delete out.stations;
+      }
+    }
     return out;
   }
 
@@ -405,6 +439,46 @@
     out.items = (Array.isArray(e.items) ? e.items : [])
       .filter(function (x) { return typeof x === 'string' && x; });
     coerceNum(out, 'durationMin');
+    coerceStr(out, 'notes');
+    return out;
+  }
+
+  /* ---- P3 'setwork' — structured non-lift set work (holds, carries, stretches,
+     per-side bodyweight reps). FORBIDDEN NAMES (binding): the entry key is
+     exerciseRef, NEVER exerciseId (old exerciseHistory/prevSetsFor/muscle credit
+     dispatch on exerciseId and would pollute lift charts with zero-value rows);
+     setwork sets NEVER carry a 'type' key (old workSets/setVolume count
+     s.type==='work' — the absent key is what keeps old clients computing zero
+     volume/PRs/muscle credit from setwork). Unknown keys pass through VERBATIM
+     at both entry and set level — never strip what we don't know. ---- */
+
+  const SETWORK_METHODS = ['static', 'dynamic', 'pnf', 'loaded'];
+
+  function normalizeSetworkSet(s) {
+    s = s && typeof s === 'object' ? s : {};
+    const out = shallowCopy(s);
+    delete out.type; // defensive — see FORBIDDEN NAMES above
+    coerceNum(out, 'reps');
+    coerceNum(out, 'holdSec');
+    coerceNum(out, 'distanceM');
+    coerceNum(out, 'weightKg');
+    coerceNum(out, 'rpe');
+    if ('intensity' in out) {
+      const n = Number(out.intensity);
+      if (out.intensity === null || out.intensity === '' || !isFinite(n)) delete out.intensity;
+      else out.intensity = U.clamp(Math.round(n), 1, 4); // stretch depth scale 1-4
+    }
+    if ('side' in out && out.side !== 'L' && out.side !== 'R') delete out.side;
+    return out;
+  }
+
+  function normalizeSetworkEntry(e) {
+    const out = shallowCopy(e);
+    out.id = e.id || U.uid('en');
+    out.type = 'setwork';
+    out.exerciseRef = typeof e.exerciseRef === 'string' ? e.exerciseRef : String(e.exerciseRef || '');
+    coerceEnum(out, 'method', SETWORK_METHODS); // stretches only; invalid deleted
+    out.sets = (Array.isArray(e.sets) ? e.sets : []).map(normalizeSetworkSet);
     coerceStr(out, 'notes');
     return out;
   }
@@ -440,6 +514,7 @@
     cardio: normalizeCardioEntry,
     mobility: normalizeMobilityEntry,
     durability: normalizeDurabilityEntry,
+    setwork: normalizeSetworkEntry,
     test: normalizeTestEntry
   };
 

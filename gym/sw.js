@@ -3,7 +3,7 @@
    or installed PWAs keep serving the old cache forever. */
 'use strict';
 
-const CACHE_NAME = 'ironlog-v2p2';
+const CACHE_NAME = 'ironlog-v2p3';
 
 const SHELL = [
   './',

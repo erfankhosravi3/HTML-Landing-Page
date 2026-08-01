@@ -330,6 +330,132 @@
     return html;
   }
 
+  /* ---------- durability coverage (P3, performance mode) ----------
+     Derived weekly coverage card — no self-reported checkboxes. Set counts
+     come from Guardrails.weeklyStatus().durability (the read-time union of
+     lift work sets, setwork valid sets and legacy checklist ticks); this file
+     only adds the contributing exercise names, which are display-only. */
+
+  const DUR_SLOTS = [
+    { id: 'unilateral', label: 'Single-leg', nudge: 'split squats or step-downs' },
+    { id: 'calf_tib', label: 'Calves & shins', nudge: 'calf raises or tib raises' },
+    { id: 'grip', label: 'Grip', nudge: 'a dead hang or farmer carry' },
+    { id: 'core', label: 'Core', nudge: 'side planks or Pallof presses' }
+  ];
+  const DUR_TARGET_FALLBACK = { unilateral: 6, calf_tib: 4, grip: 3, core: 4 };
+
+  function validSetworkSet(s) {
+    return !!s && ((typeof s.reps === 'number' && s.reps > 0) ||
+      (typeof s.holdSec === 'number' && s.holdSec > 0) ||
+      (typeof s.distanceM === 'number' && s.distanceM > 0));
+  }
+
+  // Contributing exercise names per slot for the Mon-Sun week starting ws —
+  // same three sources as the Guardrails count, names only (counts stay
+  // authoritative from weeklyStatus).
+  function durabilitySlotNames(workouts, ws) {
+    const names = { unilateral: [], calf_tib: [], grip: [], core: [] };
+    const db = window.ExerciseDB;
+    const list = db && Array.isArray(db.DURABILITY_CHECKLIST) ? db.DURABILITY_CHECKLIST : [];
+    if (!list.length) return names;
+    const slotOf = {};
+    for (const it of list) {
+      if (it && it.id && names[it.slot]) slotOf[it.id] = it.slot;
+    }
+    const we = U.addDays(ws, 6);
+    function push(slot, id) {
+      const ex = ExerciseDB.byId(id);
+      const nm = (ex && ex.name ? ex.name : String(id).replace(/_/g, ' ')).toLowerCase();
+      if (names[slot].indexOf(nm) === -1) names[slot].push(nm);
+    }
+    for (const w of workouts || []) {
+      if (!w || !w.date || w.date < ws || w.date > we) continue;
+      for (const e of w.entries || []) {
+        if (!e) continue;
+        if (e.type === 'setwork') {
+          const slot = slotOf[e.exerciseRef];
+          if (slot && (e.sets || []).some(validSetworkSet)) push(slot, e.exerciseRef);
+        } else if (e.type === 'durability') {
+          for (const id of e.items || []) {
+            if (slotOf[id]) push(slotOf[id], id);
+          }
+        } else if (!e.type || e.type === 'lift') {
+          const slot = slotOf[e.exerciseId];
+          if (slot && (e.sets || []).some(function (s) { return s && (!s.type || s.type === 'work'); })) {
+            push(slot, e.exerciseId);
+          }
+        }
+      }
+    }
+    return names;
+  }
+
+  // Returns '' unless weeklyStatus produced the P3 durability shape AND the
+  // checklist is loaded — the dashboard never crashes (or nags on unknowable
+  // coverage) when either is missing.
+  function durabilityCardHTML(gs, workouts, today) {
+    const d = gs && gs.durability;
+    if (!d || typeof d !== 'object' || !d.slots || typeof d.slots !== 'object') return '';
+    const db = window.ExerciseDB;
+    if (!db || !Array.isArray(db.DURABILITY_CHECKLIST) || !db.DURABILITY_CHECKLIST.length) return '';
+    const targets = (window.Guardrails && Guardrails.DURABILITY_TARGETS) || DUR_TARGET_FALLBACK;
+    const covered = typeof d.covered === 'number' && isFinite(d.covered) ? d.covered : 0;
+    const total = typeof d.total === 'number' && isFinite(d.total) && d.total > 0 ? d.total : 4;
+    const names = durabilitySlotNames(workouts, U.weekStart(today));
+
+    function countOf(slotId) {
+      const v = d.slots[slotId];
+      return typeof v === 'number' && isFinite(v) && v > 0 ? v : 0;
+    }
+    function targetOf(slotId) {
+      const t = targets[slotId];
+      return typeof t === 'number' && isFinite(t) && t > 0 ? t : DUR_TARGET_FALLBACK[slotId] || 1;
+    }
+
+    let html = cardOpen('Durability this week',
+      '<span style="font-size:13px;font-weight:600;color:' +
+      (covered >= total ? 'var(--accent)' : 'var(--text-2)') + '">' +
+      covered + ' of ' + total + ' areas</span>');
+    html += '<div style="display:flex;flex-direction:column;gap:14px;margin-top:8px">';
+    for (const slot of DUR_SLOTS) {
+      const count = countOf(slot.id);
+      const target = targetOf(slot.id);
+      const pct = U.clamp(count / target, 0, 1);
+      const color = pct >= 1 ? 'var(--accent)' : count > 0 ? 'var(--orange)' : 'var(--red)';
+      const nm = (names[slot.id] || []).slice(0, 3).join(', ');
+      const sub = count > 0
+        ? Math.round(count * 10) / 10 + (count === 1 ? ' set' : ' sets') + (nm ? ' · ' + nm : '')
+        : 'nothing yet';
+      html += '<div>' +
+        '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;' +
+        'font-size:13px;margin-bottom:5px">' +
+        '<span style="font-weight:600;flex:none">' + U.esc(slot.label) + '</span>' +
+        '<span style="color:' + (count > 0 ? 'var(--text-2)' : 'var(--text-muted)') +
+        ';min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' +
+        U.esc(sub) + '</span></div>' +
+        '<div class="progress-bar"><span style="width:' + Math.max(4, Math.round(pct * 100)) +
+        '%;background:' + color + '"></span></div>' +
+        '</div>';
+    }
+    html += '</div>';
+    let nudge = '';
+    for (const slot of DUR_SLOTS) {
+      const count = countOf(slot.id);
+      const target = targetOf(slot.id);
+      if (count >= target) continue;
+      nudge = count === 0
+        ? slot.label + ' is uncovered — ' + slot.nudge + ' slot into any session.'
+        : slot.label + ' needs ' + Math.ceil(target - count) + ' more ' +
+          (Math.ceil(target - count) === 1 ? 'set' : 'sets') + ' — ' + slot.nudge + ' slot into any session.';
+      break;
+    }
+    if (!nudge) nudge = 'All four areas covered — the small tissues got their work this week.';
+    html += '<div style="margin-top:12px;font-size:13px;color:var(--text-2);line-height:1.5">' +
+      U.esc(nudge) + '</div>';
+    html += '</section>';
+    return html;
+  }
+
   /* ---------- pain quick-log ---------- */
 
   function toggleRow(id, label) {
@@ -680,6 +806,9 @@
         }).join('');
       }
       html += '</section>';
+
+      /* durability coverage (P3): derived from the same weeklyStatus call */
+      html += durabilityCardHTML(gs, w, today);
     }
 
     /* rings + recent PRs */
@@ -1193,7 +1322,7 @@
      Body
      ====================================================================== */
 
-  const bState = { range: '8w' };
+  const bState = { range: '8w', mapLayer: 'trained' };
 
   App.registerView('body', {
     title: 'Body',
@@ -1363,8 +1492,67 @@
       html += '</section>';
     }
 
-    /* v2: pain & niggles + journal (performance mode only) */
+    /* v2 (P3): muscle map with a 'Stretched' layer (performance mode only).
+       Trained = working-set volume (lift-only, as everywhere); Stretched =
+       Analytics.stretchMinutesByMuscle over setwork stretches + legacy
+       mobility blobs. Relative heat: each layer normalizes to its own max. */
     const perf = App.isPerformance();
+    let mapVals = null;
+    if (perf && typeof Analytics.stretchMinutesByMuscle === 'function') {
+      const w = myWorkouts();
+      const layer = bState.mapLayer === 'stretched' ? 'stretched' : 'trained';
+      let raw = {};
+      try {
+        raw = (layer === 'stretched'
+          ? Analytics.stretchMinutesByMuscle(w, U.addDays(today, -27))
+          : Analytics.muscleVolume28d(w, today)) || {};
+      } catch (e) { raw = {}; }
+      let rawMax = 0;
+      for (const m in raw) {
+        if (typeof raw[m] === 'number' && isFinite(raw[m]) && raw[m] > rawMax) rawMax = raw[m];
+      }
+      mapVals = {};
+      for (const m in raw) {
+        mapVals[m] = rawMax > 0 ? U.clamp((raw[m] || 0) / rawMax, 0, 1) : 0;
+      }
+
+      html += cardOpen('Muscle map',
+        '<div class="segmented">' + [
+          { v: 'trained', l: 'Trained' }, { v: 'stretched', l: 'Stretched' }
+        ].map(function (it) {
+          const on = it.v === layer;
+          return '<button type="button" class="seg' + (on ? ' active' : '') +
+            '" data-map-layer="' + it.v + '" aria-pressed="' + on + '">' + it.l + '</button>';
+        }).join('') + '</div>');
+      html += '<div data-slot="body-map" class="muscle-map"></div>';
+      html += '<div class="muscle-legend"><span>' +
+        (layer === 'stretched' ? 'Not stretched' : 'Less volume') +
+        '</span><span class="ramp"></span><span>' +
+        (layer === 'stretched' ? 'Most stretched' : 'More volume') + '</span></div>';
+      if (layer === 'stretched') {
+        if (rawMax <= 0) {
+          html += '<p style="font-size:12px;color:var(--text-muted);margin-top:8px;">No stretching in the ' +
+            'last 28 days yet — structured stretches and quick-sheet sessions will heat this map.</p>';
+        } else {
+          const top = [];
+          for (const m in raw) {
+            if (raw[m] > 0) top.push({ id: m, v: raw[m] });
+          }
+          top.sort(function (a, b) { return b.v - a.v; });
+          const topTxt = top.slice(0, 3).map(function (r) {
+            return muscleLabel(r.id) + ' ' + Math.round(r.v) + ' min';
+          }).join(' · ');
+          html += '<p style="font-size:12px;color:var(--text-muted);margin-top:8px;">Stretch minutes over ' +
+            'the last 28 days — most stretched: ' + U.esc(topTxt) + '.</p>';
+        }
+      } else {
+        html += '<p style="font-size:12px;color:var(--text-muted);margin-top:8px;">Working-set volume by ' +
+          'muscle over the last 28 days.</p>';
+      }
+      html += '</section>';
+    }
+
+    /* v2: pain & niggles + journal (performance mode only) */
     if (perf) {
       const pain = Store.painFor(u.id); // date desc
       const openPain = pain.filter(function (p) { return !p.resolved; });
@@ -1501,6 +1689,14 @@
       });
     }
 
+    const mmEl = U.$('[data-slot="body-map"]', container);
+    if (mmEl && mapVals) {
+      MuscleMap.render(mmEl, {
+        values: mapVals,
+        onSelect: function (m) { App.navigate('library', { muscle: m }); }
+      });
+    }
+
     /* events */
     U.on(container, 'submit', '#bw-form', function (e) {
       e.preventDefault();
@@ -1534,6 +1730,12 @@
       const val = btn.getAttribute('data-seg-val');
       if (bState.range === val) return;
       bState.range = val;
+      App.rerender();
+    });
+    U.on(container, 'click', '[data-map-layer]', function (e, btn) {
+      const v = btn.getAttribute('data-map-layer');
+      if (bState.mapLayer === v) return;
+      bState.mapLayer = v;
       App.rerender();
     });
     U.on(container, 'click', '[data-act="go-settings"]', function () { App.navigate('settings'); });

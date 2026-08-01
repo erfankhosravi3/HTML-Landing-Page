@@ -2432,3 +2432,139 @@ button.std-row:hover .std-name {
   border-top: 1px solid var(--border);
   font-weight: 700;
 }
+
+/* ---- P3: Structured set work ---- */
+
+/* carry rows: SET | PREV | load | meters | check (holds/stretches reuse the
+   5-column .no-rpe grid) */
+.set-row.sw-carry {
+  grid-template-columns: 28px minmax(0, 1fr) 72px 72px 44px;
+}
+
+@media (max-width: 380px) {
+  .set-row.sw-carry {
+    grid-template-columns: 24px minmax(0, 1fr) 62px 62px 40px;
+    gap: 6px;
+  }
+}
+
+/* L/R side chip inside a set row */
+.set-row .sw-side {
+  height: 40px;
+  min-height: 40px;
+  border-radius: var(--radius-sm);
+  background: var(--card-2);
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background var(--speed) var(--ease), color var(--speed) var(--ease);
+}
+
+.set-row .sw-side:hover {
+  color: var(--text);
+  filter: brightness(1.15);
+}
+
+.set-row.done .sw-side {
+  background: transparent;
+  color: var(--text);
+}
+
+/* stretch depth chip row (1 Easy … 4 Limit) */
+.sw-depth-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin: 10px 2px 4px;
+}
+
+.sw-depth-row {
+  display: flex;
+  gap: 6px;
+}
+
+.sw-depth-row .chip {
+  flex: 1;
+  justify-content: center;
+  min-height: 40px;
+  padding: 7px 4px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.sw-depth-row .chip .n {
+  font-weight: 700;
+  margin-right: 4px;
+  color: var(--text-muted);
+}
+
+.sw-depth-row .chip.active .n {
+  color: inherit;
+}
+
+/* depth 4 is a flag, never a target — it reads as a warning when selected */
+.sw-depth-row .chip[data-depth='4'].active {
+  background: rgba(255, 69, 58, .16);
+  border-color: rgba(255, 69, 58, .5);
+  color: var(--red);
+}
+
+/* hold countdown pill — same chrome as the rest timer, blue accent */
+.rest-timer.hold-pill {
+  border-color: rgba(10, 132, 255, .35);
+}
+
+.rest-timer.hold-pill .fill {
+  background: var(--blue);
+}
+
+/* cardio structure / interval collapsibles */
+.cl-collapse {
+  margin: 2px 0 12px;
+}
+
+.cl-collapse > .cl-collapse-body {
+  margin-top: 8px;
+  padding: 12px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.cl-station-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0;
+}
+
+.cl-station-row .input {
+  min-height: 40px;
+  padding: 8px 10px;
+}
+
+/* rounds stepper */
+.sw-stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.sw-stepper .val {
+  min-width: 32px;
+  text-align: center;
+  font-size: 18px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.sw-stepper .btn.icon {
+  font-size: 18px;
+  font-weight: 600;
+}

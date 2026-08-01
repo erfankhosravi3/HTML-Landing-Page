@@ -1,8 +1,10 @@
-/* IronLog — Guardrails: pure training-safety heuristics (v2 addendum).
+/* IronLog — Guardrails: pure training-safety heuristics (v2 addendum; P3 adds
+   durability slot coverage and stretch-intensity rules).
    No DOM, no Store — all data is passed in, so every function is node-testable
-   with a window/U stub. All distance math is km internally; messages are
-   rendered in the user's units (miles for 'lb' users). Warnings never block:
-   'stop' renders as a strong confirm in the UI, not a wall. */
+   with a window/U stub (ExerciseDB is read lazily and may be absent). All
+   distance math is km internally; messages are rendered in the user's units
+   (miles for 'lb' users). Warnings never block: 'stop' renders as a strong
+   confirm in the UI, not a wall. */
 (function () {
   'use strict';
 
@@ -17,11 +19,23 @@
     WEEKLY_RUN_RAMP_PCT: 10,    // warn when > 10% over trailing 4-wk avg mileage
     EASY_SHARE_MIN_PCT: 75,     // warn when easy share of cardio drops below this
     EASY_HR_FRACTION: 0.75,     // avgHR < 0.75 * (220 - age) classifies as easy
-    PAIN_SEVERE: 7              // severity >= 7 is a red flag
+    PAIN_SEVERE: 7,             // severity >= 7 is a red flag
+    STRETCH_DEEP_COUNT: 3,      // intensity-3+ sets on one drill within the window
+    STRETCH_DEEP_WINDOW_DAYS: 14,
+    DURABILITY_GAP_DAY: 5       // durability_gap fires from day 5 of the week (Fri)
+  };
+
+  // Weekly durability slot targets: work-set counts per Mon-Sun week (P3 —
+  // code-defined, never user data). Keys are the DURABILITY_CHECKLIST slots.
+  const DURABILITY_TARGETS = { unilateral: 6, calf_tib: 4, grip: 3, core: 4 };
+  const SLOT_LABELS = {
+    unilateral: 'single-leg', calf_tib: 'calf & tib', grip: 'grip', core: 'core'
   };
 
   Guardrails.KM_PER_MILE = KM_PER_MILE;
   Guardrails.LIMITS = LIMITS;
+  Guardrails.DURABILITY_TARGETS = DURABILITY_TARGETS;
+  Guardrails.SLOT_LABELS = SLOT_LABELS;
 
   /* ---------- formatting (user units) ---------- */
 
@@ -127,6 +141,23 @@
     pain_worse_during: function (c) {
       return 'Pain that climbs during a session is a load problem — cut ' +
         (c.region ? c.region + ' ' : '') + 'volume and watch the next one.';
+    },
+    durability_gap: function (c) {
+      return 'Durability work is behind this week' +
+        (c.covered !== undefined && c.covered !== null
+          ? ' — ' + c.covered + ' of ' + (c.total || 4) + ' areas covered' : '') +
+        (c.missing ? ' (open: ' + c.missing + ')' : '') +
+        '. Small tissues fail before big engines — fit a routine in before Sunday.';
+    },
+    stretch_limit: function (c) {
+      return (c.name ? cap(c.name) + ' hit depth 4' : 'A stretch hit depth 4') +
+        ' — that\'s guarding, not stretching. Back off and log a niggle if it\'s sharp.';
+    },
+    stretch_pain_link: function (c) {
+      return (c.name ? cap(c.name) : 'That stretch') + ' has gone deep ' +
+        (c.count ? c.count + ' times' : '3+ times') + ' in two weeks' +
+        (c.region ? ', with ' + c.region + ' already on the pain log' : ', with pain logged nearby') +
+        ' — ease the depth and watch how it responds.';
     }
   };
 
@@ -187,6 +218,53 @@
     return U.round1((value / base - 1) * 100);
   }
 
+  function isNum(v) {
+    return typeof v === 'number' && isFinite(v);
+  }
+
+  // Setwork set validity per the P3 contract: reps>0 || holdSec>0 || distanceM>0.
+  function validSetworkSet(s) {
+    return !!s && ((isNum(s.reps) && s.reps > 0) ||
+      (isNum(s.holdSec) && s.holdSec > 0) ||
+      (isNum(s.distanceM) && s.distanceM > 0));
+  }
+
+  // ExerciseDB is read lazily (load order guarantees it in the browser; node
+  // tests may stub or omit it — every caller handles null).
+  function exdb() {
+    return (typeof window !== 'undefined' && window.ExerciseDB) ? window.ExerciseDB : null;
+  }
+
+  // exerciseId -> slot from the curated durability checklist. null when the
+  // checklist is unavailable — coverage is then unknowable, so durability
+  // counting and the durability_gap warning stay silent instead of nagging
+  // on zero data.
+  function checklistSlotMap() {
+    const DB = exdb();
+    const list = DB && Array.isArray(DB.DURABILITY_CHECKLIST) ? DB.DURABILITY_CHECKLIST : null;
+    if (!list) return null;
+    const map = {};
+    for (const item of list) {
+      if (item && item.id && DURABILITY_TARGETS[item.slot] !== undefined) map[item.id] = item.slot;
+    }
+    return map;
+  }
+
+  function exerciseName(ref) {
+    if (!ref) return '';
+    const DB = exdb();
+    const ex = DB && typeof DB.byId === 'function' ? DB.byId(ref) : null;
+    return (ex && ex.name) ? ex.name : String(ref).replace(/_/g, ' ');
+  }
+
+  // primary + secondary muscle ids for an exercise ref; null when unknowable.
+  function exerciseMuscles(ref) {
+    const DB = exdb();
+    const ex = DB && typeof DB.byId === 'function' ? DB.byId(ref) : null;
+    if (!ex) return null;
+    return (ex.primaryMuscles || []).concat(ex.secondaryMuscles || []);
+  }
+
   // 'easy' | 'hard' | null (unclassifiable). HR beats the effort field when
   // both the entry's avgHR and the user's birthYear are known.
   function classifyEffort(e, user, refYear) {
@@ -204,9 +282,13 @@
 
   // Evaluated at save time: draftWorkout is the session about to be saved,
   // priorWorkouts is history (the draft itself is excluded by id if present).
-  // Returns [{level:'warn'|'stop', code, message}], 'stop' entries first.
+  // painLog is optional (P3): omitting it only silences the stretch/pain link
+  // rule — older call sites keep working unchanged.
+  // Returns [{level:'warn'|'stop', code, message}], 'stop' entries first;
+  // the stretch_pain_link finding also carries painLink:true so the UI can
+  // render a pain quick-log link.
   // First-ever sessions produce zero warnings: every comparison needs a baseline.
-  Guardrails.checkSession = function (draftWorkout, priorWorkouts, user) {
+  Guardrails.checkSession = function (draftWorkout, priorWorkouts, user, painLog) {
     const out = [];
     const draft = draftWorkout || {};
     const units = unitsOf(user);
@@ -339,6 +421,78 @@
       }
     }
 
+    // 6) Any stretch-depth-4 set in the draft: involuntary guarding — a flag,
+    //    never a target. One nudge per save is enough.
+    for (const e of entriesOf(draft)) {
+      if (!e || e.type !== 'setwork') continue;
+      let depth4 = false;
+      for (const s of e.sets || []) {
+        if (s && isNum(s.intensity) && s.intensity >= 4) { depth4 = true; break; }
+      }
+      if (depth4) {
+        out.push({
+          level: 'warn',
+          code: 'stretch_limit',
+          message: msg('stretch_limit', { name: exerciseName(e.exerciseRef) })
+        });
+        break;
+      }
+    }
+
+    // 7) Repeated deep stretching: >= 3 intensity-3+ sets on the SAME
+    //    exerciseRef within 14 days (draft included) AND a pain-log entry in
+    //    the same window on a muscle that drill touches. The draft must
+    //    contribute at least one deep set — this fires on new information only.
+    const deepByRef = {};
+    const deepOrder = [];
+    for (const e of entriesOf(draft)) {
+      if (!e || e.type !== 'setwork' || !e.exerciseRef) continue;
+      let deep = 0;
+      for (const s of e.sets || []) {
+        if (s && isNum(s.intensity) && s.intensity >= 3) deep++;
+      }
+      if (!deep) continue;
+      if (!(e.exerciseRef in deepByRef)) deepOrder.push(e.exerciseRef);
+      deepByRef[e.exerciseRef] = (deepByRef[e.exerciseRef] || 0) + deep;
+    }
+    if (deepOrder.length) {
+      const winStart = U.addDays(date, -(LIMITS.STRETCH_DEEP_WINDOW_DAYS - 1));
+      for (const w of prior) {
+        if (!inRange(w.date, winStart, date)) continue;
+        for (const e of entriesOf(w)) {
+          if (!e || e.type !== 'setwork' || !(e.exerciseRef in deepByRef)) continue;
+          for (const s of e.sets || []) {
+            if (s && isNum(s.intensity) && s.intensity >= 3) deepByRef[e.exerciseRef]++;
+          }
+        }
+      }
+      const uid = user && user.id;
+      const pains = (painLog || []).filter(function (p) {
+        return p && p.muscleId && inRange(p.date, winStart, date) &&
+          (!uid || !p.userId || p.userId === uid);
+      });
+      for (const ref of deepOrder) {
+        if (deepByRef[ref] < LIMITS.STRETCH_DEEP_COUNT) continue;
+        const muscles = exerciseMuscles(ref);
+        if (!muscles || !muscles.length) continue;
+        let hit = null;
+        for (const p of pains) {
+          if (muscles.indexOf(p.muscleId) !== -1) { hit = p; break; }
+        }
+        if (!hit) continue;
+        out.push({
+          level: 'warn',
+          code: 'stretch_pain_link',
+          painLink: true,
+          message: msg('stretch_pain_link', {
+            name: exerciseName(ref),
+            count: deepByRef[ref],
+            region: regionLabel(hit.muscleId)
+          })
+        });
+      }
+    }
+
     out.sort(function (a, b) {
       return (a.level === 'stop' ? 0 : 1) - (b.level === 'stop' ? 0 : 1);
     });
@@ -351,6 +505,9 @@
   // ruckLoadMiles = sum of ruck loadKg * distance-in-miles (kg·mi; callers
   // convert load for display). runRampPct is 0 when there is no trailing
   // baseline. easySharePct is null when no cardio entry is classifiable.
+  // durability (P3) = { slots: {unilateral, calf_tib, grip, core} work-set
+  // counts, covered, total: 4 } vs DURABILITY_TARGETS; see the accumulation
+  // comment in the loop for the three source shapes.
   Guardrails.weeklyStatus = function (workouts, user, weekStartStr) {
     const ws = U.weekStart(weekStartStr || U.todayStr());
     const weekEnd = U.addDays(ws, 6);
@@ -366,6 +523,13 @@
     let easyN = 0;
     let classifiedN = 0;
     const sessionDates = {};
+
+    // Durability slot coverage (P3): work-set counts per checklist slot,
+    // unioned from three sources — lift work sets on checklist exercises,
+    // setwork valid sets on checklist exerciseRefs (an L row and an R row
+    // count 1 each), and legacy durability items[] at 1 nominal set per id.
+    const slotMap = checklistSlotMap();
+    const slots = { unilateral: 0, calf_tib: 0, grip: 0, core: 0 };
 
     for (const w of list) {
       if (inRange(w.date, trailStart, trailEnd)) {
@@ -387,6 +551,34 @@
           if (cls === 'easy') easyN++;
         }
       }
+      if (slotMap) {
+        for (const e of entriesOf(w)) {
+          if (!e) continue;
+          if (e.type === 'setwork') {
+            const slot = slotMap[e.exerciseRef];
+            if (!slot) continue;
+            for (const s of e.sets || []) {
+              if (validSetworkSet(s)) slots[slot]++;
+            }
+          } else if (e.type === 'durability') {
+            for (const id of e.items || []) {
+              const slot = slotMap[id];
+              if (slot) slots[slot]++;
+            }
+          } else if (!e.type || e.type === 'lift') {
+            const slot = slotMap[e.exerciseId];
+            if (!slot) continue;
+            for (const s of e.sets || []) {
+              if (s && (!s.type || s.type === 'work')) slots[slot]++;
+            }
+          }
+        }
+      }
+    }
+
+    let covered = 0;
+    for (const slot in DURABILITY_TARGETS) {
+      if (slots[slot] >= DURABILITY_TARGETS[slot]) covered++;
     }
 
     const avg = trailKm / 4;
@@ -412,6 +604,19 @@
     if (!restDayTaken) {
       warnings.push({ code: 'no_rest_day', message: msg('no_rest_day') });
     }
+    // No mid-week nag: the gap only warns from day 5 of the week (Friday) on,
+    // and only when the checklist is loaded so coverage is actually knowable.
+    if (slotMap && covered < 4 &&
+        today >= U.addDays(ws, LIMITS.DURABILITY_GAP_DAY - 1)) {
+      const missing = [];
+      for (const slot in DURABILITY_TARGETS) {
+        if (slots[slot] < DURABILITY_TARGETS[slot]) missing.push(SLOT_LABELS[slot]);
+      }
+      warnings.push({
+        code: 'durability_gap',
+        message: msg('durability_gap', { covered: covered, total: 4, missing: missing.join(', ') })
+      });
+    }
 
     return {
       runMileageKm: U.round1(runKm),
@@ -420,6 +625,7 @@
       ruckCount: ruckCount,
       ruckLoadMiles: U.round1(ruckLoadMiles),
       restDayTaken: restDayTaken,
+      durability: { slots: slots, covered: covered, total: 4 },
       warnings: warnings
     };
   };

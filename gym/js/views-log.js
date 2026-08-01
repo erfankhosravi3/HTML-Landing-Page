@@ -110,6 +110,7 @@
   function clearDraft() {
     draft = null;
     stopRest();
+    stopHold();
     try { localStorage.removeItem(DRAFT_KEY); } catch (e) { /* ignore */ }
   }
 
@@ -204,6 +205,254 @@
   }
 
   /* ======================================================================
+     P3 — structured set work ('setwork' entries: holds, carries, stretches).
+     FORBIDDEN NAMES (binding, see ARCHITECTURE.md): the entry key is
+     exerciseRef, never exerciseId; setwork sets never carry a 'type' key.
+     ====================================================================== */
+
+  const SW_METHOD_DEFS = [
+    { id: 'static', label: 'Static' }, { id: 'dynamic', label: 'Dynamic' },
+    { id: 'pnf', label: 'PNF' }, { id: 'loaded', label: 'Loaded' }
+  ];
+
+  // Stretch depth scale 1-4 — binding anchors, shown as chip tooltips.
+  const SW_DEPTHS = [
+    { n: 1, label: 'Easy', hint: 'First stretch sensation, ~50–70% of range; could hold it for minutes.' },
+    { n: 2, label: 'Working', hint: 'Clear stretch that fades over the hold; slow nasal breathing. The daily-driver dose.' },
+    { n: 3, label: 'Deep', hint: 'End range, does not fade, needs deliberate exhales. PNF/loaded only, warm, 2–3×/week.' },
+    { n: 4, label: 'Limit', hint: 'Involuntary guarding: shaking, breath-holding, sharp or nervy. A flag, never a target.' }
+  ];
+
+  function isSetworkEntry(en) {
+    return !!en && en.type === 'setwork';
+  }
+
+  function setShapeOf(ex) {
+    return (ex && ex.setShape) || 'weight_reps';
+  }
+
+  function swIsStretch(en) {
+    const ex = exOf(en.exerciseRef);
+    return setShapeOf(ex) === 'stretch' || !!en.method;
+  }
+
+  function swMethodOf(en) {
+    if (SW_METHOD_DEFS.some(function (m) { return m.id === en.method; })) return en.method;
+    const ex = exOf(en.exerciseRef);
+    return (ex && ex.defaultMethod) || 'static';
+  }
+
+  // hold | reps | carry — which input row a setwork entry renders
+  function swRowShapeOf(en) {
+    const shape = setShapeOf(exOf(en.exerciseRef));
+    if (shape === 'carry') return 'carry';
+    if (shape === 'stretch') return swMethodOf(en) === 'dynamic' ? 'reps' : 'hold';
+    return 'hold';
+  }
+
+  function swDepthOf(en) {
+    const d = parseInt(en._depth, 10);
+    return d >= 1 && d <= 4 ? d : 2;
+  }
+
+  // Valid setwork set: reps>0 || holdSec>0 || distanceM>0 (NEVER the lift
+  // reps>0 filter).
+  function swValidSet(s) {
+    return !!s && ((Number(s.reps) || 0) > 0 ||
+      (Number(s.holdSec) || 0) > 0 || (Number(s.distanceM) || 0) > 0);
+  }
+
+  function newSetworkEntry(exerciseId, nSets, seed) {
+    const ex = exOf(exerciseId);
+    const shape = setShapeOf(ex);
+    const perSide = !!(ex && ex.perSide);
+    const en = { id: U.uid('en'), type: 'setwork', exerciseRef: exerciseId, notes: '', sets: [] };
+    if (shape === 'stretch') {
+      en.method = (ex && ex.defaultMethod) || 'static';
+      en._depth = 2;
+    }
+    const n = U.clamp(Number(nSets) || (shape === 'stretch' ? 2 : 3), 1, 10);
+    for (let i = 0; i < n; i++) {
+      const s = { done: false };
+      if (perSide) s.side = i % 2 === 0 ? 'L' : 'R';
+      if (seed) {
+        if ((seed.holdSec || 0) > 0) s.holdSec = seed.holdSec;
+        if ((seed.reps || 0) > 0) s.reps = seed.reps;
+        if ((seed.distanceM || 0) > 0) s.distanceM = seed.distanceM;
+      }
+      en.sets.push(s);
+    }
+    return en;
+  }
+
+  // Picker dispatch inside a draft: hold/carry/stretch-shape exercises become
+  // setwork entries in performance mode; simple mode always creates lifts.
+  function newEntryFor(exerciseId, u) {
+    if (perfMode(u) && setShapeOf(exOf(exerciseId)) !== 'weight_reps') {
+      return newSetworkEntry(exerciseId);
+    }
+    return newEntry(exerciseId, 3);
+  }
+
+  // Sets from the user's most recent setwork entry for this exerciseRef.
+  function prevSetworkFor(userId, exerciseRef, opts) {
+    opts = opts || {};
+    if (!exerciseRef) return [];
+    const ws = Store.workoutsFor(userId); // date desc
+    for (let i = 0; i < ws.length; i++) {
+      const w = ws[i];
+      if (opts.excludeId && w.id === opts.excludeId) continue;
+      if (opts.maxDate && w.date > opts.maxDate) continue;
+      let sets = [];
+      (w.entries || []).forEach(function (en) {
+        if (en && en.type === 'setwork' && en.exerciseRef === exerciseRef) {
+          sets = sets.concat(en.sets || []);
+        }
+      });
+      if (sets.length) return sets;
+    }
+    return [];
+  }
+
+  // Side-aware hint: an L row prefers the i-th previous L set, and so on.
+  function swHintSetOf(en, prev, i) {
+    if (!prev.length) return null;
+    const s = en.sets[i];
+    if (s && (s.side === 'L' || s.side === 'R')) {
+      const same = prev.filter(function (p) { return p && p.side === s.side; });
+      if (same.length) {
+        let idx = 0;
+        for (let j = 0; j < i; j++) {
+          if (en.sets[j] && en.sets[j].side === s.side) idx++;
+        }
+        return same[Math.min(idx, same.length - 1)];
+      }
+    }
+    return prev[Math.min(i, prev.length - 1)];
+  }
+
+  function swHintText(hs, rowShape) {
+    if (!hs) return '';
+    const w = (hs.weightKg || 0) > 0 ? dispW(hs.weightKg) : '';
+    if (rowShape === 'carry') {
+      const m = (hs.distanceM || 0) > 0 ? Math.round(hs.distanceM) + ' m' : '';
+      if (!m && !w) return '';
+      return [w, m].filter(Boolean).join(' × ');
+    }
+    if (rowShape === 'reps') {
+      if (!((hs.reps || 0) > 0)) return '';
+      return (w ? w + ' × ' : '') + hs.reps;
+    }
+    if (!((hs.holdSec || 0) > 0)) return '';
+    return (w ? w + ' · ' : '') + fmtClock(hs.holdSec);
+  }
+
+  // Save-shape cleaner shared by the finish flow, the mixed editor and the
+  // stretch mini-builder. Unknown keys pass through VERBATIM at both entry
+  // and set level (the asymmetry this phase fixes); transient '_'-prefixed
+  // keys and the builder 'done' flag are stripped. Returns null when no set
+  // survives the valid-set rule.
+  function cleanSetworkEntry(en) {
+    if (!en || !en.exerciseRef) return null;
+    const stretch = swIsStretch(en);
+    const depth = swDepthOf(en);
+    const sets = [];
+    (en.sets || []).forEach(function (s) {
+      if (!swValidSet(s)) return;
+      const o = {};
+      for (const k in s) {
+        if (k === 'done' || k === 'type' || k.charAt(0) === '_') continue;
+        o[k] = s[k];
+      }
+      ['reps', 'holdSec', 'distanceM', 'weightKg'].forEach(function (k) {
+        if (!((Number(o[k]) || 0) > 0)) delete o[k];
+      });
+      if (o.side !== 'L' && o.side !== 'R') delete o.side;
+      if (stretch) o.intensity = depth;
+      else delete o.intensity;
+      sets.push(o);
+    });
+    if (!sets.length) return null;
+    const out = {};
+    for (const k in en) {
+      if (k === 'showRpe' || k.charAt(0) === '_') continue;
+      out[k] = en[k];
+    }
+    out.id = en.id || U.uid('en');
+    out.type = 'setwork';
+    out.exerciseRef = en.exerciseRef;
+    delete out.exerciseId; // FORBIDDEN on setwork — old clients dispatch on it
+    out.sets = sets;
+    if (stretch) out.method = swMethodOf(en);
+    else delete out.method;
+    if (out.notes) out.notes = String(out.notes);
+    else delete out.notes;
+    return out;
+  }
+
+  // Draft-editable copy of a saved setwork entry (values prefilled, not done).
+  function swDraftCopyOf(x) {
+    const en = { id: U.uid('en'), type: 'setwork', exerciseRef: x.exerciseRef, notes: '', sets: [] };
+    if (x.method) en.method = x.method;
+    (x.sets || []).forEach(function (s) {
+      const c = { done: false };
+      if ((s.reps || 0) > 0) c.reps = s.reps;
+      if ((s.holdSec || 0) > 0) c.holdSec = s.holdSec;
+      if ((s.distanceM || 0) > 0) c.distanceM = s.distanceM;
+      if ((s.weightKg || 0) > 0) c.weightKg = s.weightKg;
+      if (s.side === 'L' || s.side === 'R') c.side = s.side;
+      en.sets.push(c);
+    });
+    if (!en.sets.length) en.sets.push({ done: false });
+    const first = (x.sets || []).find(function (s) { return s && s.intensity >= 1; });
+    if (swIsStretch(en)) en._depth = first ? U.clamp(Math.round(first.intensity), 1, 4) : 2;
+    return en;
+  }
+
+  // Unit-aware summary string for one setwork entry: '3×0:45',
+  // 'L 0:40 · R 0:38', '3×8/side @ 24 kg', '3×40 m @ 32 kg' (+ ' @ Working').
+  function setworkSetsString(en) {
+    const stretch = swIsStretch(en);
+    const sets = (en.sets || []).filter(swValidSet);
+    if (!sets.length) return '';
+    function tok(s) {
+      if ((s.holdSec || 0) > 0) return fmtClock(s.holdSec);
+      if ((s.distanceM || 0) > 0) return Math.round(s.distanceM) + ' m';
+      return String(s.reps || 0);
+    }
+    function allEq(a) {
+      return a.every(function (x) { return x === a[0]; });
+    }
+    const toks = sets.map(tok);
+    const hasSides = sets.some(function (s) { return s.side === 'L' || s.side === 'R'; });
+    let core;
+    if (!hasSides) {
+      core = allEq(toks) && sets.length > 1 ? sets.length + '×' + toks[0] : toks.join(' · ');
+    } else {
+      const L = [];
+      const R = [];
+      sets.forEach(function (s, i) { (s.side === 'R' ? R : L).push(toks[i]); });
+      if (L.length && L.length === R.length && allEq(L) && allEq(R) && L[0] === R[0]) {
+        core = L.length + '×' + L[0] + '/side';
+      } else {
+        core = sets.map(function (s, i) {
+          return (s.side === 'L' || s.side === 'R' ? s.side + ' ' : '') + toks[i];
+        }).join(' · ');
+      }
+    }
+    const kgs = sets.map(function (s) { return s.weightKg || 0; });
+    if (kgs.some(function (k) { return k > 0; })) {
+      core += ' @ ' + App.fmtWeight(allEq(kgs) ? kgs[0] : Math.max.apply(null, kgs), { precise: true });
+    }
+    if (stretch) {
+      const first = sets.find(function (s) { return s.intensity >= 1; });
+      const d = first ? U.clamp(Math.round(first.intensity), 1, 4) : swDepthOf(en);
+      core += ' @ ' + SW_DEPTHS[d - 1].label;
+    }
+    return core;
+  }
+
+  /* ======================================================================
      Rest timer (singleton pill, lives on <body>, survives rerenders)
      ====================================================================== */
 
@@ -230,6 +479,7 @@
 
   function startRest(sec) {
     if (!sec || sec <= 0) return;
+    stopHold(); // one pill at a time — the hold countdown owns the same slot
     rest.endsAt = Date.now() + sec * 1000;
     rest.totalSec = sec;
     if (!rest.el) buildRestEl();
@@ -256,6 +506,57 @@
     stopRest();
     if (navigator.vibrate) { try { navigator.vibrate([180, 90, 180]); } catch (e) { /* ignore */ } }
     App.toast('Rest done', 'ok'); // silent by design — no sound
+  }
+
+  /* ---------- P3: hold countdown (reuses the rest-timer pill chrome) ----------
+     Countdown only — max-effort hangs belong in the Test wizard. Starting it
+     cancels a running rest timer (and vice versa). Typing always works; the
+     timer is never required. */
+
+  const holdT = { el: null, timeEl: null, fillEl: null, iv: null, endsAt: 0, totalSec: 0, onDone: null };
+
+  function startHold(sec, onDone) {
+    if (!sec || sec <= 0) return;
+    stopRest();
+    stopHold();
+    holdT.endsAt = Date.now() + sec * 1000;
+    holdT.totalSec = sec;
+    holdT.onDone = onDone || null;
+    holdT.el = U.el('<div class="rest-timer hold-pill" role="timer">' +
+      '<span style="display:inline-flex;color:var(--blue)">' + ic().timer + '</span>' +
+      '<span class="time">' + fmtClock(sec) + '</span>' +
+      '<span class="track"><span class="fill" style="width:100%"></span></span>' +
+      '<button type="button" class="btn small ghost" data-h="cancel">Cancel</button>' +
+      '</div>');
+    holdT.timeEl = holdT.el.querySelector('.time');
+    holdT.fillEl = holdT.el.querySelector('.fill');
+    holdT.el.querySelector('[data-h="cancel"]').addEventListener('click', function () { stopHold(); });
+    document.body.appendChild(holdT.el);
+    holdT.iv = setInterval(tickHold, 250);
+    tickHold();
+  }
+
+  function stopHold() {
+    if (holdT.iv) { clearInterval(holdT.iv); holdT.iv = null; }
+    if (holdT.el) { holdT.el.remove(); holdT.el = null; holdT.timeEl = null; holdT.fillEl = null; }
+    holdT.onDone = null;
+  }
+
+  function tickHold() {
+    if (!holdT.el) return;
+    const remainMs = holdT.endsAt - Date.now();
+    if (remainMs <= 0) { finishHold(); return; }
+    holdT.timeEl.textContent = fmtClock(Math.ceil(remainMs / 1000));
+    const pct = holdT.totalSec > 0 ? (remainMs / (holdT.totalSec * 1000)) * 100 : 0;
+    holdT.fillEl.style.width = U.clamp(pct, 0, 100) + '%';
+  }
+
+  function finishHold() {
+    const done = holdT.onDone;
+    stopHold();
+    if (navigator.vibrate) { try { navigator.vibrate([180, 90, 180]); } catch (e) { /* ignore */ } }
+    App.toast('Hold done', 'ok');
+    if (typeof done === 'function') done();
   }
 
   /* ======================================================================
@@ -297,10 +598,16 @@
 
   function mountEditor(root, ctx) {
     const prevCache = {};
+    const prevSwCache = {};
 
     function prevFor(exId) {
       if (!(exId in prevCache)) prevCache[exId] = ctx.prev ? ctx.prev(exId) : [];
       return prevCache[exId];
+    }
+
+    function prevSwFor(ref) {
+      if (!(ref in prevSwCache)) prevSwCache[ref] = ctx.prevSw ? ctx.prevSw(ref) : [];
+      return prevSwCache[ref];
     }
 
     function findEntry(cardEl) {
@@ -308,7 +615,342 @@
       return ctx.model.entries.find(function (x) { return x.id === eid; }) || null;
     }
 
+    /* ---- P3: setwork row/card renderers (dispatched before the lift branch;
+       the lift branch below stays byte-for-byte current behavior) ---- */
+
+    function swRowHTML(en, s, i, rowShape, perSide, prev) {
+      const draftMode = ctx.mode === 'draft';
+      const done = draftMode && s.done;
+      const hs = swHintSetOf(en, prev, i);
+      const hint = swHintText(hs, rowShape);
+      const cls = 'set-row ' + (rowShape === 'carry' ? 'sw-carry' : 'no-rpe') + (done ? ' done' : '');
+      const aid = 'swa_' + en.id + '_' + i;
+      const bid = 'swb_' + en.id + '_' + i;
+
+      let html = '<div class="' + cls + '" data-i="' + i + '">';
+      html += '<span class="set-num" aria-label="Set ' + (i + 1) + '">' + (i + 1) + '</span>';
+      html += '<div class="set-prev" style="display:flex;align-items:center;min-width:0">' +
+        '<button type="button" data-act="sw-hint"' + (hint ? '' : ' disabled') +
+        ' title="Fill from last time" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;' +
+        'white-space:nowrap;text-align:left;color:inherit;min-height:40px;padding:0 2px">' +
+        (hint ? U.esc(hint) : '—') + '</button>' +
+        (draftMode
+          ? '<button type="button" class="btn icon ghost" data-act="rmset" aria-label="Remove set" ' +
+            'style="width:32px;height:40px;min-height:40px;border:none;color:var(--text-muted)">' + ic().close + '</button>'
+          : '') +
+        '</div>';
+      if (rowShape === 'carry') {
+        const phW = hs && hs.weightKg > 0 ? dispW(hs.weightKg) : '';
+        const phM = hs && hs.distanceM > 0 ? String(Math.round(hs.distanceM)) : '';
+        html += '<input class="input set-weight" id="' + aid + '" data-act="sw-kg" type="text" inputmode="decimal" ' +
+          'autocomplete="off" enterkeyhint="next" aria-label="Load" placeholder="' + U.esc(phW) + '" ' +
+          'value="' + (s.weightKg > 0 ? U.esc(dispW(s.weightKg)) : '') + '">';
+        html += '<input class="input" id="' + bid + '" data-act="sw-m" type="text" inputmode="numeric" ' +
+          'autocomplete="off" enterkeyhint="next" aria-label="Meters" placeholder="' + U.esc(phM) + '" ' +
+          'value="' + (s.distanceM > 0 ? Math.round(s.distanceM) : '') + '">';
+      } else if (rowShape === 'reps') {
+        const phR = hs && hs.reps > 0 ? String(hs.reps) : '';
+        html += '<input class="input" id="' + aid + '" data-act="sw-reps" type="text" inputmode="numeric" ' +
+          'autocomplete="off" enterkeyhint="next" aria-label="Reps" placeholder="' + U.esc(phR) + '" ' +
+          'value="' + (s.reps > 0 ? s.reps : '') + '">';
+        html += perSide
+          ? '<button type="button" class="sw-side" data-act="sw-side" aria-label="Side, tap to switch">' +
+            U.esc(s.side === 'R' ? 'R' : 'L') + '</button>'
+          : '<div></div>';
+      } else {
+        // hold — mm:ss mask shared with parseTimeToSec ('45' = seconds)
+        const phH = hs && hs.holdSec > 0 ? fmtClock(hs.holdSec) : '0:30';
+        html += '<input class="input" id="' + aid + '" data-act="sw-hold" type="text" inputmode="numeric" ' +
+          'autocomplete="off" enterkeyhint="next" aria-label="Hold time" placeholder="' + U.esc(phH) + '" ' +
+          'value="' + (s.holdSec > 0 ? U.esc(fmtClock(s.holdSec)) : '') + '">';
+        html += perSide
+          ? '<button type="button" class="sw-side" data-act="sw-side" aria-label="Side, tap to switch">' +
+            U.esc(s.side === 'R' ? 'R' : 'L') + '</button>'
+          : '<div></div>';
+      }
+      html += draftMode
+        ? '<button type="button" class="set-check" data-act="sw-check" aria-pressed="' + (done ? 'true' : 'false') +
+          '" aria-label="Mark set complete">' + ic().check + '</button>'
+        : '<button type="button" class="set-check" data-act="rmset" aria-label="Remove set">' + ic().close + '</button>';
+      html += '</div>';
+      return html;
+    }
+
+    function swHeadHTML(rowShape, perSide) {
+      const unit = U.unitLabel(App.units()).toUpperCase();
+      if (rowShape === 'carry') {
+        return '<div class="set-row set-head sw-carry" aria-hidden="true">' +
+          '<div>SET</div><div style="text-align:left;padding-left:2px">PREV</div>' +
+          '<div>' + unit + '</div><div>METERS</div><div></div></div>';
+      }
+      const main = rowShape === 'reps' ? 'REPS' : 'HOLD';
+      return '<div class="set-row set-head no-rpe" aria-hidden="true">' +
+        '<div>SET</div><div style="text-align:left;padding-left:2px">PREV</div>' +
+        '<div>' + main + '</div><div>' + (perSide ? 'SIDE' : '') + '</div><div></div></div>';
+    }
+
+    function swCardHTML(en) {
+      const ex = exOf(en.exerciseRef);
+      const stretch = swIsStretch(en);
+      const method = stretch ? swMethodOf(en) : null;
+      const rowShape = swRowShapeOf(en);
+      const perSide = !!(ex && ex.perSide);
+      const prev = prevSwFor(en.exerciseRef);
+      const notesShown = notesShownOf(en);
+      const holdTimerOk = ctx.mode === 'draft' && setShapeOf(ex) === 'hold';
+
+      let html = '<div class="card" data-eid="' + U.esc(en.id) + '">';
+      html += '<div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:8px">' +
+        '<div style="flex:1;min-width:0">' +
+        '<div style="font-size:16px;font-weight:600;line-height:1.3">' + U.esc(exName(en.exerciseRef)) + '</div>' +
+        '<div class="muted" style="font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' +
+        U.esc(exSub(ex)) + '</div></div>' +
+        '<div style="display:flex;gap:2px;flex:none">' +
+        (holdTimerOk
+          ? '<button type="button" class="btn icon ghost" data-act="sw-timer" title="Hold countdown" aria-label="Hold countdown">' + ic().timer + '</button>'
+          : '') +
+        '<button type="button" class="btn icon ghost" data-act="exnotes" title="Exercise notes" aria-label="Exercise notes">' + ic().edit + '</button>' +
+        '<button type="button" class="btn icon ghost" data-act="delentry" title="Remove exercise" aria-label="Remove exercise">' + ic().trash + '</button>' +
+        '</div></div>';
+
+      if (stretch) {
+        html += '<div class="chip-row" style="margin-bottom:6px">' +
+          SW_METHOD_DEFS.map(function (m) {
+            const on = method === m.id;
+            return '<button type="button" class="chip' + (on ? ' active' : '') + '" data-act="sw-method" data-method="' +
+              m.id + '" aria-pressed="' + (on ? 'true' : 'false') + '">' + m.label + '</button>';
+          }).join('') + '</div>';
+      }
+
+      if ((en.sets || []).length) {
+        html += swHeadHTML(rowShape, perSide);
+        html += en.sets.map(function (s, i) { return swRowHTML(en, s, i, rowShape, perSide, prev); }).join('');
+      } else {
+        html += '<p class="muted" style="font-size:13px;margin:4px 0 8px">No sets — add one below.</p>';
+      }
+
+      if (stretch) {
+        const depth = swDepthOf(en);
+        html += '<div class="sw-depth-label">Stretch depth</div>' +
+          '<div class="sw-depth-row" role="group" aria-label="Stretch depth">' +
+          SW_DEPTHS.map(function (d) {
+            const on = depth === d.n;
+            return '<button type="button" class="chip' + (on ? ' active' : '') + '" data-act="sw-depth" data-depth="' +
+              d.n + '" aria-pressed="' + (on ? 'true' : 'false') + '" title="' + U.esc(d.hint) + '">' +
+              '<span class="n">' + d.n + '</span>' + d.label + '</button>';
+          }).join('') + '</div>';
+      }
+
+      html += '<div style="display:flex;gap:8px;margin-top:6px">' +
+        '<button type="button" class="btn ghost small" data-act="addset">' + ic().plus + ' Add set</button></div>';
+      if (notesShown) {
+        html += '<textarea class="input" data-act="ennotes" rows="2" placeholder="Exercise notes" ' +
+          'id="enn_' + U.esc(en.id) + '" style="margin-top:8px">' + U.esc(en.notes || '') + '</textarea>';
+      }
+      html += '</div>';
+      return html;
+    }
+
+    // ✓ accepts hint values; rest timer starts for hold/carry work (not
+    // stretches — flow moves straight to the next stretch).
+    function onSwCheck(en, i, rowEl, btn) {
+      const s = en.sets[i];
+      if (!s) return;
+      const rowShape = swRowShapeOf(en);
+      if (!s.done) {
+        if (!swValidSet(s)) {
+          let src = null;
+          for (let j = i - 1; j >= 0; j--) {
+            if (swValidSet(en.sets[j])) { src = en.sets[j]; break; }
+          }
+          if (!src) src = swHintSetOf(en, prevSwFor(en.exerciseRef), i);
+          if (src) {
+            if (rowShape === 'carry') {
+              if (!((s.distanceM || 0) > 0) && (src.distanceM || 0) > 0) s.distanceM = src.distanceM;
+              if (!((s.weightKg || 0) > 0) && (src.weightKg || 0) > 0) s.weightKg = src.weightKg;
+            } else if (rowShape === 'reps') {
+              if (!((s.reps || 0) > 0) && (src.reps || 0) > 0) s.reps = src.reps;
+            } else if (!((s.holdSec || 0) > 0) && (src.holdSec || 0) > 0) {
+              s.holdSec = src.holdSec;
+            }
+          }
+        }
+        s.done = true;
+        if (!swIsStretch(en)) startRest(settingsOf(user()).restTimerSec);
+      } else {
+        s.done = false;
+      }
+      rowEl.classList.toggle('done', !!s.done);
+      btn.setAttribute('aria-pressed', s.done ? 'true' : 'false');
+      const aIn = rowEl.querySelector('#swa_' + en.id + '_' + i);
+      const bIn = rowEl.querySelector('#swb_' + en.id + '_' + i);
+      if (aIn && aIn.value === '') {
+        if (rowShape === 'carry' && s.weightKg > 0) aIn.value = dispW(s.weightKg);
+        if (rowShape === 'reps' && s.reps > 0) aIn.value = String(s.reps);
+        if (rowShape === 'hold' && s.holdSec > 0) aIn.value = fmtClock(s.holdSec);
+      }
+      if (bIn && bIn.value === '' && s.distanceM > 0) bIn.value = String(Math.round(s.distanceM));
+      ctx.persist();
+      if (ctx.onStats) ctx.onStats();
+    }
+
+    // Countdown target = the first open set's filled/prefilled seconds
+    // (default 30). On finish: vibrate, write holdSec = target, mark done.
+    function startSwTimer(en) {
+      const open = (en.sets || []).find(function (s) { return !s.done; });
+      if (!open) { App.toast('All sets are done', 'info'); return; }
+      let target = (open.holdSec || 0) > 0 ? open.holdSec : 0;
+      if (!target) {
+        const hs = swHintSetOf(en, prevSwFor(en.exerciseRef), en.sets.indexOf(open));
+        if (hs && (hs.holdSec || 0) > 0) target = hs.holdSec;
+      }
+      if (!target) target = 30;
+      const eid = en.id;
+      startHold(target, function () {
+        // draft may have been reloaded by a rerender — re-resolve by entry id
+        if (ctx.mode === 'draft' && draft) {
+          const live = draft.entries.find(function (x) { return x.id === eid; });
+          const t = live ? (live.sets || []).find(function (x) { return !x.done; }) : null;
+          if (!t) return;
+          t.holdSec = target;
+          t.done = true;
+          saveDraft();
+          App.rerender();
+          return;
+        }
+        const live = ctx.model.entries.find(function (x) { return x.id === eid; });
+        const t = live ? (live.sets || []).find(function (x) { return !x.done; }) : null;
+        if (!t) return;
+        t.holdSec = target;
+        t.done = true;
+        ctx.persist();
+        repaint();
+      });
+    }
+
+    function onSetworkClick(en, btn) {
+      const act = btn.getAttribute('data-act');
+      const rowEl = btn.closest('.set-row');
+      const i = rowEl ? parseInt(rowEl.getAttribute('data-i'), 10) : -1;
+      const s = i >= 0 ? en.sets[i] : null;
+
+      if (act === 'sw-check' && s) { onSwCheck(en, i, rowEl, btn); return; }
+
+      if (act === 'sw-side' && s) {
+        s.side = s.side === 'L' ? 'R' : 'L';
+        btn.textContent = s.side;
+        ctx.persist();
+        return;
+      }
+
+      if (act === 'sw-hint' && s) {
+        const hs = swHintSetOf(en, prevSwFor(en.exerciseRef), i);
+        if (!hs) return;
+        const rowShape = swRowShapeOf(en);
+        const aIn = rowEl.querySelector('#swa_' + en.id + '_' + i);
+        const bIn = rowEl.querySelector('#swb_' + en.id + '_' + i);
+        if (rowShape === 'carry') {
+          if ((hs.distanceM || 0) > 0) s.distanceM = hs.distanceM;
+          s.weightKg = hs.weightKg || 0;
+          if (aIn) aIn.value = s.weightKg > 0 ? dispW(s.weightKg) : '';
+          if (bIn) bIn.value = s.distanceM > 0 ? String(Math.round(s.distanceM)) : '';
+        } else if (rowShape === 'reps') {
+          if ((hs.reps || 0) > 0) s.reps = hs.reps;
+          if (aIn) aIn.value = s.reps > 0 ? String(s.reps) : '';
+        } else {
+          if ((hs.holdSec || 0) > 0) s.holdSec = hs.holdSec;
+          if (aIn) aIn.value = s.holdSec > 0 ? fmtClock(s.holdSec) : '';
+        }
+        ctx.persist();
+        if (ctx.onStats) ctx.onStats();
+        return;
+      }
+
+      if (act === 'rmset' && s) {
+        en.sets.splice(i, 1);
+        ctx.persist();
+        repaint();
+        return;
+      }
+
+      if (act === 'addset') {
+        const ex = exOf(en.exerciseRef);
+        const last = en.sets[en.sets.length - 1] || null;
+        const next = { done: false };
+        if (last) {
+          if ((last.reps || 0) > 0) next.reps = last.reps;
+          if ((last.holdSec || 0) > 0) next.holdSec = last.holdSec;
+          if ((last.distanceM || 0) > 0) next.distanceM = last.distanceM;
+          if ((last.weightKg || 0) > 0) next.weightKg = last.weightKg;
+        }
+        if (ex && ex.perSide) {
+          // auto-alternate the side; clone values from the previous same-side set
+          next.side = last && last.side === 'L' ? 'R' : 'L';
+        } else if (last && (last.side === 'L' || last.side === 'R')) {
+          next.side = last.side === 'L' ? 'R' : 'L';
+        }
+        en.sets.push(next);
+        ctx.persist();
+        repaint();
+        focusInput('swa_' + en.id + '_' + (en.sets.length - 1));
+        return;
+      }
+
+      if (act === 'sw-depth') {
+        en._depth = U.clamp(parseInt(btn.getAttribute('data-depth'), 10) || 2, 1, 4);
+        ctx.persist();
+        repaint();
+        return;
+      }
+
+      if (act === 'sw-method') {
+        en.method = btn.getAttribute('data-method');
+        ctx.persist();
+        repaint();
+        return;
+      }
+
+      if (act === 'sw-timer') { startSwTimer(en); return; }
+
+      if (act === 'exnotes') {
+        en._notesOpen = !notesShownOf(en);
+        ctx.persist();
+        repaint();
+        if (en._notesOpen) focusInput('enn_' + en.id);
+        return;
+      }
+
+      if (act === 'delentry') {
+        const hasData = (en.sets || []).some(swValidSet);
+        const doRemove = function () {
+          if (ctx.mode === 'draft' && draft) {
+            draft.entries = draft.entries.filter(function (x) { return x.id !== en.id; });
+            saveDraft();
+            App.rerender();
+            return;
+          }
+          ctx.model.entries = ctx.model.entries.filter(function (x) { return x !== en; });
+          ctx.persist();
+          repaint();
+        };
+        if (hasData) {
+          App.confirm({
+            title: 'Remove exercise?',
+            message: exName(en.exerciseRef) + ' and its logged sets will be removed from this workout.',
+            danger: true,
+            confirmLabel: 'Remove'
+          }).then(function (ok) { if (ok) doRemove(); });
+        } else {
+          doRemove();
+        }
+      }
+    }
+
     function setRowHTML(en, s, i, showRpe, prev) {
+      if (isSetworkEntry(en)) {
+        const swEx = exOf(en.exerciseRef);
+        return swRowHTML(en, s, i, swRowShapeOf(en), !!(swEx && swEx.perSide), prevSwFor(en.exerciseRef));
+      }
       const draftMode = ctx.mode === 'draft';
       const done = draftMode && s.done;
       const hs = hintSetOf(prev, i);
@@ -362,6 +1004,7 @@
     }
 
     function entryCardHTML(en) {
+      if (isSetworkEntry(en)) return swCardHTML(en);
       const ex = exOf(en.exerciseId);
       const showRpe = showRpeOf(en);
       const prev = prevFor(en.exerciseId);
@@ -451,6 +1094,7 @@
       if (!card) return;
       const en = findEntry(card);
       if (!en) return;
+      if (isSetworkEntry(en)) { onSetworkClick(en, btn); return; }
       const act = btn.getAttribute('data-act');
       const rowEl = btn.closest('.set-row');
       const i = rowEl ? parseInt(rowEl.getAttribute('data-i'), 10) : -1;
@@ -594,6 +1238,23 @@
       if (!rowEl) return;
       const s = en.sets[parseInt(rowEl.getAttribute('data-i'), 10)];
       if (!s) return;
+      if (isSetworkEntry(en)) {
+        if (act === 'sw-hold') {
+          const sec = parseTimeToSec(inp.value, 'sec');
+          s.holdSec = sec === null || sec <= 0 ? 0 : Math.round(sec);
+        } else if (act === 'sw-reps') {
+          const n = parseInt(inp.value, 10);
+          s.reps = isNaN(n) || n < 0 ? 0 : n;
+        } else if (act === 'sw-kg') {
+          s.weightKg = inp.value.trim() === '' ? 0 : U.displayToKg(inp.value, App.units());
+        } else if (act === 'sw-m') {
+          const m = parseFloat(inp.value);
+          s.distanceM = isNaN(m) || m < 0 ? 0 : m;
+        }
+        ctx.persist();
+        if (ctx.onStats) ctx.onStats();
+        return;
+      }
       if (act === 'w') {
         s.weightKg = inp.value.trim() === '' ? 0 : U.displayToKg(inp.value, App.units());
       } else if (act === 'r') {
@@ -616,6 +1277,16 @@
       if (!card || !rowEl) return;
       const eid = card.getAttribute('data-eid');
       const i = parseInt(rowEl.getAttribute('data-i'), 10);
+      const swEn = ctx.model.entries.find(function (x) { return x.id === eid; });
+      if (isSetworkEntry(swEn)) {
+        if (inp.id.indexOf('swa_') === 0 && document.getElementById('swb_' + eid + '_' + i)) {
+          focusInput('swb_' + eid + '_' + i);
+          return;
+        }
+        if (i + 1 < swEn.sets.length) { focusInput('swa_' + eid + '_' + (i + 1)); return; }
+        inp.blur();
+        return;
+      }
       if (inp.getAttribute('data-act') === 'w') { focusInput('sr_' + eid + '_' + i); return; }
       const entries = ctx.model.entries;
       const ei = entries.findIndex(function (x) { return x.id === eid; });
@@ -643,14 +1314,17 @@
     const state = { q: '', muscle: null, equip: null };
 
     // last 10 distinct exercises for this user, most recent first
+    // (opts.category narrows recents and results, e.g. the stretch builder)
     const recents = [];
     if (u) {
       const ws = Store.workoutsFor(u.id);
       for (let i = 0; i < ws.length && recents.length < 10; i++) {
         (ws[i].entries || []).forEach(function (en) {
-          if (recents.length < 10 && en.exerciseId &&
-              recents.indexOf(en.exerciseId) < 0 && exOf(en.exerciseId)) {
-            recents.push(en.exerciseId);
+          const rid = en.exerciseId || (en.type === 'setwork' ? en.exerciseRef : null);
+          const rex = rid ? exOf(rid) : null;
+          if (recents.length < 10 && rex && recents.indexOf(rid) < 0 &&
+              (!opts.category || rex.category === opts.category)) {
+            recents.push(rid);
           }
         });
       }
@@ -694,7 +1368,9 @@
 
     function renderResults() {
       const filtering = !!(state.q || state.muscle || state.equip);
-      const list = ExerciseDB.search(state.q, { muscle: state.muscle, equipment: state.equip });
+      const list = ExerciseDB.search(state.q, {
+        muscle: state.muscle, equipment: state.equip, category: opts.category || null
+      });
       let html = '';
       if (!filtering && recents.length) {
         html += sectionLabel('Recent') +
@@ -927,7 +1603,8 @@
   const KIND_LABELS = {
     lift: 'Lift', run: 'Run', ruck: 'Ruck', swim: 'Swim', bike: 'Bike',
     row: 'Row', stairs: 'Stairs', circuit: 'Circuit', cardio: 'Cardio',
-    mobility: 'Mobility', durability: 'Durability', test: 'Test', mixed: 'Mixed'
+    mobility: 'Mobility', durability: 'Durability', test: 'Test', mixed: 'Mixed',
+    setwork: 'Set work'
   };
 
   const CARDIO_MODE_DEFS = [
@@ -993,9 +1670,27 @@
     mixed: svgK('<path d="M12 3 3 8l9 5 9-5Z"/><path d="M3 13l9 5 9-5"/>')
   };
 
+  // P3: a lone setwork entry defaults to the durability shield.
+  KIND_ICONS.setwork = KIND_ICONS.durability;
+
   function kindGlyph(kind) {
     return '<span style="display:inline-flex;align-items:center;flex:none;color:var(--text-muted)" aria-hidden="true">' +
       (KIND_ICONS[kind] || KIND_ICONS.lift) + '</span>';
+  }
+
+  // P3: setwork workouts pick their glyph by majority exercise category —
+  // mobility-heavy sessions read as stretch, everything else as durability.
+  function workoutGlyphKind(w) {
+    const k = kindOfWorkout(w);
+    if (k !== 'setwork') return k;
+    let mob = 0;
+    let oth = 0;
+    ((w && w.entries) || []).forEach(function (en) {
+      if (!isSetworkEntry(en)) return;
+      if (swIsStretch(en)) mob++;
+      else oth++;
+    });
+    return mob >= oth && mob > 0 ? 'mobility' : 'durability';
   }
 
   /* ---------- entry / workout kind helpers ---------- */
@@ -1190,7 +1885,10 @@
     const G = window.Guardrails;
     if (!G || typeof G.checkSession !== 'function') return [];
     try {
-      return G.checkSession(draftW, Store.workoutsFor(u.id), u) || [];
+      // painLog (P3) activates the stretch/pain-overlap rule; optional arg,
+      // older Guardrails builds ignore it.
+      const pain = typeof Store.painFor === 'function' ? (Store.painFor(u.id) || []) : [];
+      return G.checkSession(draftW, Store.workoutsFor(u.id), u, pain) || [];
     } catch (e) {
       return [];
     }
@@ -1374,6 +2072,8 @@
         if (!en || isLiftEntry(en)) return;
         const ids = [entryKindOf(en)];
         if (en.type === 'cardio') ids.push('cardio');
+        // setwork sessions refresh the chip they were started from
+        if (en.type === 'setwork') ids.push(swIsStretch(en) ? 'mobility' : 'durability');
         ids.forEach(function (id) {
           if (!map[id] || map[id] < w.date) map[id] = w.date;
         });
@@ -1415,16 +2115,36 @@
     if (id === 'cardio') { openCardioLogger('run', null); return; }
     if (CARDIO_MODE_DEFS.some(function (m) { return m.id === id; })) { openCardioLogger(id, null); return; }
     if (id === 'mobility') { openMobilityLogger(null); return; }
-    if (id === 'durability') { openDurabilityLogger(null); return; }
+    if (id === 'durability') {
+      // P3: routine mini-sheet in performance mode; legacy checklist otherwise
+      if (perfMode(user())) openDurabilitySheet();
+      else openDurabilityLogger(null);
+      return;
+    }
     if (id === 'test') { openTestLogger(null); return; }
   }
 
   /* ---------- cardio logger (single screen, direct save; also edit form) ---------- */
 
   const CARDIO_KNOWN_KEYS = ['id', 'type', 'mode', 'distanceKm', 'durationMin', 'avgHR', 'maxHR',
-    'effort', 'surface', 'tempC', 'fluidMl', 'loadKgDry', 'loadKgTotal', 'footwear', 'footNote', 'notes'];
+    'effort', 'surface', 'tempC', 'fluidMl', 'loadKgDry', 'loadKgTotal', 'footwear', 'footNote', 'notes',
+    'elevationM', 'intervals', 'rounds', 'stations']; // P3 additive fields — rebuilt by the form below
 
   const BIG_NUM_STYLE = 'font-size:24px;font-weight:600;text-align:center;min-height:52px';
+
+  // P3: the user's most recent circuit entry carrying structure, for the
+  // 'Repeat last circuit' prefill.
+  function lastCircuitEntry(u) {
+    const ws = Store.workoutsFor(u.id);
+    for (let i = 0; i < ws.length; i++) {
+      const en = (ws[i].entries || []).find(function (x) {
+        return x && x.type === 'cardio' && x.mode === 'circuit' &&
+          ((x.rounds || 0) > 0 || (x.stations || []).length > 0);
+      });
+      if (en) return en;
+    }
+    return null;
+  }
 
   // edit = {workoutId, entryId} | null
   function openCardioLogger(initialMode, edit) {
@@ -1443,8 +2163,19 @@
     const st = {
       mode: editEn ? (editEn.mode || 'run') : (initialMode || 'run'),
       effort: editEn && editEn.effort ? editEn.effort : null,
-      footwear: editEn && editEn.footwear ? editEn.footwear : null
+      footwear: editEn && editEn.footwear ? editEn.footwear : null,
+      // P3 structure state (performance mode only; simple mode UI unchanged)
+      restType: editEn && editEn.intervals && editEn.intervals.restType ? editEn.intervals.restType : null,
+      rounds: editEn && editEn.rounds > 0 ? Math.round(editEn.rounds) : 0,
+      stations: (editEn && Array.isArray(editEn.stations) ? editEn.stations : []).map(function (x) {
+        const c = {};
+        for (const k in x) c[k] = x[k];
+        return c;
+      }),
+      intOpen: !!(editEn && editEn.intervals),
+      structOpen: !!(editEn && (editEn.rounds > 0 || (editEn.stations || []).length))
     };
+    const perf = perfMode(u);
     const unit = U.unitLabel(App.units());
 
     function modeChipsHTML() {
@@ -1462,6 +2193,63 @@
           '" aria-pressed="' + (on ? 'true' : 'false') + '">' + capStr(id) + '</button>';
       }).join('');
     }
+
+    function restChipsHTML() {
+      return ['jog', 'stand'].map(function (id) {
+        const on = st.restType === id;
+        return '<button type="button" class="chip' + (on ? ' active' : '') + '" data-crest="' + id +
+          '" aria-pressed="' + (on ? 'true' : 'false') + '">' + capStr(id) + '</button>';
+      }).join('');
+    }
+
+    // P3 additive sections — performance mode only; the simple-mode sheet is
+    // byte-identical. All fields optional.
+    const ivPre = (editEn && editEn.intervals) || {};
+    const lastCircuit = perf && !editEn ? lastCircuitEntry(u) : null;
+    const p3Html = !perf ? '' :
+      '<div class="field" id="cl-elev-wrap" hidden><label for="cl-elev">Elevation gain (m)</label>' +
+      '<input class="input" id="cl-elev" type="text" inputmode="numeric" autocomplete="off" value="' +
+      (editEn && editEn.elevationM > 0 ? U.esc(String(editEn.elevationM)) : '') + '"></div>' +
+      '<div class="cl-collapse" id="cl-int" hidden>' +
+      '<button type="button" class="btn ghost small" id="cl-int-toggle" aria-expanded="' +
+      (st.intOpen ? 'true' : 'false') + '">' + ic().plus + ' Intervals — optional</button>' +
+      '<div class="cl-collapse-body" id="cl-int-body"' + (st.intOpen ? '' : ' hidden') + '>' +
+      '<div class="field-row">' +
+      '<div class="field"><label for="cl-int-reps">Reps</label>' +
+      '<input class="input" id="cl-int-reps" type="text" inputmode="numeric" autocomplete="off" value="' +
+      (ivPre.reps > 0 ? ivPre.reps : '') + '"></div>' +
+      '<div class="field"><label for="cl-int-dist">Distance (m)</label>' +
+      '<input class="input" id="cl-int-dist" type="text" inputmode="numeric" autocomplete="off" value="' +
+      (ivPre.distanceM > 0 ? ivPre.distanceM : '') + '"></div></div>' +
+      '<div class="field-row">' +
+      '<div class="field"><label for="cl-int-work">Work (mm:ss)</label>' +
+      '<input class="input" id="cl-int-work" type="text" inputmode="numeric" autocomplete="off" value="' +
+      (ivPre.workSec > 0 ? U.esc(fmtSec(ivPre.workSec)) : '') + '"></div>' +
+      '<div class="field"><label for="cl-int-rest">Rest (sec)</label>' +
+      '<input class="input" id="cl-int-rest" type="text" inputmode="numeric" autocomplete="off" value="' +
+      (ivPre.restSec > 0 ? ivPre.restSec : '') + '"></div></div>' +
+      '<div class="field"><label>Rest type</label>' +
+      '<div class="chip-row" data-slot="crest">' + restChipsHTML() + '</div></div>' +
+      '<p class="hint" id="cl-int-total" style="margin-top:-2px"></p>' +
+      '</div></div>' +
+      '<div class="cl-collapse" id="cl-struct" hidden>' +
+      '<button type="button" class="btn ghost small" id="cl-struct-toggle" aria-expanded="' +
+      (st.structOpen ? 'true' : 'false') + '">' + ic().plus + ' Structure — optional</button>' +
+      '<div class="cl-collapse-body" id="cl-struct-body"' + (st.structOpen ? '' : ' hidden') + '>' +
+      (lastCircuit
+        ? '<button type="button" class="chip" id="cl-struct-repeat" style="margin-bottom:8px">' +
+          ic().copy + ' Repeat last circuit</button>'
+        : '') +
+      '<div class="field"><label>Rounds</label><div class="sw-stepper">' +
+      '<button type="button" class="btn icon ghost" data-cr="-1" aria-label="Fewer rounds">−</button>' +
+      '<span class="val" id="cl-rounds">' + (st.rounds || 0) + '</span>' +
+      '<button type="button" class="btn icon ghost" data-cr="1" aria-label="More rounds">+</button>' +
+      '</div></div>' +
+      '<div class="field"><label>Stations</label><div id="cl-stations"></div>' +
+      '<div style="display:flex;gap:8px;margin-top:6px">' +
+      '<button type="button" class="btn ghost small" id="cl-st-add">' + ic().plus + ' Add station</button>' +
+      '<button type="button" class="btn ghost small" id="cl-st-lib">' + ic().search + ' From library</button>' +
+      '</div></div></div></div>';
 
     const content = document.createElement('div');
     content.innerHTML =
@@ -1512,6 +2300,7 @@
         return '<option value="' + s + '"' + (editEn && editEn.surface === s ? ' selected' : '') + '>' +
           capStr(s) + '</option>';
       }).join('') + '</select></div>' +
+      p3Html +
       '<div id="cl-long" hidden><div class="field-row">' +
       '<div class="field"><label for="cl-temp">Temp (°C)</label>' +
       '<input class="input" id="cl-temp" type="text" inputmode="decimal" autocomplete="off" value="' +
@@ -1530,6 +2319,65 @@
     function readDur() {
       const v = parseFloat($id('#cl-dur').value);
       return isNaN(v) || v <= 0 ? 0 : v;
+    }
+
+    // P3: interval block -> entry.intervals. Unknown sub-keys from the edited
+    // entry ride along untouched; reps is the gate for emitting anything.
+    const IV_KNOWN = ['reps', 'distanceM', 'workSec', 'restSec', 'restType'];
+
+    function readIntervals() {
+      const repsEl = $id('#cl-int-reps');
+      if (!repsEl) return null;
+      const reps = parseInt(repsEl.value, 10);
+      if (isNaN(reps) || reps <= 0) return null;
+      const o = {};
+      if (editEn && editEn.intervals && typeof editEn.intervals === 'object') {
+        for (const k in editEn.intervals) {
+          if (IV_KNOWN.indexOf(k) < 0) o[k] = editEn.intervals[k];
+        }
+      }
+      o.reps = reps;
+      const dm = parseFloat($id('#cl-int-dist').value);
+      if (!isNaN(dm) && dm > 0) o.distanceM = dm;
+      const wk = parseTimeToSec($id('#cl-int-work').value, 'sec');
+      if (wk !== null && wk > 0) o.workSec = Math.round(wk);
+      const rs = parseInt($id('#cl-int-rest').value, 10);
+      if (!isNaN(rs) && rs > 0) o.restSec = rs;
+      if (st.restType) o.restType = st.restType;
+      return o;
+    }
+
+    // Stations keep every key they arrived with; the form only rewrites
+    // name/exerciseId/reps. Stations never feed volume or muscle analytics.
+    function cleanStation(x) {
+      const c = {};
+      for (const k in x) c[k] = x[k];
+      if (!((parseInt(c.reps, 10) || 0) > 0)) delete c.reps;
+      else c.reps = parseInt(c.reps, 10);
+      if (typeof c.name === 'string') c.name = c.name.trim();
+      if (!c.name) delete c.name;
+      if (!c.exerciseId) delete c.exerciseId;
+      return c.exerciseId || c.name ? c : null;
+    }
+
+    function paintStations() {
+      const box = $id('#cl-stations');
+      if (!box) return;
+      if (!st.stations.length) {
+        box.innerHTML = '<p class="muted" style="font-size:13px;padding:2px 0">No stations yet — free text or pick from the library.</p>';
+        return;
+      }
+      box.innerHTML = st.stations.map(function (x, i) {
+        const nameVal = x.exerciseId ? exName(x.exerciseId) : (x.name || '');
+        return '<div class="cl-station-row">' +
+          '<input class="input" data-stname="' + i + '" placeholder="Station" autocomplete="off" ' +
+          'style="flex:2;min-width:0" value="' + U.esc(nameVal) + '">' +
+          '<input class="input" data-streps="' + i + '" type="text" inputmode="numeric" placeholder="Reps" ' +
+          'autocomplete="off" style="width:64px;text-align:center;flex:none" value="' +
+          ((x.reps || 0) > 0 ? x.reps : '') + '">' +
+          '<button type="button" class="btn icon ghost" data-strm="' + i + '" aria-label="Remove station">' +
+          ic().close + '</button></div>';
+      }).join('');
     }
 
     function readDate() {
@@ -1573,6 +2421,27 @@
         if (tot > 0) en.loadKgTotal = Math.round(tot * 100) / 100;
         if (st.footwear) en.footwear = st.footwear;
       }
+      // P3 structure fields — written by the performance-mode form; the
+      // simple-mode form never shows them, so it carries them through verbatim.
+      if (perf) {
+        if (['run', 'ruck', 'stairs'].indexOf(st.mode) >= 0) {
+          const ev = parseFloat($id('#cl-elev').value);
+          if (!isNaN(ev) && ev > 0) en.elevationM = Math.round(ev);
+        }
+        if (['run', 'swim'].indexOf(st.mode) >= 0) {
+          const iv = readIntervals();
+          if (iv) en.intervals = iv;
+        }
+        if (st.mode === 'circuit') {
+          if (st.rounds > 0) en.rounds = st.rounds;
+          const sts = st.stations.map(cleanStation).filter(Boolean);
+          if (sts.length) en.stations = sts;
+        }
+      } else if (editEn) {
+        ['elevationM', 'intervals', 'rounds', 'stations'].forEach(function (k) {
+          if (k in editEn) en[k] = editEn[k];
+        });
+      }
       const notes = $id('#cl-notes').value.trim();
       if (notes) en.notes = notes;
       return en;
@@ -1581,6 +2450,24 @@
     let lastWarns = [];
 
     function sync() {
+      // P3: section visibility + the interval TOTAL written into distance so
+      // weekly mileage guardrails stay truthful on every client.
+      if (perf) {
+        $id('#cl-elev-wrap').hidden = ['run', 'ruck', 'stairs'].indexOf(st.mode) < 0;
+        $id('#cl-int').hidden = ['run', 'swim'].indexOf(st.mode) < 0;
+        $id('#cl-struct').hidden = st.mode !== 'circuit';
+        const iv = ['run', 'swim'].indexOf(st.mode) >= 0 ? readIntervals() : null;
+        const totEl = $id('#cl-int-total');
+        if (totEl) {
+          if (iv && (iv.distanceM || 0) > 0) {
+            const totKm = iv.reps * iv.distanceM / 1000;
+            $id('#cl-dist').value = String(Math.round(kmToDist(totKm) * 100) / 100);
+            totEl.textContent = 'Interval total ' + fmtKm(totKm) + ' — written to distance.';
+          } else {
+            totEl.textContent = '';
+          }
+        }
+      }
       const dur = readDur();
       const km = distToKm($id('#cl-dist').value);
       $id('#cl-pace').textContent = km > 0 && dur > 0
@@ -1616,6 +2503,87 @@
         b.setAttribute('aria-pressed', on ? 'true' : 'false');
       });
     });
+    if (perf) {
+      function wireToggle(btnSel, bodySel) {
+        const btn = $id(btnSel);
+        if (!btn) return;
+        btn.addEventListener('click', function () {
+          const body = $id(bodySel);
+          body.hidden = !body.hidden;
+          btn.setAttribute('aria-expanded', body.hidden ? 'false' : 'true');
+        });
+      }
+      wireToggle('#cl-int-toggle', '#cl-int-body');
+      wireToggle('#cl-struct-toggle', '#cl-struct-body');
+      U.on(content, 'click', '[data-crest]', function (e, chip) {
+        const v = chip.getAttribute('data-crest');
+        st.restType = st.restType === v ? null : v;
+        U.$('[data-slot="crest"]', content).innerHTML = restChipsHTML();
+        sync();
+      });
+      U.on(content, 'click', '[data-cr]', function (e, b) {
+        st.rounds = U.clamp((st.rounds || 0) + parseInt(b.getAttribute('data-cr'), 10), 0, 99);
+        const rEl = $id('#cl-rounds');
+        if (rEl) rEl.textContent = String(st.rounds);
+      });
+      U.on(content, 'input', 'input[data-stname]', function (e, inp) {
+        const i = parseInt(inp.getAttribute('data-stname'), 10);
+        if (!st.stations[i]) return;
+        st.stations[i].name = inp.value;
+        delete st.stations[i].exerciseId; // typed over — now free text
+      });
+      U.on(content, 'input', 'input[data-streps]', function (e, inp) {
+        const i = parseInt(inp.getAttribute('data-streps'), 10);
+        if (!st.stations[i]) return;
+        const n = parseInt(inp.value, 10);
+        st.stations[i].reps = isNaN(n) || n < 0 ? 0 : n;
+      });
+      U.on(content, 'click', 'button[data-strm]', function (e, b) {
+        st.stations.splice(parseInt(b.getAttribute('data-strm'), 10), 1);
+        paintStations();
+      });
+      const stAdd = $id('#cl-st-add');
+      if (stAdd) {
+        stAdd.addEventListener('click', function () {
+          st.stations.push({ name: '' });
+          paintStations();
+          const inputs = U.$$('input[data-stname]', content);
+          if (inputs.length) inputs[inputs.length - 1].focus();
+        });
+      }
+      const stLib = $id('#cl-st-lib');
+      if (stLib) {
+        stLib.addEventListener('click', function () {
+          openExercisePicker({
+            title: 'Add stations',
+            multi: true,
+            onPick: function (ids) {
+              ids.forEach(function (id) { st.stations.push({ exerciseId: id }); });
+              paintStations();
+            }
+          });
+        });
+      }
+      const repBtn = $id('#cl-struct-repeat');
+      if (repBtn) {
+        repBtn.addEventListener('click', function () {
+          st.rounds = lastCircuit.rounds > 0 ? Math.round(lastCircuit.rounds) : 0;
+          st.stations = (lastCircuit.stations || []).map(function (x) {
+            const c = {};
+            for (const k in x) c[k] = x[k];
+            return c;
+          });
+          const rEl = $id('#cl-rounds');
+          if (rEl) rEl.textContent = String(st.rounds);
+          if (lastCircuit.durationMin && !$id('#cl-dur').value) {
+            $id('#cl-dur').value = String(lastCircuit.durationMin);
+          }
+          paintStations();
+          sync();
+        });
+      }
+      paintStations();
+    }
     U.on(content, 'input', 'input, select, textarea', function () { sync(); });
     sync();
 
@@ -1676,6 +2644,12 @@
 
   /* ---------- mobility logger ---------- */
 
+  // P3: legacy quick-edit forms must preserve unknown keys so the NEXT schema
+  // evolution isn't trapped by rebuilt entries (CARDIO_KNOWN_KEYS pattern).
+  const MOBILITY_KNOWN_KEYS = ['id', 'type', 'modality', 'durationMin', 'targetMuscles', 'notes'];
+  const DURABILITY_KNOWN_KEYS = ['id', 'type', 'items', 'durationMin', 'notes'];
+  const TEST_KNOWN_KEYS = ['id', 'type', 'protocol', 'results', 'score', 'notes'];
+
   function openMobilityLogger(edit) {
     const u = user();
     if (!u) { App.toast('Create a profile first', 'err'); return; }
@@ -1693,8 +2667,26 @@
     const selected = {};
     ((editEn && editEn.targetMuscles) || []).forEach(function (m) { selected[m] = true; });
 
+    // P3: 'Same as last time' prefill chip (renders only when a prior stretch
+    // session exists — the one family-visible change in simple mode) and the
+    // performance-only structured-stretch entry point.
+    const perf = perfMode(u);
+    const lastSession = editEn ? null : lastStretchSession(u, perf);
+    const quickRowHTML = editEn ? '' :
+      ((lastSession || perf)
+        ? '<div class="chip-row" style="margin-bottom:12px">' +
+          (lastSession
+            ? '<button type="button" class="chip" id="mb-same">' + ic().copy + ' Same as last time</button>'
+            : '') +
+          (perf
+            ? '<button type="button" class="chip" id="mb-individual">' + ic().plus + ' Log individual stretches</button>'
+            : '') +
+          '</div>'
+        : '');
+
     const content = document.createElement('div');
     content.innerHTML =
+      quickRowHTML +
       (singleEntry
         ? '<div class="field"><label for="mb-date">Date</label>' +
           '<input class="input" id="mb-date" type="date" value="' +
@@ -1767,7 +2759,39 @@
     });
     paintMap();
 
-    App.sheet({
+    let sheetApi = null;
+    const sameBtn = U.$('#mb-same', content);
+    if (sameBtn) {
+      sameBtn.addEventListener('click', function () {
+        if (lastSession.kind === 'structured') {
+          // last stretch session was structured — repeat THAT, values prefilled
+          if (sheetApi) sheetApi.close();
+          openStretchBuilder({ from: { entries: lastSession.entries } });
+          return;
+        }
+        const en = lastSession.en;
+        const durEl = U.$('#mb-dur', content);
+        if (durEl && en.durationMin) durEl.value = String(en.durationMin);
+        st.modality = en.modality || 'static';
+        U.$$('[data-modality]', content).forEach(function (b) {
+          const on = b.getAttribute('data-modality') === st.modality;
+          b.classList.toggle('active', on);
+          b.setAttribute('aria-pressed', on ? 'true' : 'false');
+        });
+        Object.keys(selected).forEach(function (k) { delete selected[k]; });
+        (en.targetMuscles || []).forEach(function (m) { selected[m] = true; });
+        paintMap();
+      });
+    }
+    const indivBtn = U.$('#mb-individual', content);
+    if (indivBtn) {
+      indivBtn.addEventListener('click', function () {
+        if (sheetApi) sheetApi.close();
+        openStretchBuilder(null);
+      });
+    }
+
+    sheetApi = App.sheet({
       title: editEn ? 'Edit mobility' : 'Log mobility',
       content: content,
       actions: [
@@ -1792,6 +2816,12 @@
             };
             const notes = U.$('#mb-notes', content).value.trim();
             if (notes) en.notes = notes;
+            // P3: preserve fields written by newer app versions (CARDIO_KNOWN_KEYS pattern)
+            if (editEn) {
+              for (const k in editEn) {
+                if (MOBILITY_KNOWN_KEYS.indexOf(k) < 0) en[k] = editEn[k];
+              }
+            }
 
             if (editEn) {
               const live = Store.workoutById(editW.id);
@@ -1932,6 +2962,12 @@
             if (!isNaN(dur) && dur > 0) en.durationMin = dur;
             const notes = U.$('#db-notes', content).value.trim();
             if (notes) en.notes = notes;
+            // P3: preserve fields written by newer app versions
+            if (editEn) {
+              for (const k in editEn) {
+                if (DURABILITY_KNOWN_KEYS.indexOf(k) < 0) en[k] = editEn[k];
+              }
+            }
 
             if (editEn) {
               const live = Store.workoutById(editW.id);
@@ -1961,6 +2997,225 @@
             App.toast('Session saved', 'ok');
             App.navigate('history');
             openSessionCheckin(w);
+          }
+        }
+      ]
+    });
+  }
+
+  /* ---------- P3: durability routine mini-sheet (performance mode) ----------
+     Routines are code-defined (ExerciseDB.DURABILITY_ROUTINES) — never user
+     templates. Seeding creates a NORMAL draft: weight_reps drills become plain
+     lift entries (they keep earning volume/PRs/muscle credit); holds/carries
+     become setwork entries. */
+
+  function lastRoutineWorkout(u) {
+    return Store.workoutsFor(u.id).find(function (w) {
+      return /^Durability [AB]\b/.test(w.name || '');
+    }) || null;
+  }
+
+  function seedDurabilityDraft(letter) {
+    const db = window.ExerciseDB;
+    const routines = db && db.DURABILITY_ROUTINES;
+    const items = routines && routines[letter];
+    if (!items || !items.length) { App.toast('Routine unavailable — update the app', 'err'); return; }
+    const entries = items.map(function (it) {
+      const ex = exOf(it.exerciseId);
+      if (setShapeOf(ex) === 'weight_reps') {
+        const en = newEntry(it.exerciseId, it.sets || 3);
+        if (it.targetReps) { en._repLow = it.targetReps; en._repHigh = it.targetReps; }
+        if (it.weightHint) en.notes = it.weightHint;
+        return en;
+      }
+      return newSetworkEntry(it.exerciseId, it.sets || 3, {
+        holdSec: it.targetHoldSec, reps: it.targetReps, distanceM: it.targetDistanceM
+      });
+    });
+    startDraft({ name: 'Durability ' + letter, entries: entries });
+    App.navigate('log');
+    App.rerender();
+  }
+
+  // Draft entries from a saved workout, keeping setwork entries editable with
+  // their values prefilled (unlike repeatableView, which strips typed entries).
+  function seedRepeatDurability(w) {
+    const entries = [];
+    (w.entries || []).forEach(function (en) {
+      if (!en) return;
+      if (isLiftEntry(en)) {
+        entries.push({
+          id: U.uid('en'),
+          exerciseId: en.exerciseId,
+          notes: '',
+          sets: (en.sets || []).map(function (s) {
+            return {
+              weightKg: s.weightKg || 0,
+              reps: s.reps || 0,
+              type: s.type === 'warmup' ? 'warmup' : 'work',
+              rpe: null,
+              done: false
+            };
+          })
+        });
+      } else if (isSetworkEntry(en)) {
+        entries.push(swDraftCopyOf(en));
+      }
+    });
+    if (!entries.length) { App.toast('Nothing repeatable in that session', 'err'); return; }
+    startDraft({ name: w.name || 'Durability', entries: entries });
+    App.navigate('log');
+    App.rerender();
+  }
+
+  function openDurabilitySheet() {
+    const u = user();
+    if (!u) { App.toast('Create a profile first', 'err'); return; }
+    const lastW = lastRoutineWorkout(u);
+    const m = lastW ? /^Durability ([AB])\b/.exec(lastW.name || '') : null;
+    const lastLetter = m ? m[1] : null;
+    const next = lastLetter === 'A' ? 'B' : 'A'; // auto-alternate vs last routine letter
+    const db = window.ExerciseDB;
+    const items = (db && db.DURABILITY_ROUTINES && db.DURABILITY_ROUTINES[next]) || [];
+    const preview = items.map(function (it) { return exName(it.exerciseId); }).join(' · ');
+
+    let html = '<div class="list">' +
+      '<button type="button" class="list-row" data-dur="routine">' +
+      '<span class="leading" style="color:var(--accent)">' + KIND_ICONS.durability + '</span>' +
+      '<div class="body"><div class="title">Durability ' + next + '</div>' +
+      '<div class="sub">' + U.esc(preview || 'Guided routine — 5 drills') + '</div></div>' +
+      '<span class="chevron">' + ic().chevron + '</span></button>';
+    if (lastW) {
+      html += '<button type="button" class="list-row" data-dur="repeat">' +
+        '<span class="leading">' + ic().copy + '</span>' +
+        '<div class="body"><div class="title">Repeat last</div>' +
+        '<div class="sub">' + U.esc(lastW.name) + ' · ' + U.esc(U.relDate(lastW.date)) + '</div></div>' +
+        '<span class="chevron">' + ic().chevron + '</span></button>';
+    }
+    html += '<button type="button" class="list-row" data-dur="checklist">' +
+      '<span class="leading">' + ic().check + '</span>' +
+      '<div class="body"><div class="title">Quick checklist</div>' +
+      '<div class="sub">Tick off drills without logging sets</div></div>' +
+      '<span class="chevron">' + ic().chevron + '</span></button></div>';
+
+    const content = document.createElement('div');
+    content.innerHTML = html;
+    let api = null;
+    U.on(content, 'click', '[data-dur]', function (e, row) {
+      const act = row.getAttribute('data-dur');
+      if (api) api.close();
+      if (act === 'routine') seedDurabilityDraft(next);
+      else if (act === 'repeat' && lastW) seedRepeatDurability(lastW);
+      else if (act === 'checklist') openDurabilityLogger(null); // legacy flow, unchanged shape
+    });
+    api = App.sheet({ title: 'Durability', content: content });
+  }
+
+  /* ---------- P3: structured stretch mini-builder (performance mode) ---------- */
+
+  // Most recent stretch session: a legacy 'mobility' entry, or (performance
+  // mode) a structured setwork stretch session — whichever is newer.
+  function lastStretchSession(u, includeStructured) {
+    const ws = Store.workoutsFor(u.id); // date desc, createdAt desc
+    for (let i = 0; i < ws.length; i++) {
+      const w = ws[i];
+      const mob = (w.entries || []).find(function (en) { return en && en.type === 'mobility'; });
+      if (mob) return { kind: 'legacy', w: w, en: mob };
+      if (includeStructured) {
+        const sw = (w.entries || []).filter(function (en) {
+          return isSetworkEntry(en) && swIsStretch(en);
+        });
+        if (sw.length) return { kind: 'structured', w: w, entries: sw };
+      }
+    }
+    return null;
+  }
+
+  // Nominal minutes matching Analytics.stretchMinutesByMuscle: holdSec/60 per
+  // set, 0.5 min per rep-only dynamic set.
+  function stretchSessionMinutes(entries) {
+    let sec = 0;
+    let dyn = 0;
+    entries.forEach(function (en) {
+      (en.sets || []).forEach(function (s) {
+        if ((s.holdSec || 0) > 0) sec += s.holdSec;
+        else dyn++;
+      });
+    });
+    return Math.max(1, Math.round(sec / 60 + dyn * 0.5));
+  }
+
+  // opts.from = a prior structured session ({entries}) to prefill for repeat.
+  function openStretchBuilder(opts) {
+    const u = user();
+    if (!u) { App.toast('Create a profile first', 'err'); return; }
+    opts = opts || {};
+    const model = { entries: [] };
+    if (opts.from && Array.isArray(opts.from.entries)) {
+      model.entries = opts.from.entries.map(swDraftCopyOf);
+    }
+
+    const content = document.createElement('div');
+    content.innerHTML =
+      '<div class="field"><label for="sb-date">Date</label>' +
+      '<input class="input" id="sb-date" type="date" value="' + U.esc(U.todayStr()) + '"></div>' +
+      '<div id="sb-entries" style="display:flex;flex-direction:column;gap:12px"></div>' +
+      '<button type="button" class="btn ghost" id="sb-add" style="width:100%;margin-top:10px">' +
+      ic().plus + ' Add stretch</button>';
+
+    const editor = mountEditor(U.$('#sb-entries', content), {
+      mode: 'draft',
+      model: model,
+      persist: function () {},
+      prev: function (exId) { return prevSetsFor(u.id, exId); },
+      prevSw: function (ref) { return prevSetworkFor(u.id, ref); }
+    });
+
+    U.$('#sb-add', content).addEventListener('click', function () {
+      openExercisePicker({
+        title: 'Add stretch',
+        multi: true,
+        category: 'mobility',
+        onPick: function (ids) {
+          ids.forEach(function (id) { model.entries.push(newSetworkEntry(id)); });
+          editor.repaint();
+        }
+      });
+    });
+
+    App.sheet({
+      title: 'Log stretches',
+      content: content,
+      actions: [
+        { label: 'Cancel', kind: 'ghost' },
+        {
+          label: 'Save session',
+          kind: 'primary',
+          keepOpen: true,
+          onClick: function (api) {
+            const entries = model.entries.map(cleanSetworkEntry).filter(Boolean);
+            if (!entries.length) {
+              App.toast('Log at least one stretch — a hold time or reps', 'err');
+              return;
+            }
+            const dateEl = U.$('#sb-date', content);
+            const dateStr = dateEl && /^\d{4}-\d{2}-\d{2}$/.test(dateEl.value) ? dateEl.value : U.todayStr();
+            const warns = guardrailsFor({ date: dateStr, entries: entries }, u);
+            confirmStops(warns).then(function (ok) {
+              if (!ok) return;
+              const w = Store.addWorkout({
+                userId: u.id,
+                date: dateStr,
+                name: 'Stretch',
+                durationMin: stretchSessionMinutes(entries),
+                entries: entries
+              });
+              api.close();
+              App.toast('Session saved', 'ok');
+              toastWarns(warns);
+              App.navigate('history');
+              openSessionCheckin(w);
+            });
           }
         }
       ]
@@ -2084,6 +3339,12 @@
             if (p.unit === 'score') en.score = value;
             const notes = U.$('#ts-notes', content).value.trim();
             if (notes) en.notes = notes;
+            // P3: preserve fields written by newer app versions
+            if (editEn) {
+              for (const k in editEn) {
+                if (TEST_KNOWN_KEYS.indexOf(k) < 0) en[k] = editEn[k];
+              }
+            }
             const durMin = p.unit === 'time' && value > 0 ? Math.max(1, Math.round(value / 60)) : null;
 
             if (editEn) {
@@ -2131,8 +3392,10 @@
   function typedSummaryBits(w) {
     const bits = [];
     let durShown = false;
+    const swEntries = [];
     (w.entries || []).forEach(function (en) {
       if (!en || isLiftEntry(en)) return;
+      if (en.type === 'setwork') { swEntries.push(en); return; } // aggregated below
       if (en.type === 'cardio') {
         if (en.distanceKm) {
           bits.push(fmtKm(en.distanceKm));
@@ -2160,6 +3423,40 @@
         bits.push((p ? p.label : String(en.protocol || 'Test')) + (v ? ' — ' + v : ''));
       }
     });
+    // P3: setwork aggregates to one clause — 'N drills · M sets' for
+    // durability-style work, 'N stretches · areas' for mobility-majority.
+    if (swEntries.length) {
+      const refs = {};
+      const areaCounts = {};
+      let sets = 0;
+      let mob = 0;
+      let oth = 0;
+      swEntries.forEach(function (en) {
+        refs[en.exerciseRef] = true;
+        const stretch = swIsStretch(en);
+        if (stretch) mob++;
+        else oth++;
+        const valid = (en.sets || []).filter(swValidSet).length;
+        sets += valid;
+        if (stretch) {
+          const ex = exOf(en.exerciseRef);
+          ((ex && ex.primaryMuscles) || []).forEach(function (m) {
+            areaCounts[m] = (areaCounts[m] || 0) + Math.max(valid, 1);
+          });
+        }
+      });
+      const n = Object.keys(refs).length;
+      if (mob >= oth && mob > 0) {
+        bits.push(n + ' stretch' + (n === 1 ? '' : 'es'));
+        const top = Object.keys(areaCounts).sort(function (a, b) {
+          return areaCounts[b] - areaCounts[a];
+        }).slice(0, 2).map(function (m) { return muscleLabelOf(m).toLowerCase(); });
+        if (top.length) bits.push(top.join(', '));
+      } else {
+        bits.push(n + ' drill' + (n === 1 ? '' : 's'));
+        if (sets) bits.push(sets + ' set' + (sets === 1 ? '' : 's'));
+      }
+    }
     return { bits: bits, durShown: durShown };
   }
 
@@ -2328,6 +3625,10 @@
     if (en.type === 'mobility') return (en.durationMin ? U.fmtDuration(en.durationMin) + ' · ' : '') + 'mobility';
     if (en.type === 'durability') return ((en.items || []).length || 0) + ' drills';
     if (en.type === 'test') return fmtTestValue(en.protocol, en.results, en.score) || 'test';
+    if (en.type === 'setwork') {
+      const s = setworkSetsString(en);
+      return exName(en.exerciseRef) + (s ? ' · ' + s : '');
+    }
     return 'Kept as-is';
   }
 
@@ -2338,10 +3639,27 @@
     const w = Store.workoutById(id);
     if (!w) return;
     const lifts = liftEntriesOf(w);
-    const typed = typedEntriesOf(w);
+    // P3: setwork entries are editable in this editor in performance mode;
+    // simple mode lists them read-only and re-emits them untouched on save.
+    const swEditable = perfMode(user());
+    const editableSw = {};
+    const typed = typedEntriesOf(w).filter(function (en) {
+      if (swEditable && isSetworkEntry(en) && en.id) { editableSw[en.id] = true; return false; }
+      return true;
+    });
     const model = JSON.parse(JSON.stringify({
-      name: w.name, date: w.date, notes: w.notes || '', entries: lifts
+      name: w.name,
+      date: w.date,
+      notes: w.notes || '',
+      entries: (w.entries || []).filter(function (en) {
+        return en && (isLiftEntry(en) || (en.id && editableSw[en.id]));
+      })
     }));
+    model.entries.forEach(function (en) {
+      if (!isSetworkEntry(en)) return;
+      const first = (en.sets || []).find(function (s) { return s && s.intensity >= 1; });
+      en._depth = first ? U.clamp(Math.round(first.intensity), 1, 4) : 2;
+    });
 
     const content = document.createElement('div');
     content.innerHTML =
@@ -2365,7 +3683,7 @@
               '</div>';
           }).join('') + '</div>'
         : '') +
-      (lifts.length ? sectionLabel('Lifts') : '') +
+      (model.entries.length ? sectionLabel(model.entries.length > lifts.length ? 'Exercises' : 'Lifts') : '') +
       '<div id="me-entries" style="display:flex;flex-direction:column;gap:12px"></div>' +
       '<div style="margin:10px 0"><button type="button" class="btn ghost" id="me-addex" style="width:100%">' +
       ic().plus + ' Add exercise</button></div>' +
@@ -2376,7 +3694,8 @@
       mode: 'edit',
       model: model,
       persist: function () {},
-      prev: function (exId) { return prevSetsFor(w.userId, exId, { excludeId: w.id, maxDate: w.date }); }
+      prev: function (exId) { return prevSetsFor(w.userId, exId, { excludeId: w.id, maxDate: w.date }); },
+      prevSw: function (ref) { return prevSetworkFor(w.userId, ref, { excludeId: w.id, maxDate: w.date }); }
     });
 
     U.$('#me-name', content).addEventListener('input', function (e) { model.name = e.target.value; });
@@ -2387,7 +3706,11 @@
         title: 'Add exercise',
         multi: true,
         onPick: function (ids) {
-          ids.forEach(function (exId) { model.entries.push(newEntry(exId, 3)); });
+          ids.forEach(function (exId) {
+            const en = newEntryFor(exId, user());
+            if (isSetworkEntry(en)) editableSw[en.id] = true;
+            model.entries.push(en);
+          });
           editor.repaint();
         }
       });
@@ -2415,10 +3738,16 @@
           label: 'Save changes',
           kind: 'primary',
           onClick: function () {
-            // clean the edited lift entries exactly like the lift-only editor
+            // clean the edited lift entries exactly like the lift-only editor;
+            // setwork entries clean through their own (unknown-key-preserving) path
             const cleaned = {};
             const cleanedOrder = [];
             model.entries.forEach(function (en) {
+              if (isSetworkEntry(en)) {
+                const c = cleanSetworkEntry(en);
+                if (c) { cleaned[en.id] = c; cleanedOrder.push(en.id); }
+                return;
+              }
               if (!en.exerciseId) return;
               const sets = (en.sets || [])
                 .filter(function (s) { return (s.reps || 0) > 0; })
@@ -2444,6 +3773,9 @@
               if (!en) return;
               if (isLiftEntry(en)) {
                 if (en.id && cleaned[en.id]) { entries.push(cleaned[en.id]); used[en.id] = true; }
+              } else if (isSetworkEntry(en) && en.id && editableSw[en.id]) {
+                // edited here — deleted/emptied entries drop, the rest round-trip
+                if (cleaned[en.id]) { entries.push(cleaned[en.id]); used[en.id] = true; }
               } else {
                 entries.push(en);
               }
@@ -2612,11 +3944,12 @@
     if (!el || !draft) return;
     let total = 0, done = 0, vol = 0;
     draft.entries.forEach(function (en) {
+      const sw = isSetworkEntry(en); // setwork sets never feed volume
       (en.sets || []).forEach(function (s) {
         total++;
         if (s.done) {
           done++;
-          if (s.type !== 'warmup') vol += (s.weightKg || 0) * (s.reps || 0);
+          if (!sw && s.type !== 'warmup') vol += (s.weightKg || 0) * (s.reps || 0);
         }
       });
     });
@@ -2652,6 +3985,7 @@
       model: draft,
       persist: saveDraft,
       prev: function (exId) { return prevSetsFor(u.id, exId); },
+      prevSw: function (ref) { return prevSetworkFor(u.id, ref); },
       onStats: updateDraftStats
     });
 
@@ -2686,7 +4020,7 @@
         multi: true,
         onPick: function (ids) {
           if (!draft) return;
-          ids.forEach(function (id) { draft.entries.push(newEntry(id, 3)); });
+          ids.forEach(function (id) { draft.entries.push(newEntryFor(id, user())); });
           saveDraft();
           App.rerender();
           const cards = U.$$('#lg-entries [data-eid]');
@@ -2719,9 +4053,16 @@
   /* ---------- state C: finish flow ---------- */
 
   // Valid set: reps > 0 (weight 0 is fine — bodyweight). Drops the 'done' flag.
+  // Setwork entries dispatch to their own cleaner (valid = reps>0 || holdSec>0
+  // || distanceM>0 — never the lift reps>0 filter).
   function buildFinishedEntries() {
     const entries = [];
     (draft.entries || []).forEach(function (en) {
+      if (isSetworkEntry(en)) {
+        const c = cleanSetworkEntry(en);
+        if (c) entries.push(c);
+        return;
+      }
       if (!en.exerciseId) return;
       const sets = (en.sets || [])
         .filter(function (s) { return (s.reps || 0) > 0; })
@@ -2766,7 +4107,10 @@
     // (Analytics sorts same-date ties by createdAt asc) treats this as the latest.
     const candidate = { date: draft.date, createdAt: Date.now(), entries: entries };
     const vol = Analytics.workoutVolume(candidate);
-    const sets = Analytics.workoutSets(candidate);
+    const swSets = entries.reduce(function (a, en) {
+      return isSetworkEntry(en) ? a + en.sets.length : a;
+    }, 0);
+    const sets = Analytics.workoutSets(candidate) + swSets;
 
     // new PRs = events present after adding this workout that weren't before
     const mine = Store.workoutsFor(draft.userId);
@@ -2935,7 +4279,7 @@
           '<span style="font-size:9px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted)">' +
           U.esc(U.fmtDate(w.date).split(' ')[0]) + '</span></span>' +
           '<div class="body"><div class="title" style="display:flex;align-items:center;gap:6px">' +
-          kindGlyph(kindOfWorkout(w)) + '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' +
+          kindGlyph(workoutGlyphKind(w)) + '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' +
           U.esc(w.name) + '</span></div>' +
           '<div class="sub">' + U.esc(workoutSubAny(w)) + '</div></div>' +
           '<span class="trailing">' +
@@ -2961,14 +4305,28 @@
     const w = Store.workoutById(id);
     if (!w) return;
     const lifts = liftEntriesOf(w);
-    const typed = typedEntriesOf(w);
+    const allTyped = typedEntriesOf(w);
+    const swEntries = allTyped.filter(isSetworkEntry);
+    const typed = allTyped.filter(function (en) { return !isSetworkEntry(en); });
 
     let html = '<p class="muted" style="font-size:13px;margin-bottom:12px;display:flex;align-items:center;gap:6px">' +
-      kindGlyph(kindOfWorkout(w)) + '<span>' +
+      kindGlyph(workoutGlyphKind(w)) + '<span>' +
       U.esc(U.fmtDateLong(w.date)) + ' · ' + U.esc(workoutSubAny(w)) + '</span></p>';
 
     if (typed.length) {
       html += typed.map(function (en) { return typedEntryDetailHTML(en, w); }).join('');
+    }
+
+    // P3: lifts-style table per setwork entry, unit-aware strings
+    if (swEntries.length) {
+      html += '<div class="table-wrap"><table class="table"><thead><tr>' +
+        '<th>Drill</th><th>Sets</th></tr></thead><tbody>' +
+        swEntries.map(function (en) {
+          return '<tr><td>' + U.esc(exName(en.exerciseRef)) + '</td>' +
+            '<td style="white-space:normal">' + U.esc(setworkSetsString(en)) +
+            (en.notes ? '<div class="muted" style="font-size:12px">' + U.esc(en.notes) + '</div>' : '') +
+            '</td></tr>';
+        }).join('') + '</tbody></table></div>';
     }
 
     if (lifts.length) {

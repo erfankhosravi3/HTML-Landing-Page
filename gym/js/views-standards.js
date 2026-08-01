@@ -162,6 +162,14 @@
     try { return p.tiersFor(id, u) || null; } catch (e) { return null; }
   }
 
+  // P3: best hold logged in training (setwork), for deadhang/plank rows.
+  // Guarded: older/partial Protocols builds without trainingBest -> null.
+  function trainingBestOf(id, workouts) {
+    const p = P();
+    if (!p || typeof p.trainingBest !== 'function') return null;
+    try { return p.trainingBest(id, workouts) || null; } catch (e) { return null; }
+  }
+
   // every test entry for these workouts, newest first (workoutsFor is date desc)
   function testRows(workouts) {
     const rows = [];
@@ -344,7 +352,9 @@
         'Pick a goal in Settings › Training and your scorecard will build itself here.',
         '<button type="button" class="btn primary" data-act="go-settings">Open Settings</button>');
     } else {
-      html += '<div class="std-list">' + rd.rows.map(stdRowHTML).join('') + '</div>';
+      html += '<div class="std-list">' + rd.rows.map(function (r) {
+        return stdRowHTML(r, w);
+      }).join('') + '</div>';
       html += '<p class="muted" style="font-size:12px;margin-top:10px">Bars show progress toward the ' +
         'competitive tier — the notch marks the minimum standard.</p>';
     }
@@ -421,7 +431,9 @@
     /* events */
     U.on(container, 'click', '[data-act="record"]', function () { openProtocolPicker(u); });
     U.on(container, 'click', '[data-test-proto]', function (e, btn) {
-      openTestForm(btn.getAttribute('data-test-proto'), u);
+      const pre = parseInt(btn.getAttribute('data-prefill-sec') || '', 10);
+      openTestForm(btn.getAttribute('data-test-proto'), u,
+        isFinite(pre) && pre > 0 ? { prefillSec: pre } : null);
     });
     U.on(container, 'click', '.list-row[data-wid]', function (e, row) {
       openTestDetail(row.getAttribute('data-wid'));
@@ -438,7 +450,11 @@
   const MIN_TICK = 0.35;
 
   // One scorecard row: name · current/competitive · bar (min tick) · tiers line.
-  function stdRowHTML(r) {
+  // For the hold protocols (deadhang/plank) a secondary "training best" line
+  // appears when a longer hold has been logged in training (setwork) than in
+  // any recorded test — with a 'Record as test' CTA that opens the wizard
+  // prefilled with that hold. Training data never moves the bar itself.
+  function stdRowHTML(r, workouts) {
     const id = r.protocolId;
     const lower = lowerBetter(id, r);
     const cur = numOf(r.current);
@@ -490,9 +506,27 @@
     subBits.push(r.lastTested ? 'tested ' + U.relDate(r.lastTested) : 'no test yet');
     html += '<div class="std-sub">' + U.esc(subBits.join(' · ')) + '</div>';
 
+    // training-best line (holds only; trainingBestOf is null for other rows)
+    let prefillSec = 0;
+    const tb = trainingBestOf(id, workouts);
+    const tbVal = tb ? numOf(tb.value) : null;
+    if (tbVal !== null && tbVal > 0 && (cur === null || (lower ? tbVal < cur : tbVal > cur))) {
+      prefillSec = Math.round(tbVal);
+      html += '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;' +
+        'margin-top:7px;font-size:12px;color:var(--text-2)">' +
+        '<span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' +
+        'Training best <b class="tabular">' + U.esc(fmtVal(id, tbVal)) + '</b>' +
+        (cur === null ? ' — untested on the clock' : ' — beats your tested best') + '</span>' +
+        (testable
+          ? '<span class="btn ghost small" aria-hidden="true" style="pointer-events:none;flex:none">Record as test</span>'
+          : '') +
+        '</div>';
+    }
+
     if (testable) {
-      return '<button type="button" class="std-row" data-test-proto="' + U.esc(id) +
-        '" title="Record a ' + U.esc(name) + ' test">' + html + '</button>';
+      return '<button type="button" class="std-row" data-test-proto="' + U.esc(id) + '"' +
+        (prefillSec > 0 ? ' data-prefill-sec="' + prefillSec + '"' : '') +
+        ' title="Record a ' + U.esc(name) + ' test">' + html + '</button>';
     }
     return '<div class="std-row">' + html + '</div>';
   }
@@ -533,14 +567,14 @@
      Test wizard — step 2: per-protocol form
      ====================================================================== */
 
-  function openTestForm(protocolId, u) {
+  function openTestForm(protocolId, u, opts) {
     const def = protoDef(protocolId);
     if (!recordable(def)) {
       App.toast('Derived from your lifts and body weight — log trap-bar deadlifts to move it', 'info');
       return;
     }
     if (def.kind === 'multi') openAcftForm(def, u);
-    else openSimpleTestForm(def, u);
+    else openSimpleTestForm(def, u, opts);
   }
 
   function readDateField(root, id) {
@@ -562,7 +596,7 @@
 
   /* ---------- time / hold / reps / pass ---------- */
 
-  function openSimpleTestForm(def, u) {
+  function openSimpleTestForm(def, u, opts) {
     const isClock = def.kind === 'time' || def.kind === 'hold';
     const plain = plainUnitOf(def.id);
     const plainHint = plain === 'min' ? 'mm:ss or minutes' : 'mm:ss or raw seconds';
@@ -603,6 +637,14 @@
         const sec = parseClock(maskClockInput(valEl), plain);
         liveEl.textContent = sec === null || sec <= 0 ? '' : '= ' + fmtVal(def.id, Math.round(sec));
       });
+      // P3: the 'Record as test' CTA on a scorecard row prefills the field
+      // with the training best — fully editable, live line primed to match.
+      const preSec = opts && typeof opts.prefillSec === 'number' &&
+        isFinite(opts.prefillSec) && opts.prefillSec > 0 ? Math.round(opts.prefillSec) : 0;
+      if (preSec && isClock) {
+        valEl.value = fmtClock(preSec);
+        liveEl.textContent = '= ' + fmtVal(def.id, preSec);
+      }
     }
     U.on(content, 'click', '[data-pf]', function (e, btn) {
       st.pass = btn.getAttribute('data-pf') === '1';
