@@ -823,3 +823,140 @@ sw.js CACHE_NAME bumps to 'ironlog-v2p3'; no SHELL additions expected (no new
 files planned — protocols/views files exist; if a new file IS added, SHELL must
 list it). Deploy = PR → squash merge → verify live cache string.
 
+# V2 ADDENDUM — P3.5: GUIDED SESSION PLAYER + ROUTINE PLANNER
+
+User-approved (with mockups) evolution of P3: sessions should be APP-LED, not
+logged after the fact. The app runs the workout — timers, sides, rests, cues —
+and the log is a byproduct of doing. Plus a planner: users build their own
+routines (pick exercises, customize sets/reps/holds/rests) and the player runs
+them. All P3 data-model semantics are unchanged — the player WRITES ordinary
+lift/setwork/cardio entries.
+
+## New collection: routines (fleet-safe by design)
+
+NOT the templates collection: old clients' template normalizer rebuilds items
+to {exerciseId,targetSets,targetRepsLow,targetRepsHigh} and would flatten
+structured targets. A NEW top-level entity collection rides the P0 shim's
+unknown-collection pathway instead — old clients preserve and entity-merge
+collections they don't know, with tombstone union (this is the exact scenario
+the P0 forward-compat work was built for; prove it in the acceptance tests).
+
+```js
+state.routines: [{
+  id: U.uid('rt'), userId, name,             // user-visible name
+  kind: 'stretch'|'durability'|'circuit'|'custom',
+  items: [{
+    exerciseId,                              // ExerciseDB/custom id; setShape drives the row
+    sets,                                    // integer >= 1
+    targetReps?, targetHoldSec?, targetDistanceM?, targetWeightKg?,
+    restSec?,                                // per-item override of routine restSec
+    method?,                                 // stretch method override
+    note?: string
+  }],
+  restSec,                                   // default rest between sets (sec)
+  createdAt, updatedAt                       // LWW via updatedAt like all entities
+}]
+state.deleted.routines: { [id]: ts }         // tombstones
+```
+
+Store API: `routinesFor(userId)` (name asc), `addRoutine`, `updateRoutine`,
+`deleteRoutine` (tombstone), `normalizeRoutine` in the collection dispatch —
+shallow-copy, coerce, unknown keys preserved at routine and item level.
+COLLECTIONS/DELETED_KEYS gain 'routines'; sync merge needs no changes (entity
+LWW already generic).
+
+## Routine planner (performance mode)
+
+- Entry points: 'New routine' in the durability and stretch entry sheets; a
+  'Routines' card in the Templates view (perf mode only) listing the user's
+  routines with edit/duplicate/delete.
+- Editor sheet: name input; kind chips; item list — each row shows exercise
+  name + per-setShape target controls (reps stepper / hold mm:ss / distance m /
+  weight kg — pick from ex.setShape, default weight_reps), sets stepper, rest
+  override, reorder ▲▼, remove; 'Add exercise' → existing picker (perf mode,
+  all categories); default-rest stepper; Save / Delete.
+- Built-in DURABILITY_ROUTINES A/B stay code-defined and appear alongside user
+  routines with a 'Duplicate to customize' action (copies into state.routines).
+
+## Session player (NEW file js/player.js)
+
+A full-screen overlay OWNED OUTSIDE the view system (appended to body; chrome
+hidden while active via the existing setChromeHidden; App.navigate while a
+session is active pauses — never destroys — the session).
+
+Timeline compiler (pure, unit-testable, exported as Player.compile):
+routine → ordered steps:
+  {type:'work', shape:'hold'|'reps'|'carry'|'weight_reps', exerciseId, side?,
+   setIdx, targetSec?/targetReps?/targetM?/targetKg?}
+  {type:'rest', sec, afterEntryIdx}       // from item restSec ?? routine restSec
+  perSide items expand each set to L then R (no rest between sides unless
+  configured); circuit kind compiles to a rounds structure instead (below).
+
+Step behaviors:
+- hold: countdown ring from target; auto-advance at 0 with vibrate + beep +
+  optional voice ('switch sides' / next exercise name); pause/resume; −15s/+15s
+  adjusts the CURRENT step target; completing early (tap ring) records ACTUAL
+  elapsed seconds — the entry gets what really happened, never blindly the plan.
+- reps/weight_reps/carry: target shown large with last-time line; 'Done' tap
+  advances (inline steppers to adjust actual reps/kg/m before advancing).
+- rest: countdown + one-tap STRETCH DEPTH ask for the just-finished hold/
+  stretch set (writes intensity on that set) + next-up card (name, target,
+  last-time) + 'Skip rest'.
+- circuit: round player — big round counter, elapsed/AMRAP countdown clock,
+  station list with current highlighted (tap station to advance, big 'Round
+  done' to close a round); finish writes the cardio circuit entry (rounds,
+  stations, durationMin) exactly per the P3 additive schema.
+
+Session lifecycle:
+- Start points (perf mode only): durability chip sheet ('Start guided —
+  Durability B' primary, 'Repeat last, guided'), stretch sheet ('Start
+  guided' when any stretch routine exists), circuit logger ('Start guided'),
+  any routine row. Manual forms remain, labeled as the fallback path
+  ('Trained without the phone?').
+- Accumulates entries in memory; persists {routineRef, stepIdx, actuals,
+  startedAt} to localStorage 'ironlog/activeSession' on every step; app boot
+  with a persisted session offers Resume/Discard (mirror activeWorkout draft
+  semantics).
+- Finish → summary screen (per-entry actuals, editable) → Save writes ONE
+  workout via Store.addWorkout (setwork/lift/cardio entries per shapes;
+  durationMin from wall clock; startedAt/endedAt) → existing post-save
+  check-in flow runs unchanged. Quit mid-session → confirm; saving partial
+  keeps completed steps only.
+
+Hardware/browser (all try/catch, all optional, no external deps):
+- Screen wake lock: navigator.wakeLock.request('screen'), re-acquired on
+  visibilitychange (iOS 16.4+/Chrome; silently absent elsewhere).
+- Vibration: navigator.vibrate patterns (end-of-hold vs end-of-rest distinct).
+- Beep: WebAudio oscillator (no audio assets), created lazily on first user
+  gesture (autoplay policy).
+- Voice: speechSynthesis utterances ('switch sides', next exercise name,
+  'last ten seconds'); mute toggle in the player top bar persisted at
+  user.settings.playerVoice ('on' default); voice never required for flow.
+
+## Mode gate & family safety
+
+Everything perf-gated; simple mode BYTE-IDENTICAL this phase (no exceptions).
+The routines collection syncs through old clients untouched (P0 pathway);
+player-written workouts are ordinary P3 entries — old clients render them via
+the existing kept-as-is path. No changes to lift analytics semantics.
+
+## Acceptance tests (binding)
+
+1. routines round-trip: fixture with unknown routine/item keys byte-identical
+   through normalizeState; P1-era client sim (git show bdc9639:gym/js/store.js)
+   preserves + entity-merges the routines collection and its tombstones.
+2. Player.compile unit tests: perSide L→R expansion, rest insertion + per-item
+   override, set counts, circuit rounds structure, empty/1-item routines.
+3. Player e2e (Playwright, short targets: 2s holds/rests): run a 2-exercise
+   routine to completion — assert written workout (actual elapsed holdSec,
+   depth from rest-tap, sides, kind, durationMin >= wall time), AND a
+   mid-session reload → Resume path continues at the same step.
+4. Circuit guided e2e: 2 rounds → saved cardio entry rounds/stations correct.
+5. Simple-mode leak: no guided/planner/routines UI anywhere for a simple user.
+6. Analytics invisibility suite still green (player writes normal entries).
+
+## Release
+
+js/player.js added: index.html script tag AFTER views-log.js; sw.js SHELL adds
+'./js/player.js'; CACHE_NAME → 'ironlog-v2p4'. Deploy = PR → squash merge →
+verify live cache string.
