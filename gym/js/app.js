@@ -1559,6 +1559,52 @@
   App.registerView('settings', { title: 'Settings', icon: icons.settings, nav: false, order: 90, render: renderSettings });
   App.registerView('profiles', { title: 'Profiles', icon: icons.users, nav: false, order: 91, render: renderProfiles });
 
+  // P3.5: a guided session interrupted mid-run (reload/crash) is offered back
+  // at boot — Resume continues at the same step, Discard drops it; closing the
+  // dialog keeps it for next time. Mirrors the activeWorkout draft semantics
+  // (another profile's session names its owner and switches on resume).
+  function offerPendingGuidedSession() {
+    const P = window.Player;
+    if (!P || typeof P.resumePending !== 'function') return;
+    const pend = P.resumePending();
+    if (!pend) return;
+    if (!Store.state.users.length) return; // onboarding first
+    const owner = pend.userId
+      ? Store.state.users.find(function (x) { return x.id === pend.userId; })
+      : Store.currentUser();
+    if (!owner) { P.discardPending(); return; } // orphaned (profile deleted)
+    // Mode gate: guided sessions are Performance-mode only. If the owner has
+    // since switched to simple mode, show nothing (simple mode stays
+    // byte-identical) but KEEP the pending — switching back to performance
+    // mode makes the offer reappear.
+    if (!(owner.settings && owner.settings.trainingProfile === 'performance')) return;
+    App.modal({
+      title: 'Guided session in progress',
+      content: '<p class="text-2" style="font-size:14px;line-height:1.55;margin:4px 0 8px">' +
+        U.esc(owner.name) + ' has an unfinished guided session — “' +
+        U.esc(pend.name) + '”. Resume it where it left off?</p>',
+      actions: [
+        {
+          label: 'Discard',
+          kind: 'danger',
+          onClick: function () {
+            P.discardPending();
+            App.toast('Session discarded');
+          }
+        },
+        {
+          label: 'Resume',
+          kind: 'primary',
+          onClick: function () {
+            const cur = Store.currentUser();
+            if (!cur || cur.id !== owner.id) Store.setCurrentUser(owner.id);
+            if (!P.resume()) App.toast('Could not resume that session', 'err');
+          }
+        }
+      ]
+    });
+  }
+
   App.init = function () {
     Store.load();
     buildChrome();
@@ -1570,6 +1616,7 @@
       if (e.key === 'ironlog/activeWorkout') updateChrome();
     });
     render();
+    offerPendingGuidedSession();
   };
 
   window.App = App;

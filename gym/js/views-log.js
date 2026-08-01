@@ -1719,6 +1719,20 @@
     return !!(u && u.settings && u.settings.trainingProfile === 'performance');
   }
 
+  // P3.5: guided sessions live in js/player.js (loaded AFTER this file) —
+  // always reference lazily; absence means the feature quietly stays hidden.
+  function playerApi() {
+    const P = window.Player;
+    return P && typeof P.start === 'function' ? P : null;
+  }
+
+  function stretchRoutinesFor(u) {
+    if (!u || typeof Store.routinesFor !== 'function') return [];
+    return (Store.routinesFor(u.id) || []).filter(function (r) {
+      return r && r.kind === 'stretch' && (r.items || []).length;
+    });
+  }
+
   function isLiftEntry(en) {
     return !!en && (en.type === undefined || en.type === null || en.type === 'lift');
   }
@@ -2267,6 +2281,15 @@
         ? '<button type="button" class="chip" id="cl-struct-repeat" style="margin-bottom:8px">' +
           ic().copy + ' Repeat last circuit</button>'
         : '') +
+      // P3.5: hand rounds/stations/AMRAP to the guided round player (new
+      // sessions only — the AMRAP cap exists only as guided config, the manual
+      // save never reads it)
+      (editEn ? '' :
+        '<div style="display:flex;gap:8px;align-items:flex-end;margin-bottom:8px">' +
+        '<div class="field" style="flex:1;margin-bottom:0"><label for="cl-amrap">AMRAP cap (min) — optional</label>' +
+        '<input class="input" id="cl-amrap" type="text" inputmode="numeric" autocomplete="off" placeholder="—"></div>' +
+        '<button type="button" class="btn primary" id="cl-guided" style="flex:none;min-height:44px">▶ Start guided</button>' +
+        '</div>') +
       '<div class="field"><label>Rounds</label><div class="sw-stepper">' +
       '<button type="button" class="btn icon ghost" data-cr="-1" aria-label="Fewer rounds">−</button>' +
       '<span class="val" id="cl-rounds">' + (st.rounds || 0) + '</span>' +
@@ -2475,6 +2498,7 @@
     }
 
     let lastWarns = [];
+    let cardioSheet = null; // assigned below; the guided handoff closes it
 
     function sync() {
       // P3: section visibility + the interval TOTAL written into distance so
@@ -2591,6 +2615,34 @@
           });
         });
       }
+      const guidedBtn = $id('#cl-guided');
+      if (guidedBtn) {
+        guidedBtn.addEventListener('click', function () {
+          const P = playerApi();
+          if (!P) { App.toast('Update the app to run guided sessions', 'err'); return; }
+          const stations = st.stations.map(cleanStation).filter(Boolean);
+          if (!stations.length) { App.toast('Add at least one station first', 'err'); return; }
+          const routine = {
+            name: 'Circuit',
+            kind: 'circuit',
+            restSec: 0,
+            items: stations.map(function (x) {
+              const it = {};
+              if (x.exerciseId) it.exerciseId = x.exerciseId;
+              if (x.name) it.name = x.name;
+              if ((x.reps || 0) > 0) it.targetReps = x.reps;
+              if ((x.durationSec || 0) > 0) it.targetHoldSec = x.durationSec;
+              if ((x.weightKg || 0) > 0) it.targetWeightKg = x.weightKg;
+              return it;
+            })
+          };
+          if (st.rounds > 0) routine.rounds = st.rounds;
+          const amEl = $id('#cl-amrap');
+          const am = amEl ? parseFloat(amEl.value) : NaN;
+          if (!isNaN(am) && am > 0) routine.amrapSec = Math.round(am * 60);
+          if (P.start(routine, { name: 'Circuit' }) && cardioSheet) cardioSheet.close();
+        });
+      }
       const repBtn = $id('#cl-struct-repeat');
       if (repBtn) {
         repBtn.addEventListener('click', function () {
@@ -2614,7 +2666,7 @@
     U.on(content, 'input', 'input, select, textarea', function () { sync(); });
     sync();
 
-    App.sheet({
+    cardioSheet = App.sheet({
       title: editEn ? 'Edit session' : 'Log cardio',
       content: content,
       actions: [
@@ -2699,9 +2751,15 @@
     // performance-only structured-stretch entry point.
     const perf = perfMode(u);
     const lastSession = editEn ? null : lastStretchSession(u, perf);
+    // P3.5: guided entry point (perf only) — starts the user's stretch routine
+    // in the player, or offers the planner when they don't have one yet.
+    const guidedAvailable = perf && !editEn && !!playerApi();
     const quickRowHTML = editEn ? '' :
       ((lastSession || perf)
         ? '<div class="chip-row" style="margin-bottom:12px">' +
+          (guidedAvailable
+            ? '<button type="button" class="chip" id="mb-guided">▶ Start guided</button>'
+            : '') +
           (lastSession
             ? '<button type="button" class="chip" id="mb-same">' + ic().copy + ' Same as last time</button>'
             : '') +
@@ -2815,6 +2873,23 @@
       indivBtn.addEventListener('click', function () {
         if (sheetApi) sheetApi.close();
         openStretchBuilder(null);
+      });
+    }
+    const guidedBtn = U.$('#mb-guided', content);
+    if (guidedBtn) {
+      guidedBtn.addEventListener('click', function () {
+        const P = playerApi();
+        if (!P) return;
+        const routines = stretchRoutinesFor(u);
+        if (sheetApi) sheetApi.close();
+        if (routines.length === 1) {
+          P.start(routines[0], { routineRef: routines[0].id });
+        } else if (routines.length > 1) {
+          P.openPlanner(u.id); // pick which one to run
+        } else {
+          App.toast('No stretch routines yet — build one first');
+          P.editRoutine({ kind: 'stretch', restSec: 30, items: [] }, { userId: u.id });
+        }
       });
     }
 
@@ -3109,11 +3184,29 @@
     const db = window.ExerciseDB;
     const items = (db && db.DURABILITY_ROUTINES && db.DURABILITY_ROUTINES[next]) || [];
     const preview = items.map(function (it) { return exName(it.exerciseId); }).join(' · ');
+    const P = playerApi();
 
-    let html = '<div class="list">' +
+    // P3.5: guided is the front door — the app runs the routine (timers, sides,
+    // rests). Manual logging stays, demoted to the 'trained without the phone'
+    // fallback with the exact same seeding behavior as before.
+    let html = '';
+    if (P) {
+      html += '<button type="button" class="btn primary" data-dur="guided" ' +
+        'style="width:100%;min-height:54px;font-size:16px">▶ Start guided — Durability ' + next +
+        (lastLetter ? ' <span style="font-weight:400;font-size:13px;opacity:.75">(' + lastLetter +
+          ' was ' + U.esc(U.relDate(lastW.date).toLowerCase()) + ')</span>' : '') +
+        '</button>';
+      if (lastW && P.routineFromWorkout(lastW)) {
+        html += '<button type="button" class="btn ghost" data-dur="repeat-guided" ' +
+          'style="width:100%;min-height:48px;margin-top:8px">Repeat last, guided — ' +
+          U.esc(lastW.name) + '</button>';
+      }
+      html += sectionLabel('Trained without the phone?');
+    }
+    html += '<div class="list">' +
       '<button type="button" class="list-row" data-dur="routine">' +
       '<span class="leading" style="color:var(--accent)">' + KIND_ICONS.durability + '</span>' +
-      '<div class="body"><div class="title">Durability ' + next + '</div>' +
+      '<div class="body"><div class="title">' + (P ? 'Log Durability ' + next + ' manually' : 'Durability ' + next) + '</div>' +
       '<div class="sub">' + U.esc(preview || 'Guided routine — 5 drills') + '</div></div>' +
       '<span class="chevron">' + ic().chevron + '</span></button>';
     if (lastW) {
@@ -3128,6 +3221,10 @@
       '<div class="body"><div class="title">Quick checklist</div>' +
       '<div class="sub">Tick off drills without logging sets</div></div>' +
       '<span class="chevron">' + ic().chevron + '</span></button></div>';
+    if (P) {
+      html += '<button type="button" class="btn ghost small" data-dur="new-routine" style="margin-top:10px">' +
+        ic().plus + ' New routine</button>';
+    }
 
     const content = document.createElement('div');
     content.innerHTML = html;
@@ -3135,7 +3232,17 @@
     U.on(content, 'click', '[data-dur]', function (e, row) {
       const act = row.getAttribute('data-dur');
       if (api) api.close();
-      if (act === 'routine') seedDurabilityDraft(next);
+      if (act === 'guided' && P) {
+        const r = P.builtinRoutine(next);
+        if (r) P.start(r, { name: r.name });
+        else App.toast('Routine unavailable — update the app', 'err');
+      } else if (act === 'repeat-guided' && P && lastW) {
+        const rr = P.routineFromWorkout(lastW);
+        if (rr) P.start(rr, { name: lastW.name || rr.name });
+        else App.toast('Nothing repeatable in that session', 'err');
+      } else if (act === 'new-routine' && P) {
+        P.editRoutine({ kind: 'durability', restSec: 60, items: [] }, { userId: u.id });
+      } else if (act === 'routine') seedDurabilityDraft(next);
       else if (act === 'repeat' && lastW) seedRepeatDurability(lastW);
       else if (act === 'checklist') openDurabilityLogger(null); // legacy flow, unchanged shape
     });
@@ -4613,6 +4720,50 @@
       }).join('');
     }
 
+    // P3.5: routines — guided session plans (performance mode only). NOT
+    // templates: they live in their own fleet-safe collection and run in the
+    // player. Rendered in the templates view's card idiom.
+    const P = perfMode(u) ? playerApi() : null;
+    if (P && typeof Store.routinesFor === 'function') {
+      const routines = Store.routinesFor(u.id) || [];
+      html += sectionLabel('Routines');
+      if (!routines.length) {
+        html += '<div class="card"><div class="card-title">Routines</div>' +
+          '<p class="muted" style="font-size:14px;margin-bottom:10px">Guided session plans — holds, sides and rests, run by the app step by step.</p>' +
+          '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+          '<button type="button" class="btn primary small" id="rt-new">' + ic().plus + ' New routine</button>' +
+          '<button type="button" class="btn ghost small" id="rt-builtin">Built-in routines</button>' +
+          '</div></div>';
+      } else {
+        html += routines.map(function (r) {
+          const names = (r.items || []).map(function (it) { return exName(it.exerciseId); });
+          const preview = names.slice(0, 4).join(' · ') + (names.length > 4 ? ' · +' + (names.length - 4) + ' more' : '');
+          return '<div class="card" data-rid="' + U.esc(r.id) + '">' +
+            '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">' +
+            '<span class="leading" style="color:var(--accent)">' +
+            (KIND_ICONS[r.kind === 'stretch' ? 'mobility' : r.kind] || KIND_ICONS.durability) + '</span>' +
+            '<div style="flex:1;min-width:0"><div style="font-weight:600;font-size:16px">' + U.esc(r.name || 'Routine') + '</div>' +
+            '<div class="muted" style="font-size:12px">' + U.esc(capStr(r.kind || 'custom')) + ' · ' +
+            (r.items || []).length + ' exercise' + ((r.items || []).length === 1 ? '' : 's') + '</div></div></div>' +
+            (names.length
+              ? '<p class="muted" style="font-size:13px;margin-bottom:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' +
+                U.esc(preview) + '</p>'
+              : '') +
+            '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
+            '<button type="button" class="btn primary small" data-ract="start">▶ Start guided</button>' +
+            '<button type="button" class="btn ghost small" data-ract="edit">' + ic().edit + ' Edit</button>' +
+            '<button type="button" class="btn ghost small" data-ract="dup">' + ic().copy + ' Duplicate</button>' +
+            '<span style="flex:1"></span>' +
+            '<button type="button" class="btn icon ghost" data-ract="del" aria-label="Delete routine">' + ic().trash + '</button>' +
+            '</div></div>';
+        }).join('') +
+          '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+          '<button type="button" class="btn ghost small" id="rt-new">' + ic().plus + ' New routine</button>' +
+          '<button type="button" class="btn ghost small" id="rt-builtin">Built-in routines</button>' +
+          '</div>';
+      }
+    }
+
     container.innerHTML = html;
 
     U.$('#tp-new', container).addEventListener('click', function () { openTemplateEditor(null, null); });
@@ -4676,6 +4827,60 @@
           danger: true
         }).then(function (ok) {
           if (ok) { Store.deleteTemplate(t.id); App.toast('Template deleted'); }
+        });
+      }
+    });
+
+    // P3.5: routines card actions (elements exist only in performance mode)
+    const rtNew = U.$('#rt-new', container);
+    if (rtNew) {
+      rtNew.addEventListener('click', function () {
+        const Pl = playerApi();
+        if (Pl) Pl.editRoutine(null, { userId: u.id });
+      });
+    }
+    const rtBuiltin = U.$('#rt-builtin', container);
+    if (rtBuiltin) {
+      rtBuiltin.addEventListener('click', function () {
+        const Pl = playerApi();
+        if (Pl) Pl.openPlanner(u.id);
+      });
+    }
+    U.on(container, 'click', '[data-rid] [data-ract]', function (e, btn) {
+      const Pl = playerApi();
+      const rid = btn.closest('[data-rid]').getAttribute('data-rid');
+      const r = typeof Store.routinesFor === 'function'
+        ? (Store.routinesFor(u.id) || []).find(function (x) { return x.id === rid; })
+        : null;
+      if (!r) return;
+      const act = btn.getAttribute('data-ract');
+      if (act === 'start' && Pl) {
+        Pl.start(r, { routineRef: r.id });
+      } else if (act === 'edit' && Pl) {
+        Pl.editRoutine(r, { userId: u.id });
+      } else if (act === 'dup') {
+        // shallow-copy preserving unknown keys at routine and item level
+        const copy = {};
+        for (const k in r) copy[k] = r[k];
+        delete copy.id;
+        delete copy.createdAt;
+        delete copy.updatedAt;
+        copy.userId = u.id;
+        copy.name = (r.name || 'Routine') + ' (copy)';
+        copy.items = (r.items || []).map(function (it) {
+          const c = {};
+          for (const k in it) c[k] = it[k];
+          return c;
+        });
+        Store.addRoutine(copy);
+        App.toast('Routine duplicated', 'ok');
+      } else if (act === 'del') {
+        App.confirm({
+          title: 'Delete routine?',
+          message: '“' + (r.name || 'Routine') + '” will be removed everywhere.',
+          danger: true
+        }).then(function (ok) {
+          if (ok) { Store.deleteRoutine(r.id); App.toast('Routine deleted'); }
         });
       }
     });
@@ -4838,4 +5043,12 @@
   App.registerView('templates', {
     title: 'Templates', icon: App.icons.templates, nav: true, order: 30, render: renderTemplates
   });
+
+  // P3.5: hooks for js/player.js (loaded after this file). The guided player
+  // reuses the full exercise picker and the shared post-save check-in flow so
+  // player-written sessions behave exactly like direct-save loggers.
+  window.ViewsLog = {
+    openExercisePicker: openExercisePicker,
+    openSessionCheckin: openSessionCheckin
+  };
 })();
