@@ -1,7 +1,9 @@
-/* IronLog service worker — cache-first app shell, network-first navigations. */
+/* IronLog service worker — cache-first app shell, network-first navigations.
+   RELEASE RULE: any deploy that changes a cached file MUST bump CACHE_NAME,
+   or installed PWAs keep serving the old cache forever. */
 'use strict';
 
-const CACHE_NAME = 'ironlog-v2p0';
+const CACHE_NAME = 'ironlog-v2p1';
 
 const SHELL = [
   './',
@@ -12,6 +14,7 @@ const SHELL = [
   './js/store.js',
   './js/sync.js',
   './js/analytics.js',
+  './js/guardrails.js',
   './js/charts.js',
   './js/musclemap.js',
   './js/applehealth.js',

@@ -111,6 +111,340 @@
   }
 
   /* ======================================================================
+     v2 (Capability P1) helpers — typed workouts, guardrails, pain log
+     ====================================================================== */
+
+  const KM_PER_MILE = 1.609344;
+
+  // Pain regions beyond the 18 canonical muscles: lower-leg spots that are not
+  // on the muscle map get chip pickers instead.
+  const EXTRA_REGIONS = [
+    { id: 'shin_l', label: 'Left shin' }, { id: 'shin_r', label: 'Right shin' },
+    { id: 'knee_l', label: 'Left knee' }, { id: 'knee_r', label: 'Right knee' },
+    { id: 'ankle_l', label: 'Left ankle' }, { id: 'ankle_r', label: 'Right ankle' },
+    { id: 'foot_l', label: 'Left foot' }, { id: 'foot_r', label: 'Right foot' }
+  ];
+  const EXTRA_REGION_LABEL = {};
+  EXTRA_REGIONS.forEach(function (r) { EXTRA_REGION_LABEL[r.id] = r.label; });
+
+  function regionLabel(id) {
+    return EXTRA_REGION_LABEL[id] || ExerciseDB.MUSCLE_LABEL[id] || id;
+  }
+
+  // Distance in the viewer's units ('lb' users think in miles).
+  function fmtDistKm(km) {
+    if (window.Guardrails && Guardrails.fmtDistanceKm) {
+      return Guardrails.fmtDistanceKm(km, App.units());
+    }
+    return U.round1(km || 0) + ' km';
+  }
+
+  function paceStr(durMin, distKm) {
+    if (!(durMin > 0) || !(distKm > 0)) return '';
+    const units = App.units();
+    const per = units === 'lb' ? durMin / (distKm / KM_PER_MILE) : durMin / distKm;
+    if (!isFinite(per) || per <= 0) return '';
+    let m = Math.floor(per);
+    let s = Math.round((per - m) * 60);
+    if (s === 60) { m += 1; s = 0; }
+    return m + ':' + String(s).padStart(2, '0') + (units === 'lb' ? ' /mi' : ' /km');
+  }
+
+  const CARDIO_LABEL = {
+    run: 'Run', ruck: 'Ruck', swim: 'Swim', bike: 'Bike', row: 'Row',
+    stairs: 'Stairs', circuit: 'Circuit'
+  };
+  const PROTOCOL_LABEL = {
+    acft: 'ACFT', run2mi: '2-mile run', run5mi: '5-mile run', ruck12mi: '12-mile ruck',
+    pushups2min: 'Push-ups (2 min)', situps2min: 'Sit-ups (2 min)',
+    pullups_max: 'Max pull-ups', plank: 'Plank', swim500m: '500 m swim',
+    slcalf_l: 'Single-leg calf raises (L)', slcalf_r: 'Single-leg calf raises (R)',
+    deadhang: 'Dead hang'
+  };
+
+  function typedEntries(w) {
+    return ((w && w.entries) || []).filter(function (e) {
+      return e && e.type && e.type !== 'lift';
+    });
+  }
+
+  function workoutKind(w) {
+    if (w && typeof w.kind === 'string' && w.kind) return w.kind;
+    const kinds = {};
+    let n = 0;
+    for (const e of (w && w.entries) || []) {
+      if (!e) continue;
+      const k = !e.type || e.type === 'lift' ? 'lift'
+        : e.type === 'cardio' ? (e.mode || 'run') : e.type;
+      if (!kinds[k]) { kinds[k] = 1; n++; }
+    }
+    if (n === 0) return 'lift';
+    if (n === 1) return Object.keys(kinds)[0];
+    return 'mixed';
+  }
+
+  function kindIcon(kind) {
+    const ic = App.icons;
+    const map = {
+      run: ic.run, ruck: ic.ruck, swim: ic.swim, bike: ic.bike, row: ic.row,
+      stairs: ic.stairs, circuit: ic.flame, mobility: ic.stretch,
+      durability: ic.shield, test: ic.clipboard
+    };
+    return map[kind] || ic.log;
+  }
+
+  // Kind-appropriate one-line summary for the typed (non-lift) part of a
+  // workout: cardio -> distance · pace · load; mobility -> duration · areas;
+  // durability -> duration · drills; test -> protocol.
+  function typedSummary(w) {
+    const typed = typedEntries(w);
+    const parts = [];
+    const cardioEs = typed.filter(function (e) { return e.type === 'cardio'; });
+    if (cardioEs.length) {
+      const e = cardioEs[0];
+      parts.push(CARDIO_LABEL[e.mode] || 'Cardio');
+      if (typeof e.distanceKm === 'number' && e.distanceKm > 0) parts.push(fmtDistKm(e.distanceKm));
+      const pace = paceStr(e.durationMin, e.distanceKm);
+      if (pace) parts.push(pace);
+      if (e.mode === 'ruck') {
+        const load = typeof e.loadKgTotal === 'number' && e.loadKgTotal > 0 ? e.loadKgTotal
+          : typeof e.loadKgDry === 'number' && e.loadKgDry > 0 ? e.loadKgDry : 0;
+        if (load) parts.push('@ ' + App.fmtWeight(load));
+      }
+      if (!pace && typeof e.durationMin === 'number' && e.durationMin > 0) {
+        parts.push(U.fmtDuration(e.durationMin));
+      }
+      if (cardioEs.length > 1) parts.push('+' + (cardioEs.length - 1) + ' more');
+      return parts.join(' · ');
+    }
+    const mob = typed.filter(function (e) { return e.type === 'mobility'; })[0];
+    if (mob) {
+      parts.push('Mobility');
+      if (mob.durationMin > 0) parts.push(U.fmtDuration(mob.durationMin));
+      const areas = (mob.targetMuscles || []).slice(0, 3).map(muscleLabel);
+      if (areas.length) parts.push(areas.join(', '));
+      return parts.join(' · ');
+    }
+    const dur = typed.filter(function (e) { return e.type === 'durability'; })[0];
+    if (dur) {
+      parts.push('Durability');
+      if (dur.durationMin > 0) parts.push(U.fmtDuration(dur.durationMin));
+      const nItems = (dur.items || []).length;
+      if (nItems) parts.push(nItems + (nItems === 1 ? ' drill' : ' drills'));
+      return parts.join(' · ');
+    }
+    const test = typed.filter(function (e) { return e.type === 'test'; })[0];
+    if (test) {
+      parts.push('Test');
+      parts.push(PROTOCOL_LABEL[test.protocol] || String(test.protocol || 'protocol'));
+      if (typeof test.score === 'number' && isFinite(test.score)) parts.push('score ' + test.score);
+      return parts.join(' · ');
+    }
+    // Unknown entry types pass through the store verbatim — count, don't guess.
+    return typed.length + (typed.length === 1 ? ' activity' : ' activities');
+  }
+
+  // Calendar heat blend (v2 cross-type semantics): a workout heats by lift
+  // volume when it has any, else by time. CAL_KG_PER_MIN = 40 maps minutes
+  // onto the kg scale the heat ramp already uses — a 45-min no-lift session
+  // (run, ruck, mobility, imported cardio) heats like a ~1,800 kg lift day,
+  // i.e. a light-but-real training day.
+  const CAL_KG_PER_MIN = 40;
+
+  function blendedCalendar(workouts, days) {
+    const n = Math.max(1, days | 0);
+    const today = U.todayStr();
+    const start = U.addDays(today, -(n - 1));
+    const out = {};
+    for (let i = 0; i < n; i++) out[U.addDays(start, i)] = 0;
+    for (const w of workouts || []) {
+      if (!w || !w.date || w.date < start || w.date > today) continue;
+      const vol = Analytics.workoutVolume(w);
+      const durMin = typeof w.durationMin === 'number' && isFinite(w.durationMin) && w.durationMin > 0
+        ? w.durationMin : 0;
+      out[w.date] += vol > 0 ? vol : durMin * CAL_KG_PER_MIN;
+    }
+    for (const d in out) out[d] = U.round1(out[d]);
+    return out;
+  }
+
+  /* ---------- pain quick-log ---------- */
+
+  function toggleRow(id, label) {
+    return '<label for="' + U.esc(id) + '" style="display:flex;align-items:center;gap:10px;min-height:44px;' +
+      'font-size:14px;font-weight:600;cursor:pointer">' +
+      '<input type="checkbox" id="' + U.esc(id) + '" style="width:20px;height:20px;accent-color:var(--accent)">' +
+      '<span>' + U.esc(label) + '</span></label>';
+  }
+
+  function openPainSheet(u) {
+    const st = { region: null, severity: 3 };
+    const box = document.createElement('div');
+    box.innerHTML =
+      '<p class="text-2 small-text" style="margin:0 0 10px">Tap where it hurts.</p>' +
+      '<div data-slot="pain-map" class="muscle-map"></div>' +
+      '<div class="chip-row" style="margin-top:10px">' + EXTRA_REGIONS.map(function (r) {
+        return '<button type="button" class="chip" data-region="' + U.esc(r.id) + '">' + U.esc(r.label) + '</button>';
+      }).join('') + '</div>' +
+      '<div id="pn-picked" class="small-text" style="margin-top:10px;font-weight:600;color:var(--text-2)">Nothing selected yet</div>' +
+      '<div class="field" style="margin-top:12px">' +
+        '<label for="pn-sev">Severity — <span id="pn-sev-val">3</span>/10</label>' +
+        '<input id="pn-sev" type="range" min="0" max="10" step="1" value="3" ' +
+          'style="width:100%;accent-color:var(--accent);min-height:44px">' +
+      '</div>' +
+      toggleRow('pn-worse', 'Worse during activity') +
+      toggleRow('pn-bone', 'Hurts right on the bone') +
+      toggleRow('pn-morning', 'Worse in the morning') +
+      '<div class="field" style="margin-top:12px">' +
+        '<label for="pn-note">Note <span class="muted">(optional)</span></label>' +
+        '<input class="input" id="pn-note" type="text" maxlength="200" autocomplete="off" ' +
+          'placeholder="e.g. started halfway through the ruck">' +
+      '</div>';
+
+    const mapEl = U.$('[data-slot="pain-map"]', box);
+    function paintPick() {
+      MuscleMap.render(mapEl, { values: {}, selected: st.region, onSelect: pick });
+      U.$$('.chip[data-region]', box).forEach(function (c) {
+        c.classList.toggle('active', c.getAttribute('data-region') === st.region);
+      });
+      U.$('#pn-picked', box).textContent = st.region
+        ? 'Selected: ' + regionLabel(st.region) : 'Nothing selected yet';
+    }
+    function pick(id) { st.region = id; paintPick(); }
+    paintPick();
+    U.on(box, 'click', '.chip[data-region]', function (e, c) { pick(c.getAttribute('data-region')); });
+    const sev = U.$('#pn-sev', box);
+    sev.addEventListener('input', function () {
+      st.severity = U.clamp(parseInt(sev.value, 10) || 0, 0, 10);
+      U.$('#pn-sev-val', box).textContent = String(st.severity);
+    });
+
+    App.sheet({
+      title: 'Log a niggle',
+      content: box,
+      actions: [
+        { label: 'Cancel', kind: 'ghost' },
+        {
+          label: 'Save',
+          kind: 'primary',
+          keepOpen: true,
+          onClick: function (api) {
+            if (!st.region) { App.toast('Tap where it hurts first', 'err'); return; }
+            const row = Store.addPainEntry({
+              userId: u.id,
+              date: U.todayStr(),
+              muscleId: st.region,
+              severity: st.severity,
+              worseDuring: U.$('#pn-worse', box).checked,
+              boneLine: U.$('#pn-bone', box).checked,
+              morning: U.$('#pn-morning', box).checked,
+              note: U.$('#pn-note', box).value.trim()
+            });
+            api.close();
+            App.toast('Logged — keep an eye on it', 'ok');
+            const flags = window.Guardrails && Guardrails.painFlags
+              ? Guardrails.painFlags(Store.painFor(u.id).filter(function (p) { return !p.resolved; }))
+              : [];
+            const reds = flags.filter(function (f) {
+              return f.level === 'red' && (f.entryIds || []).indexOf(row.id) !== -1;
+            });
+            if (reds.length) openPainAdvisory(reds);
+          }
+        }
+      ]
+    });
+  }
+
+  const RED_FLAG_EXPLAINERS = {
+    pain_bone_line: 'Pain you can pinpoint on the bone itself (rather than in muscle) is the classic early sign of a bone stress injury.',
+    pain_morning: 'Pain that is there in the morning, before any training, means the tissue is not recovering between sessions.',
+    pain_severe: 'Severity 7 or higher is past the level training should ever produce.',
+    pain_rising: 'Pain that gets worse on every check-in is trending the wrong way despite continued loading.',
+    pain_worse_consecutive: 'Pain that worsened during two sessions in a row means the load itself is aggravating it.'
+  };
+
+  function openPainAdvisory(reds) {
+    const seen = {};
+    const explainers = reds.filter(function (f) {
+      if (seen[f.code] || !RED_FLAG_EXPLAINERS[f.code]) return false;
+      seen[f.code] = 1;
+      return true;
+    });
+    const html =
+      '<p style="font-size:15px;line-height:1.6;margin:2px 0 12px">' +
+        'What you just logged matches a pattern that is worth taking seriously. This is not a diagnosis — ' +
+        'but it is the point where the smart move is to <b>get it assessed by a professional</b> ' +
+        '(a physio or sports-medicine doctor) before loading it again.</p>' +
+      '<div class="list" style="margin-bottom:12px">' +
+      reds.map(function (f) {
+        return '<div class="list-row" style="min-height:44px">' +
+          '<span class="leading" style="color:var(--red)">' + sizedIcon(App.icons.alert, 18) + '</span>' +
+          '<div class="body"><span class="title" style="white-space:normal;font-size:14px">' +
+          U.esc(f.message) + '</span></div></div>';
+      }).join('') + '</div>' +
+      (explainers.length
+        ? '<div style="font-size:13px;font-weight:700;color:var(--text-2);margin-bottom:6px">Why this is a red flag</div>' +
+          '<ul style="padding-left:18px;display:flex;flex-direction:column;gap:6px;font-size:13px;color:var(--text-2);line-height:1.55">' +
+          explainers.map(function (f) {
+            return '<li>' + U.esc(RED_FLAG_EXPLAINERS[f.code]) + '</li>';
+          }).join('') + '</ul>'
+        : '') +
+      '<p style="font-size:13px;color:var(--text-2);line-height:1.55;margin-top:12px">' +
+        'Until it is looked at: keep training everything that does not hurt, and stop loading the area that does. ' +
+        'Catching these early usually means days off, not months.</p>';
+    const m = App.modal({
+      title: 'Worth getting checked',
+      content: html,
+      actions: [{ label: 'Got it', kind: 'primary' }]
+    });
+    // Advisory reads like a full page, not a popup.
+    const boxEl = m.el.querySelector('.modal');
+    if (boxEl) {
+      boxEl.style.maxWidth = '560px';
+      boxEl.style.width = '100%';
+      boxEl.style.minHeight = '60vh';
+    }
+  }
+
+  /* ---------- journal add / edit ---------- */
+
+  function openJournalSheet(u, existing) {
+    const box = document.createElement('div');
+    box.innerHTML =
+      '<div class="field">' +
+        '<label for="jr-text">' + (existing ? 'Edit entry' : 'What happened, how did it feel?') + '</label>' +
+        '<textarea class="input" id="jr-text" rows="4" maxlength="1000" ' +
+          'style="resize:vertical;min-height:96px" ' +
+          'placeholder="e.g. Left knee felt fine on the run — keeping mileage flat one more week."></textarea>' +
+      '</div>';
+    if (existing) U.$('#jr-text', box).value = existing.entry || '';
+    App.sheet({
+      title: existing ? 'Edit journal entry' : 'Journal entry',
+      content: box,
+      actions: [
+        { label: 'Cancel', kind: 'ghost' },
+        {
+          label: 'Save',
+          kind: 'primary',
+          keepOpen: true,
+          onClick: function (api) {
+            const text = U.$('#jr-text', box).value.trim();
+            if (!text) { App.toast('Write something first', 'err'); return; }
+            if (existing) {
+              Store.updateJournalEntry(existing.id, { entry: text });
+              App.toast('Entry updated', 'ok');
+            } else {
+              Store.addJournalEntry({ userId: u.id, date: U.todayStr(), entry: text, source: 'user' });
+              App.toast('Added to your journal', 'ok');
+            }
+            api.close();
+          }
+        }
+      ]
+    });
+  }
+
+  /* ======================================================================
      Dashboard
      ====================================================================== */
 
@@ -131,6 +465,7 @@
     }
     const w = myWorkouts();
     const today = U.todayStr();
+    const perf = App.isPerformance();
     const hr = new Date().getHours();
     const greet = hr < 12 ? 'Good morning' : hr < 18 ? 'Good afternoon' : 'Good evening';
 
@@ -184,6 +519,19 @@
     html += '<div class="view-head"><h2>' + U.esc(greet) + ', ' + U.esc(u.name) + '</h2>' +
       '<div class="sub">' + U.esc(U.fmtDateLong(today)) + '</div></div>';
 
+    /* countdown chip (performance mode, selection date set) */
+    if (perf && u.goals && u.goals.selectionDate) {
+      const daysTo = U.daysBetween(today, u.goals.selectionDate);
+      if (daysTo >= 0) {
+        const wksTo = Math.ceil(daysTo / 7);
+        const cdLabel = daysTo === 0 ? 'Selection is today'
+          : wksTo + (wksTo === 1 ? ' week' : ' weeks') + ' to selection';
+        html += '<div style="margin:-6px 0 14px">' +
+          '<span class="badge" style="display:inline-flex;align-items:center;gap:6px;font-size:13px;padding:6px 12px">' +
+          sizedIcon(App.icons.roadmap, 16) + '<span>' + U.esc(cdLabel) + '</span></span></div>';
+      }
+    }
+
     /* resume banner */
     if (draft) {
       const dn = draft.name || 'Workout';
@@ -228,6 +576,37 @@
       '<span>' + prsMonth + '</span></span>' +
       '<span class="delta flat">' + (prsMonth ? 'keep it up' : 'none yet') + '</span></div>';
     html += '</div>';
+
+    /* weekly status line (performance mode only) */
+    if (perf && window.Guardrails && Guardrails.weeklyStatus) {
+      const gs = Guardrails.weeklyStatus(w, u, today);
+      const bits = [];
+      if (gs.runMileageKm > 0) {
+        bits.push(fmtDistKm(gs.runMileageKm) + ' running' +
+          (gs.runRampPct ? ' (' + (gs.runRampPct > 0 ? '+' : '') + gs.runRampPct + '% vs 4-wk avg)' : ''));
+      }
+      if (gs.easySharePct !== null) bits.push(gs.easySharePct + '% of cardio easy');
+      if (gs.ruckCount > 0) bits.push(gs.ruckCount + (gs.ruckCount === 1 ? ' ruck' : ' rucks'));
+      const restBit = gs.restDayTaken ? 'rest day taken' : 'no rest day yet';
+      const line = bits.length
+        ? 'This week: ' + bits.join(' · ') + ' · ' + restBit + '.'
+        : 'No cardio logged this week · ' + restBit + '.';
+      html += cardOpen('Weekly status');
+      html += '<p style="font-size:14px;color:var(--text-2);line-height:1.55;margin:4px 0 0">' + U.esc(line) + '</p>';
+      if (!gs.warnings.length) {
+        html += '<div style="display:flex;align-items:center;gap:8px;margin-top:10px;color:var(--accent);' +
+          'font-size:14px;font-weight:600">' + sizedIcon(App.icons.check, 18) +
+          '<span>Green week — nothing to flag.</span></div>';
+      } else {
+        html += gs.warnings.map(function (wr) {
+          return '<div style="display:flex;align-items:flex-start;gap:8px;margin-top:10px;color:var(--orange);' +
+            'font-size:13px;line-height:1.5">' +
+            '<span style="flex:none;display:inline-flex;margin-top:1px">' + sizedIcon(App.icons.alert, 16) + '</span>' +
+            '<span>' + U.esc(wr.message) + '</span></div>';
+        }).join('');
+      }
+      html += '</section>';
+    }
 
     /* rings + recent PRs */
     html += '<div class="grid-2">';
@@ -283,7 +662,8 @@
     if (!last) {
       html += emptyHtml(App.icons.log, 'No workouts yet', 'Your most recent session will show up here.',
         '<button type="button" class="btn primary" data-act="go-log">Start your first workout</button>');
-    } else {
+    } else if (!typedEntries(last).length) {
+      // v1 lift rendering — unchanged for workouts without typed entries
       const vol = Analytics.workoutVolume(last);
       const sets = Analytics.workoutSets(last);
       const exCount = (last.entries || []).length;
@@ -296,8 +676,49 @@
         (last.durationMin ? ' · ' + U.esc(U.fmtDuration(last.durationMin)) : '') + '</span></div>' +
         '<button type="button" class="btn ghost small" data-act="repeat" data-id="' + U.esc(last.id) + '">Repeat</button>' +
         '</div>';
+    } else {
+      // v2 typed workout — kind glyph + kind-appropriate summary
+      const liftSets = Analytics.workoutSets(last);
+      let sub = U.esc(U.relDate(last.date));
+      if (liftSets > 0) {
+        const vol = Analytics.workoutVolume(last);
+        const liftCount = (last.entries || []).length - typedEntries(last).length;
+        sub += ' · ' + liftCount + (liftCount === 1 ? ' exercise' : ' exercises') +
+          ' · ' + liftSets + ' sets · ' + U.esc(fmtVol(vol));
+      }
+      sub += ' · ' + U.esc(typedSummary(last));
+      html += '<div class="list-row" style="padding-left:0;padding-right:0;">' +
+        '<span class="leading">' + sizedIcon(kindIcon(workoutKind(last)), 20) + '</span>' +
+        '<div class="body"><span class="title">' + U.esc(last.name || 'Workout') + '</span>' +
+        '<span class="sub">' + sub + '</span></div>' +
+        (liftSets > 0
+          ? '<button type="button" class="btn ghost small" data-act="repeat" data-id="' + U.esc(last.id) + '">Repeat</button>'
+          : '') +
+        '</div>';
     }
     html += '</section>';
+
+    /* pain quick-log (performance mode only) */
+    if (perf) {
+      const openPain = Store.painFor(u.id).filter(function (p) { return !p.resolved; });
+      const redFlags = window.Guardrails && Guardrails.painFlags
+        ? Guardrails.painFlags(openPain).filter(function (f) { return f.level === 'red'; })
+        : [];
+      html += cardOpen('Log a niggle');
+      html += '<p class="text-2 small-text" style="margin:4px 0 12px">Sore spot, hot spot, something ' +
+        '&quot;off&quot;? Log it in 20 seconds — catching overuse early is what keeps you training.</p>';
+      if (redFlags.length) {
+        html += '<div style="display:flex;align-items:center;gap:8px;margin:0 0 12px;color:var(--red);' +
+          'font-size:13px;font-weight:600">' + sizedIcon(App.icons.alert, 16) +
+          '<span>' + redFlags.length + (redFlags.length === 1 ? ' red flag' : ' red flags') +
+          ' in your pain log — details in Body.</span></div>';
+      }
+      html += '<div class="btn-row">' +
+        '<button type="button" class="btn primary small" data-act="log-pain">' + App.icons.plus + ' Log a niggle</button>' +
+        '<button type="button" class="btn ghost small" data-act="go-body">History</button>' +
+        '</div>';
+      html += '</section>';
+    }
 
     container.innerHTML = html;
 
@@ -337,6 +758,8 @@
     U.on(container, 'click', '[data-act="start-suggested"]', function () {
       startSuggestedWorkout(suggestIds, focusLabels);
     });
+    U.on(container, 'click', '[data-act="log-pain"]', function () { openPainSheet(u); });
+    U.on(container, 'click', '[data-act="go-body"]', function () { App.navigate('body'); });
   }
 
   function startSuggestedWorkout(ids, labels) {
@@ -476,7 +899,9 @@
     const st = Analytics.streaks(w);
     const goalW = Math.max(1, Math.round(setting('weeklyWorkoutGoal', 4)));
     const cons = Analytics.consistency(w, 26, goalW);
-    const calVals = Analytics.calendar(w, 182);
+    // v2: blendedCalendar instead of Analytics.calendar so sessions with no
+    // lift volume (runs, rucks, mobility) still heat the calendar by time.
+    const calVals = blendedCalendar(w, 182);
     // heat calendar shows display-unit volume so tooltips match the rest of the app
     const calDisp = {};
     for (const d in calVals) calDisp[d] = Math.round(dispVol(calVals[d]));
@@ -863,6 +1288,89 @@
       html += '</section>';
     }
 
+    /* v2: pain & niggles + journal (performance mode only) */
+    const perf = App.isPerformance();
+    if (perf) {
+      const pain = Store.painFor(u.id); // date desc
+      const openPain = pain.filter(function (p) { return !p.resolved; });
+      const flags = window.Guardrails && Guardrails.painFlags ? Guardrails.painFlags(openPain) : [];
+
+      html += cardOpen('Pain & niggles',
+        '<button type="button" class="btn ghost small" data-act="log-pain">' + App.icons.plus + ' Log</button>');
+      if (flags.length) {
+        html += flags.slice(0, 4).map(function (f) {
+          const red = f.level === 'red';
+          return '<div style="display:flex;align-items:flex-start;gap:8px;margin:2px 0 8px;color:' +
+            (red ? 'var(--red)' : 'var(--orange)') + ';font-size:13px;line-height:1.5">' +
+            '<span style="flex:none;display:inline-flex;margin-top:1px">' + sizedIcon(App.icons.alert, 16) + '</span>' +
+            '<span>' + U.esc(f.message) + '</span></div>';
+        }).join('');
+      }
+      if (!pain.length) {
+        html += emptyHtml(App.icons.shield, 'No niggles logged',
+          'Log aches early — trends show up here long before they become injuries.');
+      } else {
+        const shownPain = pain.slice(0, 10);
+        html += '<div class="list">' + shownPain.map(function (p) {
+          const sev = typeof p.severity === 'number' && isFinite(p.severity) ? p.severity : 0;
+          const dotColor = sev >= 7 ? 'var(--red)' : sev >= 4 ? 'var(--orange)' : 'var(--accent)';
+          const tags = [];
+          if (p.worseDuring) tags.push('worse during activity');
+          if (p.boneLine) tags.push('bone-line');
+          if (p.morning) tags.push('worse in morning');
+          return '<div class="list-row"' + (p.resolved ? ' style="opacity:.55"' : '') + '>' +
+            '<span class="leading plain"><span style="display:inline-block;width:12px;height:12px;' +
+              'border-radius:50%;background:' + dotColor + '"></span></span>' +
+            '<div class="body"><span class="title">' + U.esc(regionLabel(p.muscleId)) + ' · ' + sev + '/10' +
+              (p.resolved ? ' <span class="badge" style="margin-left:6px">Resolved</span>' : '') + '</span>' +
+            '<span class="sub">' + U.esc(U.relDate(p.date)) +
+              (tags.length ? ' · ' + U.esc(tags.join(' · ')) : '') +
+              (p.note ? ' · ' + U.esc(p.note) : '') + '</span></div>' +
+            '<span class="trailing">' +
+              (!p.resolved
+                ? '<button type="button" class="btn icon ghost" data-pain-resolve="' + U.esc(p.id) +
+                  '" aria-label="Mark resolved" title="Mark resolved">' + App.icons.check + '</button>'
+                : '') +
+              '<button type="button" class="btn icon ghost" data-pain-del="' + U.esc(p.id) +
+                '" aria-label="Delete entry">' + App.icons.trash + '</button>' +
+            '</span></div>';
+        }).join('') + '</div>';
+        if (pain.length > shownPain.length) {
+          html += '<p style="font-size:12px;color:var(--text-muted);margin-top:8px">+ ' +
+            (pain.length - shownPain.length) + ' earlier entries</p>';
+        }
+      }
+      html += '</section>';
+
+      const journal = Store.journalFor(u.id); // newest first
+      html += cardOpen('Journal',
+        '<button type="button" class="btn ghost small" data-act="add-journal">' + App.icons.plus + ' Add entry</button>');
+      if (!journal.length) {
+        html += emptyHtml(App.icons.journal, 'No journal entries yet',
+          'Post-session check-ins land here automatically — or add your own notes.');
+      } else {
+        const shownJ = journal.slice(0, 10);
+        html += '<div class="list">' + shownJ.map(function (j) {
+          const srcLabel = j.source === 'checkin' ? 'Check-in' : j.source === 'coach' ? 'Coach' : 'You';
+          return '<div class="list-row">' +
+            '<span class="leading">' + sizedIcon(App.icons.journal, 20) + '</span>' +
+            '<div class="body"><span class="title" style="white-space:normal">' + U.esc(j.entry) + '</span>' +
+            '<span class="sub">' + U.esc(U.relDate(j.date)) + ' · ' + U.esc(srcLabel) + '</span></div>' +
+            '<span class="trailing">' +
+              '<button type="button" class="btn icon ghost" data-journal-edit="' + U.esc(j.id) +
+                '" aria-label="Edit entry">' + App.icons.edit + '</button>' +
+              '<button type="button" class="btn icon ghost" data-journal-del="' + U.esc(j.id) +
+                '" aria-label="Delete entry">' + App.icons.trash + '</button>' +
+            '</span></div>';
+        }).join('') + '</div>';
+        if (journal.length > shownJ.length) {
+          html += '<p style="font-size:12px;color:var(--text-muted);margin-top:8px">+ ' +
+            (journal.length - shownJ.length) + ' earlier entries</p>';
+        }
+      }
+      html += '</section>';
+    }
+
     container.innerHTML = html;
 
     /* mounts */
@@ -954,6 +1462,45 @@
       App.rerender();
     });
     U.on(container, 'click', '[data-act="go-settings"]', function () { App.navigate('settings'); });
+
+    /* v2 pain & journal events (elements exist only in performance mode) */
+    U.on(container, 'click', '[data-act="log-pain"]', function () { openPainSheet(u); });
+    U.on(container, 'click', '[data-pain-resolve]', function (e, b) {
+      Store.updatePainEntry(b.getAttribute('data-pain-resolve'), { resolved: true });
+      App.toast('Marked resolved', 'ok');
+    });
+    U.on(container, 'click', '[data-pain-del]', function (e, b) {
+      const id = b.getAttribute('data-pain-del');
+      App.confirm({
+        title: 'Delete pain entry?',
+        message: 'This removes the entry from your pain log. Red-flag checks will no longer see it.',
+        danger: true,
+        confirmLabel: 'Delete entry'
+      }).then(function (ok) {
+        if (!ok) return;
+        Store.deletePainEntry(id);
+        App.toast('Entry deleted', 'ok');
+      });
+    });
+    U.on(container, 'click', '[data-act="add-journal"]', function () { openJournalSheet(u, null); });
+    U.on(container, 'click', '[data-journal-edit]', function (e, b) {
+      const id = b.getAttribute('data-journal-edit');
+      const j = Store.journalFor(u.id).find(function (x) { return x.id === id; });
+      if (j) openJournalSheet(u, j);
+    });
+    U.on(container, 'click', '[data-journal-del]', function (e, b) {
+      const id = b.getAttribute('data-journal-del');
+      App.confirm({
+        title: 'Delete journal entry?',
+        message: 'This permanently removes the entry.',
+        danger: true,
+        confirmLabel: 'Delete entry'
+      }).then(function (ok) {
+        if (!ok) return;
+        Store.deleteJournalEntry(id);
+        App.toast('Entry deleted', 'ok');
+      });
+    });
   }
 
   /* ======================================================================

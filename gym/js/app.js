@@ -53,13 +53,43 @@
     upload: svg('<path d="M12 15.5V4M7.5 8.5 12 4l4.5 4.5M4.5 19.5h15"/>'),
     info: svg('<circle cx="12" cy="12" r="8.5"/><path d="M12 11.2v4.8M12 7.9v.2"/>'),
     templates: svg('<rect x="4" y="3.5" width="16" height="17" rx="3"/><path d="M8 8.5h8M8 12.5h8M8 16.5h4.5"/>'),
-    calendar: svg('<rect x="3" y="4.5" width="18" height="16" rx="3"/><path d="M3 9h18M8 2.5v4M16 2.5v4"/>')
+    calendar: svg('<rect x="3" y="4.5" width="18" height="16" rx="3"/><path d="M3 9h18M8 2.5v4M16 2.5v4"/>'),
+    // ---- v2 (Capability P1) icons ----
+    // runner
+    run: svg('<circle cx="14.2" cy="4.8" r="1.9"/><path d="M13.4 8.3 9.8 10.6l1.6 3.2-4 6.4"/><path d="M11.4 13.8l4 1.6 1.2 4.8"/><path d="M13.4 8.3l3.3 2.6 3.1-.9"/><path d="M9.8 10.6 6.4 9.5"/>'),
+    // backpack
+    ruck: svg('<path d="M7.2 8.2h9.6a2.4 2.4 0 0 1 2.4 2.4v8a2.4 2.4 0 0 1-2.4 2.4H7.2a2.4 2.4 0 0 1-2.4-2.4v-8a2.4 2.4 0 0 1 2.4-2.4Z"/><path d="M9 8.2V6.4a3 3 0 0 1 6 0v1.8"/><path d="M4.8 13.4h14.4M9.6 13.4v2.8M14.4 13.4v2.8"/>'),
+    // swimmer + waves
+    swim: svg('<circle cx="16.2" cy="7" r="1.8"/><path d="M4.5 13.2l5.7-3.9 4 3.1"/><path d="M3 18.2c1.5-1.3 3-1.3 4.5 0s3 1.3 4.5 0 3-1.3 4.5 0 3 1.3 4.5 0"/>'),
+    // bicycle
+    bike: svg('<circle cx="6.3" cy="16.3" r="3.4"/><circle cx="17.7" cy="16.3" r="3.4"/><path d="M6.3 16.3 9.8 9h5.2l2.7 7.3"/><path d="M9.8 9l3.4 7.3H6.3"/><path d="M14.2 6.4h2.4"/>'),
+    // rower on a rail
+    row: svg('<circle cx="18.6" cy="6.6" r="1.7"/><path d="M3.4 18.6h17.2"/><path d="M6 15.6h3.4l2.2-2.8 4.6 1 1.6-3.4"/><path d="M8.6 15.6l-1.2 3M13.6 13.6l1 5"/>'),
+    // stair steps
+    stairs: svg('<path d="M4 20h4v-4h4v-4h4V8h4"/>'),
+    // person stretching, arms in an arc
+    stretch: svg('<circle cx="12" cy="4.4" r="2"/><path d="M12 7.6v6.2M12 13.8l-4.4 6M12 13.8l4.4 6"/><path d="M4.6 8.4c2.2 2 4.7 3 7.4 3s5.2-1 7.4-3"/>'),
+    // folded map
+    roadmap: svg('<path d="M9 4.5 3.8 6.3v13.2L9 17.7l6 1.8 5.2-1.8V4.5L15 6.3 9 4.5Z"/><path d="M9 4.5v13.2M15 6.3v13.2"/>'),
+    // shield + check
+    shield: svg('<path d="M12 3.2l7 2.6v5.6c0 4.5-2.9 8.2-7 9.4-4.1-1.2-7-4.9-7-9.4V5.8l7-2.6Z"/><path d="M9.2 12l2 2 3.6-3.8"/>'),
+    // clipboard (tests)
+    clipboard: svg('<rect x="5.2" y="4.2" width="13.6" height="16.8" rx="2.4"/><path d="M9.2 4.2a2.8 2.8 0 0 1 5.6 0"/><path d="M8.8 11h6.4M8.8 15h4.2"/>'),
+    // warning triangle
+    alert: svg('<path d="M12 4.2 21.2 20H2.8L12 4.2Z"/><path d="M12 10.4v4.2M12 17.2v.2"/>'),
+    // notebook
+    journal: svg('<rect x="4.8" y="3.6" width="14.4" height="16.8" rx="2.4"/><path d="M8.8 3.6v16.8M12.4 8.4h3.6M12.4 12h3.6"/>')
   };
   // aliases used across modules
   icons.pencil = icons.edit;
   icons.x = icons.close;
   icons.gear = icons.settings;
   icons.leaderboard = icons.trophy;
+  icons.cardio = icons.run;
+  icons.mobility = icons.stretch;
+  icons.durability = icons.shield;
+  icons.test = icons.clipboard;
+  icons.circuit = icons.flame;
 
   App.icons = icons;
 
@@ -229,6 +259,13 @@
   App.units = function () {
     const u = window.Store && Store.currentUser && Store.currentUser();
     return (u && u.settings && u.settings.units) === 'kg' ? 'kg' : 'lb';
+  };
+
+  // v2 mode gate: performance mode unlocks cardio/ruck logging, guardrails,
+  // the pain log and goal tracking. Default ('simple') keeps the v1 UI.
+  App.isPerformance = function () {
+    const u = window.Store && Store.currentUser && Store.currentUser();
+    return !!(u && u.settings && u.settings.trainingProfile === 'performance');
   };
 
   App.fmtWeight = function (kg, opts) {
@@ -575,7 +612,9 @@
     const state = {
       emoji: (user && user.emoji) || '💪',
       color: (user && user.color) || seriesColors()[0],
-      units: s.units === 'kg' ? 'kg' : 'lb'
+      units: s.units === 'kg' ? 'kg' : 'lb',
+      // v2 goal question — 'none' | 'general' | 'sfas'
+      goal: (user && user.goals && user.goals.preset) || 'none'
     };
     const colors = seriesColors();
 
@@ -609,6 +648,16 @@
           '<button type="button" data-v="lb">Pounds (lb)</button>' +
           '<button type="button" data-v="kg">Kilograms (kg)</button>' +
         '</div>' +
+      '</div>' +
+      '<div class="field">' +
+        '<label>Training for something specific?</label>' +
+        '<div class="segmented block" data-goal>' +
+          '<button type="button" data-v="none">None</button>' +
+          '<button type="button" data-v="general">Getting fit</button>' +
+          '<button type="button" data-v="sfas">Military selection (SFAS)</button>' +
+        '</div>' +
+        '<p class="small-text muted" style="margin:6px 0 0">Picking a goal turns on Performance mode — ' +
+          'cardio &amp; ruck logging, training guardrails and goal tracking. You can switch anytime in Settings.</p>' +
       '</div>' +
       (withGoals ?
         '<div class="field-row" style="display:flex;gap:10px">' +
@@ -650,10 +699,14 @@
       U.$$('[data-units] button', el).forEach(function (b) {
         b.classList.toggle('active', b.getAttribute('data-v') === state.units);
       });
+      U.$$('[data-goal] button', el).forEach(function (b) {
+        b.classList.toggle('active', b.getAttribute('data-v') === state.goal);
+      });
     }
     U.on(el, 'click', '[data-emoji]', function (e, b) { state.emoji = b.getAttribute('data-emoji'); paint(); });
     U.on(el, 'click', '[data-color]', function (e, b) { state.color = b.getAttribute('data-color'); paint(); });
     U.on(el, 'click', '[data-units] button', function (e, b) { state.units = b.getAttribute('data-v'); paint(); });
+    U.on(el, 'click', '[data-goal] button', function (e, b) { state.goal = b.getAttribute('data-v'); paint(); });
     el.addEventListener('submit', function (e) { e.preventDefault(); });
     paint();
 
@@ -666,7 +719,7 @@
           U.$('#pf-name', el).focus();
           return null;
         }
-        const out = { name: name, emoji: state.emoji, color: state.color, units: state.units };
+        const out = { name: name, emoji: state.emoji, color: state.color, units: state.units, goalPreset: state.goal };
         if (withGoals) {
           out.goals = {
             weeklyWorkoutGoal: U.clamp(parseInt(U.$('#pf-wgoal', el).value, 10) || 4, 1, 7),
@@ -677,6 +730,24 @@
         return out;
       }
     };
+  }
+
+  // v2: apply the "Training for something specific?" answer. Choosing a goal
+  // sets user.goals.preset (Store.setGoals) and enters performance mode;
+  // choosing None returns to simple mode. A user whose answer did not change
+  // is left completely untouched (no writes) so existing profiles are stable.
+  function applyGoalChoice(userId, choice, existingUser) {
+    const next = choice === 'sfas' || choice === 'general' ? choice : null;
+    const prev = (existingUser && existingUser.goals && existingUser.goals.preset) || null;
+    if (existingUser && next === prev) return;
+    if (!existingUser && !next) return; // new profile, no goal: defaults stand
+    const g = (existingUser && existingUser.goals) || {};
+    Store.setGoals(userId, {
+      preset: next,
+      selectionDate: g.selectionDate || null,
+      targets: g.targets || {}
+    });
+    Store.updateUser(userId, { settings: { trainingProfile: next ? 'performance' : 'simple' } });
   }
 
   function openProfileModal(user) {
@@ -703,10 +774,12 @@
                   restTimerSec: v.goals.restTimerSec
                 }
               });
+              applyGoalChoice(user.id, v.goalPreset, user);
               App.toast('Profile updated', 'ok');
             } else {
               const u = Store.addUser({ name: v.name, emoji: v.emoji, color: v.color, settings: { units: v.units } });
               Store.setCurrentUser(u.id);
+              applyGoalChoice(u.id, v.goalPreset, null);
               App.toast('Welcome, ' + u.name + '!', 'ok');
             }
             api.close();
@@ -772,6 +845,7 @@
         if (!v) return;
         const u = Store.addUser({ name: v.name, emoji: v.emoji, color: v.color, settings: { units: v.units } });
         Store.setCurrentUser(u.id);
+        applyGoalChoice(u.id, v.goalPreset, null);
         App.toast('Welcome, ' + u.name + '! Time to lift.', 'ok');
         App.navigate('dashboard');
       });
@@ -914,7 +988,10 @@
       });
     }
 
-    /* ---- 2. Apple Health ---- */
+    /* ---- 2. Training (v2 mode gate + goals/profile editor) ---- */
+    if (cur) el.appendChild(buildTrainingCard(cur));
+
+    /* ---- 3. Apple Health ---- */
     const ahCard = U.el('<div class="card">' +
       cardTitle(icons.apple, 'Apple Health') +
       '<p class="text-2 small-text" style="margin:6px 0 12px">Import weight, daily activity and workouts from your ' +
@@ -941,7 +1018,7 @@
     el.appendChild(ahCard);
     wireAppleHealth(ahCard);
 
-    /* ---- 3. Family Sync ---- */
+    /* ---- 4. Family Sync ---- */
     const syncState = Store.state.sync || {};
     const st = window.Sync && Sync.status ? Sync.status() : { enabled: false, lastSyncAt: null, lastError: null };
     const syncCard = U.el('<div class="card">' +
@@ -979,7 +1056,7 @@
     el.appendChild(syncCard);
     wireSync(syncCard);
 
-    /* ---- 4. Data ---- */
+    /* ---- 5. Data ---- */
     const noWorkouts = Store.state.workouts.length === 0;
     const dataCard = U.el('<div class="card">' +
       cardTitle(icons.download, 'Data') +
@@ -995,7 +1072,7 @@
     el.appendChild(dataCard);
     wireData(dataCard);
 
-    /* ---- 5. Danger zone ---- */
+    /* ---- 6. Danger zone ---- */
     const dangerCard = U.el('<div class="card" style="border-color:rgba(255,69,58,.25)">' +
       '<div class="card-title" style="color:#ff6961">Danger zone</div>' +
       '<p class="text-2 small-text" style="margin:6px 0 12px">Erase every profile, workout and setting stored on this device.</p>' +
@@ -1003,6 +1080,94 @@
       '</div>');
     el.appendChild(dangerCard);
     U.$('#dz-erase', dangerCard).addEventListener('click', eraseAllData);
+  }
+
+  /* ---------- Training card (Settings) ---------- */
+
+  function buildTrainingCard(cur) {
+    const tp = (cur.settings && cur.settings.trainingProfile) === 'performance' ? 'performance' : 'simple';
+    const goals = cur.goals || {};
+    const prof = cur.profile || {};
+    const preset = goals.preset === 'sfas' || goals.preset === 'general' ? goals.preset : 'none';
+
+    function seg(id, items, active) {
+      return '<div class="segmented block" id="' + id + '">' + items.map(function (it) {
+        return '<button type="button" data-v="' + U.esc(it.v) + '"' +
+          (it.v === active ? ' class="active"' : '') + '>' + U.esc(it.l) + '</button>';
+      }).join('') + '</div>';
+    }
+
+    const card = U.el('<div class="card">' +
+      cardTitle(icons.shield, 'Training') +
+      '<p class="text-2 small-text" style="margin:6px 0 12px">Simple keeps IronLog to lifts — the classic ' +
+        'experience. Performance adds run, ruck and other cardio logging, training guardrails, a pain log ' +
+        'and goal tracking.</p>' +
+      '<div class="field"><label>Mode</label>' +
+        seg('tr-mode', [{ v: 'simple', l: 'Simple' }, { v: 'performance', l: 'Performance' }], tp) +
+      '</div>' +
+      (tp === 'performance' ?
+        '<div class="divider"></div>' +
+        '<div class="field"><label>Training for something specific?</label>' +
+          seg('tr-preset', [
+            { v: 'none', l: 'None' },
+            { v: 'general', l: 'Getting fit' },
+            { v: 'sfas', l: 'Military selection (SFAS)' }
+          ], preset) +
+        '</div>' +
+        '<div class="field"><label for="tr-seldate">Selection date <span class="muted">(optional)</span></label>' +
+          '<input class="input" id="tr-seldate" type="date" value="' + U.esc(goals.selectionDate || '') + '">' +
+        '</div>' +
+        '<div class="field"><label>Sex</label>' +
+          seg('tr-sex', [{ v: 'male', l: 'Male' }, { v: 'female', l: 'Female' }], prof.sex || '') +
+        '</div>' +
+        '<div class="field"><label for="tr-by">Birth year</label>' +
+          '<input class="input" id="tr-by" type="number" min="1920" max="2020" step="1" inputmode="numeric" ' +
+            'placeholder="e.g. 1998" value="' + (prof.birthYear ? U.esc(String(prof.birthYear)) : '') + '">' +
+        '</div>' +
+        '<p class="small-text muted" style="margin-top:-4px">Sex and birth year are used for ACFT scoring ' +
+          'and heart-rate zones. They never leave this device.</p>'
+        : '') +
+      '</div>');
+
+    U.on(card, 'click', '#tr-mode button', function (e, b) {
+      const v = b.getAttribute('data-v');
+      if (v === tp) return;
+      Store.updateUser(cur.id, { settings: { trainingProfile: v } });
+      App.toast(v === 'performance' ? 'Performance mode on' : 'Back to simple mode', 'ok');
+    });
+    U.on(card, 'click', '#tr-preset button', function (e, b) {
+      const v = b.getAttribute('data-v');
+      if (v === preset) return;
+      Store.setGoals(cur.id, {
+        preset: v === 'none' ? null : v,
+        selectionDate: goals.selectionDate || null,
+        targets: goals.targets || {}
+      });
+      App.toast('Goal updated', 'ok');
+    });
+    const selDate = U.$('#tr-seldate', card);
+    if (selDate) {
+      selDate.addEventListener('change', function () {
+        const v = /^\d{4}-\d{2}-\d{2}$/.test(selDate.value) ? selDate.value : null;
+        Store.setGoals(cur.id, { preset: goals.preset || null, selectionDate: v, targets: goals.targets || {} });
+        App.toast(v ? 'Selection date set' : 'Selection date cleared', 'ok');
+      });
+    }
+    U.on(card, 'click', '#tr-sex button', function (e, b) {
+      const v = b.getAttribute('data-v');
+      if (v === prof.sex) return;
+      Store.setProfile(cur.id, { sex: v, birthYear: prof.birthYear || null });
+      App.toast('Profile updated', 'ok');
+    });
+    const byInput = U.$('#tr-by', card);
+    if (byInput) {
+      byInput.addEventListener('change', function () {
+        const y = parseInt(byInput.value, 10);
+        Store.setProfile(cur.id, { sex: prof.sex || null, birthYear: isFinite(y) ? y : null });
+        App.toast('Profile updated', 'ok');
+      });
+    }
+    return card;
   }
 
   function syncStatusLine(st) {

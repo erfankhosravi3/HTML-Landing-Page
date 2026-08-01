@@ -917,6 +917,1410 @@
   }
 
   /* ======================================================================
+     V2 — typed sessions (cardio / mobility / durability / test)
+     Additive layer around the lift-logging flow. Guardrails and MuscleMap
+     are referenced lazily (window.*) so absence never breaks this module.
+     ====================================================================== */
+
+  const KM_PER_MILE = 1.609344;
+
+  const KIND_LABELS = {
+    lift: 'Lift', run: 'Run', ruck: 'Ruck', swim: 'Swim', bike: 'Bike',
+    row: 'Row', stairs: 'Stairs', circuit: 'Circuit', cardio: 'Cardio',
+    mobility: 'Mobility', durability: 'Durability', test: 'Test', mixed: 'Mixed'
+  };
+
+  const CARDIO_MODE_DEFS = [
+    { id: 'run', label: 'Run' }, { id: 'ruck', label: 'Ruck' },
+    { id: 'swim', label: 'Swim' }, { id: 'bike', label: 'Bike' },
+    { id: 'row', label: 'Row' }, { id: 'stairs', label: 'Stairs' },
+    { id: 'circuit', label: 'Circuit' }
+  ];
+
+  const FEEL_DEFS = [
+    { id: 'easy', label: 'Easy' }, { id: 'normal', label: 'Normal' },
+    { id: 'hard', label: 'Hard' }, { id: 'hurt', label: 'Hurt' }
+  ];
+
+  const MODALITY_DEFS = [
+    { id: 'static', label: 'Static' }, { id: 'dynamic', label: 'Dynamic' },
+    { id: 'yoga', label: 'Yoga' }, { id: 'foam_roll', label: 'Foam roll' }
+  ];
+
+  const SLOT_LABELS = {
+    unilateral: 'Unilateral lower', calf_tib: 'Calf & tibialis',
+    grip: 'Grip', core: 'Core', other: 'Durability work'
+  };
+
+  // P1 test protocols. unit: 'time' (mm:ss, stored seconds) | 'reps' | 'score'.
+  // plain: how a bare number (no colon) in the value field is interpreted.
+  const TEST_PROTOCOLS = [
+    { id: 'run2mi', label: '2-mile run', unit: 'time', hint: 'mm:ss', plain: 'min' },
+    { id: 'run5mi', label: '5-mile run', unit: 'time', hint: 'mm:ss', plain: 'min' },
+    { id: 'ruck12mi', label: '12-mile ruck', unit: 'time', hint: 'h:mm:ss', plain: 'min' },
+    { id: 'swim500m', label: '500 m swim', unit: 'time', hint: 'mm:ss', plain: 'min' },
+    { id: 'pushups2min', label: 'Push-ups (2 min)', unit: 'reps' },
+    { id: 'situps2min', label: 'Sit-ups (2 min)', unit: 'reps' },
+    { id: 'pullups_max', label: 'Pull-ups (max)', unit: 'reps' },
+    { id: 'plank', label: 'Plank hold', unit: 'time', hint: 'mm:ss', plain: 'sec' },
+    { id: 'deadhang', label: 'Dead hang', unit: 'time', hint: 'mm:ss', plain: 'sec' },
+    { id: 'slcalf_l', label: 'Single-leg calf raises (L)', unit: 'reps' },
+    { id: 'slcalf_r', label: 'Single-leg calf raises (R)', unit: 'reps' },
+    { id: 'acft', label: 'ACFT (total score)', unit: 'score' }
+  ];
+
+  // Small kind glyphs (15px) — App.icons has no cardio/mobility icons, so these
+  // live locally. Same stroke language as App.icons.
+  function svgK(inner) {
+    return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="15" height="15" ' +
+      'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" ' +
+      'stroke-linejoin="round" aria-hidden="true">' + inner + '</svg>';
+  }
+
+  const KIND_ICONS = {
+    lift: svgK('<path d="M6.3 7.7v8.6M3.4 9.7v4.6M17.7 7.7v8.6M20.6 9.7v4.6M6.3 12h11.4"/>'),
+    run: svgK('<circle cx="14.7" cy="4.6" r="1.9"/><path d="M13.2 8.3 9.6 10l1.6 3.6-3.3 4.9M13.2 8.3l2.4 3.1 3.6.6M13.2 8.3 9.9 7.7 6.8 10M11.2 13.6l3.2 2 1 4.9"/>'),
+    ruck: svgK('<rect x="6" y="7.5" width="12" height="12.5" rx="3"/><path d="M9.2 7.5V5.8a2.8 2.8 0 0 1 5.6 0v1.7M6 12.5h12"/>'),
+    swim: svgK('<circle cx="16.4" cy="6.8" r="1.8"/><path d="M4.2 12.5 11 8.6l3.4 3M2.8 17.4c1.5-1.3 3.1-1.3 4.6 0s3.1 1.3 4.6 0 3.1-1.3 4.6 0 3.1 1.3 4.6 0"/>'),
+    bike: svgK('<circle cx="6" cy="16.3" r="3.6"/><circle cx="18" cy="16.3" r="3.6"/><path d="M6 16.3 9.8 9h5.4l2.8 7.3M9.8 9 8 5.6h3.2"/>'),
+    row: svgK('<path d="M3 15.6c3.2 1.9 14.8 1.9 18 0l-2.6 3.9H5.6Z"/><path d="M12 15.6 17.2 5M15.4 8.7l3.7 1.7"/>'),
+    stairs: svgK('<path d="M3.5 20h4.3v-4h4.2v-4h4.2V8h4.3"/>'),
+    circuit: svgK('<path d="M12 21c3.8 0 6.4-2.5 6.4-6 0-2.4-1.2-4.5-2.9-6.2-.3 1-.9 1.9-1.8 2.5.3-2.7-1-5.6-3.6-7.6.3 3-1 4.6-2.4 6.2C6.4 11.4 5.6 13 5.6 15c0 3.5 2.6 6 6.4 6Z"/>'),
+    cardio: svgK('<path d="M12 20.4S4.2 15.6 4.2 9.9C4.2 7.2 6.1 5.2 8.6 5.2c1.5 0 2.8.7 3.4 1.9.6-1.2 1.9-1.9 3.4-1.9 2.5 0 4.4 2 4.4 4.7 0 5.7-7.8 10.5-7.8 10.5Z"/>'),
+    mobility: svgK('<circle cx="12" cy="4.6" r="1.9"/><path d="M12 7.6v5.2M12 12.8l-4.6 6.7M12 12.8l4.6 6.7M4.6 8.4 12 10.9l7.4-2.5"/>'),
+    durability: svgK('<path d="M12 3l7 2.8V11c0 4.8-3 8.4-7 10-4-1.6-7-5.2-7-10V5.8Z"/><path d="M9 11.6l2 2 4-4"/>'),
+    test: svgK('<circle cx="12" cy="13.5" r="7.2"/><path d="M12 10v3.7l2.3 1.5M9.6 2.7h4.8M12 2.7v3.6"/>'),
+    mixed: svgK('<path d="M12 3 3 8l9 5 9-5Z"/><path d="M3 13l9 5 9-5"/>')
+  };
+
+  function kindGlyph(kind) {
+    return '<span style="display:inline-flex;align-items:center;flex:none;color:var(--text-muted)" aria-hidden="true">' +
+      (KIND_ICONS[kind] || KIND_ICONS.lift) + '</span>';
+  }
+
+  /* ---------- entry / workout kind helpers ---------- */
+
+  function perfMode(u) {
+    return !!(u && u.settings && u.settings.trainingProfile === 'performance');
+  }
+
+  function isLiftEntry(en) {
+    return !!en && (en.type === undefined || en.type === null || en.type === 'lift');
+  }
+
+  function liftEntriesOf(w) {
+    return ((w && w.entries) || []).filter(isLiftEntry);
+  }
+
+  function typedEntriesOf(w) {
+    return ((w && w.entries) || []).filter(function (en) { return en && !isLiftEntry(en); });
+  }
+
+  // Repeating a workout only ever seeds lift entries into the draft — typed
+  // entries never flow through the lift editor.
+  function repeatableView(w) {
+    const lifts = liftEntriesOf(w);
+    return lifts.length === ((w && w.entries) || []).length
+      ? w
+      : { name: w.name, entries: lifts };
+  }
+
+  function entryKindOf(en) {
+    if (isLiftEntry(en)) return 'lift';
+    if (en.type === 'cardio') return typeof en.mode === 'string' && en.mode ? en.mode : 'cardio';
+    return typeof en.type === 'string' ? en.type : 'lift';
+  }
+
+  function kindOfWorkout(w) {
+    if (w && typeof w.kind === 'string' && w.kind) return w.kind;
+    const ks = [];
+    ((w && w.entries) || []).forEach(function (en) {
+      if (!en) return;
+      const k = entryKindOf(en);
+      if (ks.indexOf(k) < 0) ks.push(k);
+    });
+    return ks.length === 1 ? ks[0] : (ks.length ? 'mixed' : 'lift');
+  }
+
+  function capStr(s) {
+    s = String(s || '').replace(/_/g, ' ');
+    return s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
+  }
+
+  /* ---------- distance / pace / time formatting ---------- */
+
+  function distUnit() { return App.units() === 'lb' ? 'mi' : 'km'; }
+
+  function kmToDist(km) { return App.units() === 'lb' ? km / KM_PER_MILE : km; }
+
+  function distToKm(v) {
+    const n = parseFloat(v);
+    if (isNaN(n) || n <= 0) return 0;
+    return App.units() === 'lb' ? n * KM_PER_MILE : n;
+  }
+
+  function fmtKm(km) {
+    if (!km || km <= 0) return '';
+    return (Math.round(kmToDist(km) * 100) / 100) + ' ' + distUnit();
+  }
+
+  function paceStr(durationMin, km) {
+    if (!km || km <= 0 || !durationMin || durationMin <= 0) return '';
+    const per = durationMin / kmToDist(km);
+    if (!isFinite(per) || per <= 0) return '';
+    let m = Math.floor(per);
+    let s = Math.round((per - m) * 60);
+    if (s === 60) { m++; s = 0; }
+    return m + ':' + pad2(s) + ' /' + distUnit();
+  }
+
+  function fmtSec(sec) {
+    if (sec === null || sec === undefined || isNaN(sec)) return '';
+    sec = Math.max(0, Math.round(sec));
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = sec % 60;
+    return h ? h + ':' + pad2(m) + ':' + pad2(s) : m + ':' + pad2(s);
+  }
+
+  // 'mm:ss' / 'h:mm:ss' -> seconds; a bare number is minutes or seconds
+  // depending on plainUnit. null on garbage.
+  function parseTimeToSec(str, plainUnit) {
+    str = String(str || '').trim();
+    if (!str) return null;
+    if (str.indexOf(':') >= 0) {
+      const parts = str.split(':').map(function (p) { return p.trim(); });
+      if (parts.some(function (p) { return p === '' || isNaN(Number(p)) || Number(p) < 0; })) return null;
+      const n = parts.map(Number);
+      if (n.length === 2) return n[0] * 60 + n[1];
+      if (n.length === 3) return n[0] * 3600 + n[1] * 60 + n[2];
+      return null;
+    }
+    const v = parseFloat(str);
+    if (isNaN(v) || v < 0) return null;
+    return plainUnit === 'sec' ? v : v * 60;
+  }
+
+  function testProtocolOf(id) {
+    return TEST_PROTOCOLS.find(function (p) { return p.id === id; }) || null;
+  }
+
+  function fmtTestValue(protocolId, results, score) {
+    const p = testProtocolOf(protocolId);
+    const v = results && typeof results.value === 'number' ? results.value : null;
+    if (v === null) return typeof score === 'number' ? score + ' pts' : '';
+    if (p && p.unit === 'time') return fmtSec(v);
+    if (p && p.unit === 'score') return v + ' pts';
+    return v + ' reps';
+  }
+
+  function muscleLabelOf(m) {
+    const map = window.ExerciseDB && ExerciseDB.MUSCLE_LABEL;
+    return (map && map[m]) || capStr(m);
+  }
+
+  /* ---------- guardrails (lazy — module may be absent) ---------- */
+
+  function guardrailsFor(draftW, u) {
+    if (!u || !perfMode(u)) return [];
+    const G = window.Guardrails;
+    if (!G || typeof G.checkSession !== 'function') return [];
+    try {
+      return G.checkSession(draftW, Store.workoutsFor(u.id), u) || [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function guardHTML(warns) {
+    if (!warns.length) return '';
+    return warns.map(function (g) {
+      const stop = g.level === 'stop';
+      return '<p style="font-size:13px;line-height:1.5;margin:6px 0;color:' +
+        (stop ? 'var(--red)' : 'var(--orange)') + '">' +
+        (stop ? '⛔ ' : '⚠️ ') + U.esc(g.message) + '</p>';
+    }).join('');
+  }
+
+  // 'stop'-level findings require an explicit 'Save anyway'; warns never block.
+  function confirmStops(warns) {
+    const stops = warns.filter(function (g) { return g.level === 'stop'; });
+    if (!stops.length) return Promise.resolve(true);
+    return App.confirm({
+      title: 'Sure about this one?',
+      message: stops.map(function (g) { return g.message; }).join('\n\n'),
+      danger: true,
+      confirmLabel: 'Save anyway'
+    });
+  }
+
+  function toastWarns(warns) {
+    if (warns.length) App.toast('⚠️ ' + warns[0].message);
+  }
+
+  /* ---------- session RPE / feel / check-in ---------- */
+
+  function rpeFeelHTML(sel) {
+    sel = sel || {};
+    let html = '<div class="field"><label>Session effort (RPE 1–10)</label>' +
+      '<div class="chip-row" data-slot="rpe" style="flex-wrap:wrap">';
+    for (let i = 1; i <= 10; i++) {
+      const on = sel.rpe === i;
+      html += '<button type="button" class="chip' + (on ? ' active' : '') + '" data-rpe="' + i +
+        '" aria-pressed="' + (on ? 'true' : 'false') +
+        '" style="min-width:42px;justify-content:center;padding:7px 6px">' + i + '</button>';
+    }
+    html += '</div></div>';
+    html += '<div class="field"><label>How it felt</label>' +
+      '<div class="chip-row" data-slot="feel" style="flex-wrap:wrap">' +
+      FEEL_DEFS.map(function (f) {
+        const on = sel.feel === f.id;
+        return '<button type="button" class="chip' + (on ? ' active' : '') + '" data-feel="' + f.id +
+          '" aria-pressed="' + (on ? 'true' : 'false') + '">' + f.label + '</button>';
+      }).join('') + '</div></div>';
+    return html;
+  }
+
+  function wireRpeFeel(root, sel) {
+    U.on(root, 'click', '[data-rpe]', function (e, chip) {
+      const v = parseInt(chip.getAttribute('data-rpe'), 10);
+      sel.rpe = sel.rpe === v ? null : v;
+      U.$$('[data-rpe]', root).forEach(function (c) {
+        const on = parseInt(c.getAttribute('data-rpe'), 10) === sel.rpe;
+        c.classList.toggle('active', on);
+        c.setAttribute('aria-pressed', on ? 'true' : 'false');
+      });
+    });
+    U.on(root, 'click', '[data-feel]', function (e, chip) {
+      const v = chip.getAttribute('data-feel');
+      sel.feel = sel.feel === v ? null : v;
+      U.$$('[data-feel]', root).forEach(function (c) {
+        const on = c.getAttribute('data-feel') === sel.feel;
+        c.classList.toggle('active', on);
+        c.setAttribute('aria-pressed', on ? 'true' : 'false');
+      });
+    });
+  }
+
+  function checkinQuestion(kind, entry) {
+    if (kind === 'ruck') return 'How did your feet and shoulders hold up?';
+    if (kind === 'run') {
+      const pushed = entry && (entry.effort === 'moderate' || entry.effort === 'hard');
+      return pushed ? 'How did that feel?' : 'Could you have held a conversation?';
+    }
+    if (kind === 'mobility') return 'Anything still feel tight?';
+    if (kind === 'durability') return 'Anything feel off during the work?';
+    if (kind === 'test') return 'How did that effort feel?';
+    return 'How did that feel?';
+  }
+
+  // Post-save check-in sheet, used by every direct-save session type.
+  // Simple mode: RPE + feel only (no check-in question, no journal writes).
+  // Ruck: extra foot-check line, appended to the ruck entry's footNote.
+  function openSessionCheckin(workout) {
+    const u = user();
+    if (!u || !workout || !workout.id) return;
+    const perf = perfMode(u);
+    const kind = kindOfWorkout(workout);
+    const firstTyped = typedEntriesOf(workout)[0] || null;
+    const isRuck = (workout.entries || []).some(function (en) {
+      return en && en.type === 'cardio' && en.mode === 'ruck';
+    });
+    const sel = { rpe: null, feel: null };
+
+    const content = document.createElement('div');
+    let html = rpeFeelHTML(sel);
+    if (isRuck) {
+      html += '<div class="field"><label for="ck-foot">Foot check</label>' +
+        '<input class="input" id="ck-foot" autocomplete="off" placeholder="Hot spots, blisters, numbness?"></div>';
+    }
+    if (perf) {
+      html += '<div class="field"><label for="ck-answer">' +
+        U.esc(checkinQuestion(kind, firstTyped)) + '</label>' +
+        '<textarea class="input" id="ck-answer" rows="2" placeholder="One line — optional"></textarea></div>';
+    }
+    content.innerHTML = html;
+    wireRpeFeel(content, sel);
+
+    App.sheet({
+      title: 'Quick check-in',
+      content: content,
+      actions: [
+        { label: 'Skip', kind: 'ghost' },
+        {
+          label: 'Save',
+          kind: 'primary',
+          onClick: function () {
+            const patch = {};
+            if (sel.rpe) patch.rpe = sel.rpe;
+            if (sel.feel) patch.feel = sel.feel;
+            const footEl = U.$('#ck-foot', content);
+            const foot = footEl ? footEl.value.trim() : '';
+            const ansEl = U.$('#ck-answer', content);
+            const answer = ansEl ? ansEl.value.trim() : '';
+            if (answer) patch.checkin = answer;
+            if (foot) {
+              const live = Store.workoutById(workout.id);
+              if (live) {
+                patch.entries = (live.entries || []).map(function (en) {
+                  if (en && en.type === 'cardio' && en.mode === 'ruck') {
+                    const copy = JSON.parse(JSON.stringify(en));
+                    copy.footNote = (copy.footNote ? copy.footNote + ' — ' : '') + foot;
+                    return copy;
+                  }
+                  return en;
+                });
+              }
+            }
+            if (Object.keys(patch).length) Store.updateWorkout(workout.id, patch);
+            if (perf && answer) {
+              Store.addJournalEntry({
+                userId: workout.userId,
+                date: workout.date,
+                source: 'checkin',
+                entry: kind + ' ' + workout.date + ': ' + answer
+              });
+            }
+          }
+        }
+      ]
+    });
+  }
+
+  /* ---------- start-screen quick chips ---------- */
+
+  function chipDefsFor(u) {
+    if (perfMode(u)) {
+      return [
+        { id: 'run', label: 'Run' }, { id: 'ruck', label: 'Ruck' },
+        { id: 'swim', label: 'Swim' }, { id: 'bike', label: 'Bike' },
+        { id: 'row', label: 'Row' }, { id: 'circuit', label: 'Circuit' },
+        { id: 'mobility', label: 'Stretch' }, { id: 'durability', label: 'Durability' },
+        { id: 'test', label: 'Test' }
+      ];
+    }
+    return [{ id: 'cardio', label: 'Cardio' }, { id: 'mobility', label: 'Stretch' }];
+  }
+
+  // last-used date per chip id, from this user's typed entries
+  function chipLastUse(u) {
+    const map = {};
+    Store.workoutsFor(u.id).forEach(function (w) {
+      (w.entries || []).forEach(function (en) {
+        if (!en || isLiftEntry(en)) return;
+        const ids = [entryKindOf(en)];
+        if (en.type === 'cardio') ids.push('cardio');
+        ids.forEach(function (id) {
+          if (!map[id] || map[id] < w.date) map[id] = w.date;
+        });
+      });
+    });
+    return map;
+  }
+
+  // Recency-ordered chips; chips unused 4+ weeks collapse behind 'More…'.
+  function quickKindChips(u, expanded) {
+    const defs = chipDefsFor(u);
+    const lastUse = chipLastUse(u);
+    const cutoff = U.addDays(U.todayStr(), -28);
+    let recent = defs.filter(function (d) { return lastUse[d.id] && lastUse[d.id] >= cutoff; });
+    recent.sort(function (a, b) {
+      return lastUse[a.id] === lastUse[b.id] ? 0 : (lastUse[a.id] < lastUse[b.id] ? 1 : -1);
+    });
+    let rest = defs.filter(function (d) { return recent.indexOf(d) < 0; });
+    if (!recent.length) { recent = rest.slice(0, 2); rest = rest.slice(2); }
+    if (expanded) { recent = recent.concat(rest); rest = []; }
+    return { visible: recent, hidden: rest };
+  }
+
+  function kindChipRowHTML(u, expanded) {
+    const g = quickKindChips(u, expanded);
+    let html = '<div class="chip-row" id="lg-kinds" style="margin-top:2px;flex-wrap:wrap">';
+    html += g.visible.map(function (d) {
+      return '<button type="button" class="chip" data-kind="' + U.esc(d.id) + '">' +
+        kindGlyph(d.id) + ' ' + U.esc(d.label) + '</button>';
+    }).join('');
+    if (g.hidden.length) {
+      html += '<button type="button" class="chip" id="lg-more" aria-expanded="false">More…</button>';
+    }
+    html += '</div>';
+    return html;
+  }
+
+  function openKindLogger(id) {
+    if (id === 'cardio') { openCardioLogger('run', null); return; }
+    if (CARDIO_MODE_DEFS.some(function (m) { return m.id === id; })) { openCardioLogger(id, null); return; }
+    if (id === 'mobility') { openMobilityLogger(null); return; }
+    if (id === 'durability') { openDurabilityLogger(null); return; }
+    if (id === 'test') { openTestLogger(null); return; }
+  }
+
+  /* ---------- cardio logger (single screen, direct save; also edit form) ---------- */
+
+  const CARDIO_KNOWN_KEYS = ['id', 'type', 'mode', 'distanceKm', 'durationMin', 'avgHR', 'maxHR',
+    'effort', 'surface', 'tempC', 'fluidMl', 'loadKgDry', 'loadKgTotal', 'footwear', 'footNote', 'notes'];
+
+  const BIG_NUM_STYLE = 'font-size:24px;font-weight:600;text-align:center;min-height:52px';
+
+  // edit = {workoutId, entryId} | null
+  function openCardioLogger(initialMode, edit) {
+    const u = user();
+    if (!u) { App.toast('Create a profile first', 'err'); return; }
+
+    let editW = null;
+    let editEn = null;
+    if (edit && edit.workoutId) {
+      editW = Store.workoutById(edit.workoutId);
+      editEn = editW ? (editW.entries || []).find(function (x) { return x && x.id === edit.entryId; }) : null;
+      if (!editW || !editEn) { App.toast('Workout not found', 'err'); return; }
+    }
+    const singleEntry = !editW || (editW.entries || []).length === 1;
+
+    const st = {
+      mode: editEn ? (editEn.mode || 'run') : (initialMode || 'run'),
+      effort: editEn && editEn.effort ? editEn.effort : null,
+      footwear: editEn && editEn.footwear ? editEn.footwear : null
+    };
+    const unit = U.unitLabel(App.units());
+
+    function modeChipsHTML() {
+      return CARDIO_MODE_DEFS.map(function (m) {
+        const on = st.mode === m.id;
+        return '<button type="button" class="chip' + (on ? ' active' : '') + '" data-cmode="' + m.id +
+          '" aria-pressed="' + (on ? 'true' : 'false') + '">' + kindGlyph(m.id) + ' ' + m.label + '</button>';
+      }).join('');
+    }
+
+    function effortChipsHTML() {
+      return ['easy', 'moderate', 'hard'].map(function (id) {
+        const on = st.effort === id;
+        return '<button type="button" class="chip' + (on ? ' active' : '') + '" data-ceffort="' + id +
+          '" aria-pressed="' + (on ? 'true' : 'false') + '">' + capStr(id) + '</button>';
+      }).join('');
+    }
+
+    const content = document.createElement('div');
+    content.innerHTML =
+      '<div class="chip-row" data-slot="cmodes" style="margin-bottom:12px">' + modeChipsHTML() + '</div>' +
+      (singleEntry
+        ? '<div class="field"><label for="cl-date">Date</label>' +
+          '<input class="input" id="cl-date" type="date" value="' +
+          U.esc(editW ? editW.date : U.todayStr()) + '"></div>'
+        : '') +
+      '<div class="field-row">' +
+      '<div class="field"><label for="cl-dist">Distance (<span id="cl-du">' + distUnit() + '</span>)</label>' +
+      '<input class="input" id="cl-dist" type="text" inputmode="decimal" autocomplete="off" ' +
+      'style="' + BIG_NUM_STYLE + '" value="' +
+      (editEn && editEn.distanceKm ? U.esc(String(Math.round(kmToDist(editEn.distanceKm) * 100) / 100)) : '') + '"></div>' +
+      '<div class="field"><label for="cl-dur">Duration (min)</label>' +
+      '<input class="input" id="cl-dur" type="text" inputmode="decimal" autocomplete="off" ' +
+      'style="' + BIG_NUM_STYLE + '" value="' +
+      (editEn && editEn.durationMin ? U.esc(String(editEn.durationMin)) : '') + '"></div></div>' +
+      '<p class="muted" id="cl-pace" style="font-size:13px;min-height:18px;margin:-4px 2px 10px;font-variant-numeric:tabular-nums"></p>' +
+      '<div id="cl-ruck" hidden>' +
+      '<div class="field-row">' +
+      '<div class="field"><label for="cl-dry">Dry load (' + U.esc(unit) + ')</label>' +
+      '<input class="input" id="cl-dry" type="text" inputmode="decimal" autocomplete="off" value="' +
+      (editEn && editEn.loadKgDry ? U.esc(dispW(editEn.loadKgDry)) : '') + '"></div>' +
+      '<div class="field"><label for="cl-total">Total load (' + U.esc(unit) + ')</label>' +
+      '<input class="input" id="cl-total" type="text" inputmode="decimal" autocomplete="off" value="' +
+      (editEn && editEn.loadKgTotal ? U.esc(dispW(editEn.loadKgTotal)) : '') + '"></div></div>' +
+      '<div class="field"><label>Footwear</label><div class="segmented block" data-slot="footwear">' +
+      ['boots', 'trainers'].map(function (id) {
+        const on = st.footwear === id;
+        return '<button type="button" class="seg' + (on ? ' active' : '') + '" data-cfoot="' + id +
+          '" aria-pressed="' + (on ? 'true' : 'false') + '">' + capStr(id) + '</button>';
+      }).join('') + '</div></div></div>' +
+      '<div class="field-row">' +
+      '<div class="field"><label for="cl-hr">Avg HR</label>' +
+      '<input class="input" id="cl-hr" type="text" inputmode="numeric" autocomplete="off" placeholder="bpm" value="' +
+      (editEn && editEn.avgHR ? U.esc(String(editEn.avgHR)) : '') + '"></div>' +
+      '<div class="field"><label for="cl-maxhr">Max HR</label>' +
+      '<input class="input" id="cl-maxhr" type="text" inputmode="numeric" autocomplete="off" placeholder="bpm" value="' +
+      (editEn && editEn.maxHR ? U.esc(String(editEn.maxHR)) : '') + '"></div></div>' +
+      '<div class="field" id="cl-effort-wrap"><label>Effort</label>' +
+      '<div class="chip-row" data-slot="ceffort">' + effortChipsHTML() + '</div>' +
+      '<p class="hint">Rough gauge for sessions without a heart-rate monitor.</p></div>' +
+      '<div class="field"><label for="cl-surface">Surface</label>' +
+      '<select class="select" id="cl-surface">' +
+      '<option value="">—</option>' +
+      ['road', 'trail', 'track', 'treadmill', 'sand'].map(function (s) {
+        return '<option value="' + s + '"' + (editEn && editEn.surface === s ? ' selected' : '') + '>' +
+          capStr(s) + '</option>';
+      }).join('') + '</select></div>' +
+      '<div id="cl-long" hidden><div class="field-row">' +
+      '<div class="field"><label for="cl-temp">Temp (°C)</label>' +
+      '<input class="input" id="cl-temp" type="text" inputmode="decimal" autocomplete="off" value="' +
+      (editEn && typeof editEn.tempC === 'number' ? U.esc(String(editEn.tempC)) : '') + '"></div>' +
+      '<div class="field"><label for="cl-fluid">Fluid (ml)</label>' +
+      '<input class="input" id="cl-fluid" type="text" inputmode="numeric" autocomplete="off" value="' +
+      (editEn && editEn.fluidMl ? U.esc(String(editEn.fluidMl)) : '') + '"></div></div>' +
+      '<p class="hint" style="margin-top:-4px">Long session — log heat and fluids so trends mean something.</p></div>' +
+      '<div class="field"><label for="cl-notes">Notes</label>' +
+      '<textarea class="input" id="cl-notes" rows="2" placeholder="Optional">' +
+      U.esc((editEn && editEn.notes) || '') + '</textarea></div>' +
+      '<div id="cl-guard"></div>';
+
+    function $id(sel) { return U.$(sel, content); }
+
+    function readDur() {
+      const v = parseFloat($id('#cl-dur').value);
+      return isNaN(v) || v <= 0 ? 0 : v;
+    }
+
+    function readDate() {
+      const el = $id('#cl-date');
+      const v = el ? el.value : '';
+      if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
+      return editW ? editW.date : U.todayStr();
+    }
+
+    function buildEntry() {
+      const en = { type: 'cardio', mode: st.mode, durationMin: readDur() };
+      if (editEn) {
+        en.id = editEn.id;
+        // preserve fields written by newer app versions
+        for (const k in editEn) {
+          if (CARDIO_KNOWN_KEYS.indexOf(k) < 0) en[k] = editEn[k];
+        }
+        if (editEn.footNote) en.footNote = editEn.footNote;
+      } else {
+        en.id = U.uid('en');
+      }
+      const km = distToKm($id('#cl-dist').value);
+      if (km > 0) en.distanceKm = Math.round(km * 1000) / 1000;
+      const hr = parseInt($id('#cl-hr').value, 10);
+      if (!isNaN(hr) && hr > 0) en.avgHR = hr;
+      const mhr = parseInt($id('#cl-maxhr').value, 10);
+      if (!isNaN(mhr) && mhr > 0) en.maxHR = mhr;
+      if (!en.avgHR && st.effort) en.effort = st.effort;
+      const surf = $id('#cl-surface').value;
+      if (surf) en.surface = surf;
+      if (en.durationMin >= 90) {
+        const t = parseFloat($id('#cl-temp').value);
+        if (!isNaN(t)) en.tempC = t;
+        const f = parseInt($id('#cl-fluid').value, 10);
+        if (!isNaN(f) && f > 0) en.fluidMl = f;
+      }
+      if (st.mode === 'ruck') {
+        const dry = U.displayToKg($id('#cl-dry').value, App.units());
+        if (dry > 0) en.loadKgDry = Math.round(dry * 100) / 100;
+        const tot = U.displayToKg($id('#cl-total').value, App.units());
+        if (tot > 0) en.loadKgTotal = Math.round(tot * 100) / 100;
+        if (st.footwear) en.footwear = st.footwear;
+      }
+      const notes = $id('#cl-notes').value.trim();
+      if (notes) en.notes = notes;
+      return en;
+    }
+
+    let lastWarns = [];
+
+    function sync() {
+      const dur = readDur();
+      const km = distToKm($id('#cl-dist').value);
+      $id('#cl-pace').textContent = km > 0 && dur > 0
+        ? 'Pace ' + paceStr(dur, km) + ' · ' + fmtKm(km) + ' in ' + U.fmtDuration(dur)
+        : '';
+      $id('#cl-ruck').hidden = st.mode !== 'ruck';
+      $id('#cl-long').hidden = dur < 90;
+      const hasHR = parseInt($id('#cl-hr').value, 10) > 0;
+      $id('#cl-effort-wrap').style.display = hasHR ? 'none' : '';
+      if (!editEn) {
+        lastWarns = guardrailsFor({ date: readDate(), entries: [buildEntry()] }, u);
+        $id('#cl-guard').innerHTML = guardHTML(lastWarns);
+      }
+    }
+
+    U.on(content, 'click', '[data-cmode]', function (e, chip) {
+      st.mode = chip.getAttribute('data-cmode');
+      U.$('[data-slot="cmodes"]', content).innerHTML = modeChipsHTML();
+      sync();
+    });
+    U.on(content, 'click', '[data-ceffort]', function (e, chip) {
+      const v = chip.getAttribute('data-ceffort');
+      st.effort = st.effort === v ? null : v;
+      U.$('[data-slot="ceffort"]', content).innerHTML = effortChipsHTML();
+      sync();
+    });
+    U.on(content, 'click', '[data-cfoot]', function (e, btn) {
+      const v = btn.getAttribute('data-cfoot');
+      st.footwear = st.footwear === v ? null : v;
+      U.$$('[data-cfoot]', content).forEach(function (b) {
+        const on = b.getAttribute('data-cfoot') === st.footwear;
+        b.classList.toggle('active', on);
+        b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      });
+    });
+    U.on(content, 'input', 'input, select, textarea', function () { sync(); });
+    sync();
+
+    App.sheet({
+      title: editEn ? 'Edit session' : 'Log cardio',
+      content: content,
+      actions: [
+        { label: 'Cancel', kind: 'ghost' },
+        {
+          label: editEn ? 'Save changes' : 'Save session',
+          kind: 'primary',
+          keepOpen: true,
+          onClick: function (api) {
+            const dur = readDur();
+            if (!dur) { App.toast('Enter a duration', 'err'); focusInput('cl-dur'); return; }
+            const en = buildEntry();
+            const dateStr = readDate();
+
+            if (editEn) {
+              const live = Store.workoutById(editW.id);
+              if (!live) { api.close(); return; }
+              const entries = (live.entries || []).map(function (x) {
+                return x && x.id === editEn.id ? en : x;
+              });
+              const patch = { entries: entries };
+              if (singleEntry) {
+                patch.date = dateStr;
+                patch.durationMin = Math.max(1, Math.round(dur));
+              }
+              Store.updateWorkout(editW.id, patch);
+              api.close();
+              App.toast('Workout updated', 'ok');
+              return;
+            }
+
+            const warns = lastWarns;
+            confirmStops(warns).then(function (ok) {
+              if (!ok) return;
+              const w = Store.addWorkout({
+                userId: u.id,
+                date: dateStr,
+                name: KIND_LABELS[st.mode] || 'Cardio',
+                durationMin: Math.max(1, Math.round(dur)),
+                entries: [en]
+              });
+              api.close();
+              App.toast('Session saved', 'ok');
+              toastWarns(warns);
+              App.navigate('history');
+              openSessionCheckin(w);
+            });
+          }
+        }
+      ]
+    });
+    focusInput('cl-dist');
+  }
+
+  /* ---------- mobility logger ---------- */
+
+  function openMobilityLogger(edit) {
+    const u = user();
+    if (!u) { App.toast('Create a profile first', 'err'); return; }
+
+    let editW = null;
+    let editEn = null;
+    if (edit && edit.workoutId) {
+      editW = Store.workoutById(edit.workoutId);
+      editEn = editW ? (editW.entries || []).find(function (x) { return x && x.id === edit.entryId; }) : null;
+      if (!editW || !editEn) { App.toast('Workout not found', 'err'); return; }
+    }
+    const singleEntry = !editW || (editW.entries || []).length === 1;
+
+    const st = { modality: editEn ? (editEn.modality || 'static') : 'static' };
+    const selected = {};
+    ((editEn && editEn.targetMuscles) || []).forEach(function (m) { selected[m] = true; });
+
+    const content = document.createElement('div');
+    content.innerHTML =
+      (singleEntry
+        ? '<div class="field"><label for="mb-date">Date</label>' +
+          '<input class="input" id="mb-date" type="date" value="' +
+          U.esc(editW ? editW.date : U.todayStr()) + '"></div>'
+        : '') +
+      '<div class="field"><label for="mb-dur">Duration (min)</label>' +
+      '<input class="input" id="mb-dur" type="text" inputmode="decimal" autocomplete="off" ' +
+      'style="' + BIG_NUM_STYLE + '" value="' +
+      (editEn && editEn.durationMin ? U.esc(String(editEn.durationMin)) : '') + '"></div>' +
+      '<div class="field"><label>Modality</label><div class="segmented block">' +
+      MODALITY_DEFS.map(function (m) {
+        const on = st.modality === m.id;
+        return '<button type="button" class="seg' + (on ? ' active' : '') + '" data-modality="' + m.id +
+          '" aria-pressed="' + (on ? 'true' : 'false') + '">' + m.label + '</button>';
+      }).join('') + '</div></div>' +
+      '<div class="field"><label>Target areas — tap the body</label>' +
+      '<div id="mb-map"></div>' +
+      '<p class="hint" id="mb-selected"></p></div>' +
+      '<div class="field"><label for="mb-notes">Notes</label>' +
+      '<textarea class="input" id="mb-notes" rows="2" placeholder="Optional">' +
+      U.esc((editEn && editEn.notes) || '') + '</textarea></div>';
+
+    function selectedLabel() {
+      const ids = Object.keys(selected);
+      return ids.length
+        ? ids.map(muscleLabelOf).join(', ')
+        : 'Nothing selected yet — whole-body session is fine too.';
+    }
+
+    function paintMap() {
+      const el = U.$('#mb-map', content);
+      const values = {};
+      Object.keys(selected).forEach(function (m) { values[m] = 1; });
+      const MM = window.MuscleMap;
+      if (MM && typeof MM.render === 'function') {
+        MM.render(el, {
+          values: values,
+          onSelect: function (m) {
+            if (selected[m]) delete selected[m];
+            else selected[m] = true;
+            paintMap();
+          }
+        });
+      } else {
+        // fallback when the muscle map module is unavailable
+        const muscles = (window.ExerciseDB && ExerciseDB.MUSCLES) || [];
+        el.innerHTML = '<div class="chip-row" style="flex-wrap:wrap">' +
+          muscles.map(function (m) {
+            const on = !!selected[m.id];
+            return '<button type="button" class="chip' + (on ? ' active' : '') + '" data-mtarget="' +
+              U.esc(m.id) + '" aria-pressed="' + (on ? 'true' : 'false') + '">' + U.esc(m.short) + '</button>';
+          }).join('') + '</div>';
+      }
+      U.$('#mb-selected', content).textContent = selectedLabel();
+    }
+
+    U.on(content, 'click', '[data-mtarget]', function (e, chip) {
+      const m = chip.getAttribute('data-mtarget');
+      if (selected[m]) delete selected[m];
+      else selected[m] = true;
+      paintMap();
+    });
+    U.on(content, 'click', '[data-modality]', function (e, btn) {
+      st.modality = btn.getAttribute('data-modality');
+      U.$$('[data-modality]', content).forEach(function (b) {
+        const on = b.getAttribute('data-modality') === st.modality;
+        b.classList.toggle('active', on);
+        b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      });
+    });
+    paintMap();
+
+    App.sheet({
+      title: editEn ? 'Edit mobility' : 'Log mobility',
+      content: content,
+      actions: [
+        { label: 'Cancel', kind: 'ghost' },
+        {
+          label: editEn ? 'Save changes' : 'Save session',
+          kind: 'primary',
+          keepOpen: true,
+          onClick: function (api) {
+            const dur = parseFloat(U.$('#mb-dur', content).value);
+            if (isNaN(dur) || dur <= 0) { App.toast('Enter a duration', 'err'); focusInput('mb-dur'); return; }
+            const dateEl = U.$('#mb-date', content);
+            const dateStr = dateEl && /^\d{4}-\d{2}-\d{2}$/.test(dateEl.value)
+              ? dateEl.value
+              : (editW ? editW.date : U.todayStr());
+            const en = {
+              id: editEn ? editEn.id : U.uid('en'),
+              type: 'mobility',
+              modality: st.modality,
+              durationMin: dur,
+              targetMuscles: Object.keys(selected)
+            };
+            const notes = U.$('#mb-notes', content).value.trim();
+            if (notes) en.notes = notes;
+
+            if (editEn) {
+              const live = Store.workoutById(editW.id);
+              if (!live) { api.close(); return; }
+              const entries = (live.entries || []).map(function (x) {
+                return x && x.id === editEn.id ? en : x;
+              });
+              const patch = { entries: entries };
+              if (singleEntry) {
+                patch.date = dateStr;
+                patch.durationMin = Math.max(1, Math.round(dur));
+              }
+              Store.updateWorkout(editW.id, patch);
+              api.close();
+              App.toast('Workout updated', 'ok');
+              return;
+            }
+
+            const w = Store.addWorkout({
+              userId: u.id,
+              date: dateStr,
+              name: 'Mobility',
+              durationMin: Math.max(1, Math.round(dur)),
+              entries: [en]
+            });
+            api.close();
+            App.toast('Session saved', 'ok');
+            App.navigate('history');
+            openSessionCheckin(w);
+          }
+        }
+      ]
+    });
+    focusInput('mb-dur');
+  }
+
+  /* ---------- durability logger ---------- */
+
+  function durabilityChecklist() {
+    const db = window.ExerciseDB;
+    const list = db && Array.isArray(db.DURABILITY_CHECKLIST) ? db.DURABILITY_CHECKLIST : [];
+    const items = list.filter(function (it) { return it && it.id && exOf(it.id); });
+    if (items.length) return items;
+    // fallback: anything categorized 'durability' in the library
+    const all = db && typeof db.all === 'function' ? db.all() : [];
+    return all.filter(function (x) { return x && x.category === 'durability'; })
+      .map(function (x) { return { id: x.id, slot: 'other' }; });
+  }
+
+  function openDurabilityLogger(edit) {
+    const u = user();
+    if (!u) { App.toast('Create a profile first', 'err'); return; }
+
+    let editW = null;
+    let editEn = null;
+    if (edit && edit.workoutId) {
+      editW = Store.workoutById(edit.workoutId);
+      editEn = editW ? (editW.entries || []).find(function (x) { return x && x.id === edit.entryId; }) : null;
+      if (!editW || !editEn) { App.toast('Workout not found', 'err'); return; }
+    }
+    const singleEntry = !editW || (editW.entries || []).length === 1;
+
+    const picked = {};
+    ((editEn && editEn.items) || []).forEach(function (id) { picked[id] = true; });
+    const checklist = durabilityChecklist();
+
+    function rowsHTML() {
+      if (!checklist.length) {
+        return '<p class="muted" style="font-size:13px;padding:6px 2px">Durability checklist unavailable — update the app to get the built-in drill list.</p>';
+      }
+      // Items on the entry but not on the checklist (older logs, future
+      // checklist revisions) must render and survive a save, not vanish.
+      const extras = ((editEn && editEn.items) || [])
+        .filter(function (id) { return !checklist.some(function (it) { return it.id === id; }); })
+        .map(function (id) { return { id: id, slot: 'other' }; });
+      const bySlot = U.groupBy(checklist.concat(extras), function (it) { return it.slot || 'other'; });
+      let html = '';
+      Object.keys(SLOT_LABELS).forEach(function (slot) {
+        const items = bySlot[slot];
+        if (!items || !items.length) return;
+        html += sectionLabel(SLOT_LABELS[slot]) + '<div class="list">' +
+          items.map(function (it) {
+            const on = !!picked[it.id];
+            return '<button type="button" class="list-row" data-ditem="' + U.esc(it.id) +
+              '" aria-pressed="' + (on ? 'true' : 'false') + '">' +
+              '<div class="body"><div class="title">' + U.esc(exName(it.id)) + '</div></div>' +
+              (on ? '<span class="trailing" style="color:var(--accent)">' + ic().check + '</span>' : '') +
+              '</button>';
+          }).join('') + '</div>';
+      });
+      return html;
+    }
+
+    const content = document.createElement('div');
+    content.innerHTML =
+      (singleEntry
+        ? '<div class="field"><label for="db-date">Date</label>' +
+          '<input class="input" id="db-date" type="date" value="' +
+          U.esc(editW ? editW.date : U.todayStr()) + '"></div>'
+        : '') +
+      '<div class="field"><label for="db-dur">Duration (min) — optional</label>' +
+      '<input class="input" id="db-dur" type="text" inputmode="decimal" autocomplete="off" value="' +
+      (editEn && editEn.durationMin ? U.esc(String(editEn.durationMin)) : '') + '"></div>' +
+      '<div id="db-rows">' + rowsHTML() + '</div>' +
+      '<div class="field" style="margin-top:10px"><label for="db-notes">Notes</label>' +
+      '<textarea class="input" id="db-notes" rows="2" placeholder="Optional">' +
+      U.esc((editEn && editEn.notes) || '') + '</textarea></div>';
+
+    U.on(content, 'click', '[data-ditem]', function (e, row) {
+      const id = row.getAttribute('data-ditem');
+      if (picked[id]) delete picked[id];
+      else picked[id] = true;
+      U.$('#db-rows', content).innerHTML = rowsHTML();
+    });
+
+    App.sheet({
+      title: editEn ? 'Edit durability' : 'Log durability',
+      content: content,
+      actions: [
+        { label: 'Cancel', kind: 'ghost' },
+        {
+          label: editEn ? 'Save changes' : 'Save session',
+          kind: 'primary',
+          keepOpen: true,
+          onClick: function (api) {
+            const knownIds = checklist.map(function (it) { return it.id; });
+            const extraIds = ((editEn && editEn.items) || [])
+              .filter(function (id) { return knownIds.indexOf(id) === -1; });
+            const items = knownIds.concat(extraIds)
+              .filter(function (id) { return picked[id]; });
+            if (!items.length) { App.toast('Tick at least one drill', 'err'); return; }
+            const dateEl = U.$('#db-date', content);
+            const dateStr = dateEl && /^\d{4}-\d{2}-\d{2}$/.test(dateEl.value)
+              ? dateEl.value
+              : (editW ? editW.date : U.todayStr());
+            const dur = parseFloat(U.$('#db-dur', content).value);
+            const en = { id: editEn ? editEn.id : U.uid('en'), type: 'durability', items: items };
+            if (!isNaN(dur) && dur > 0) en.durationMin = dur;
+            const notes = U.$('#db-notes', content).value.trim();
+            if (notes) en.notes = notes;
+
+            if (editEn) {
+              const live = Store.workoutById(editW.id);
+              if (!live) { api.close(); return; }
+              const entries = (live.entries || []).map(function (x) {
+                return x && x.id === editEn.id ? en : x;
+              });
+              const patch = { entries: entries };
+              if (singleEntry) {
+                patch.date = dateStr;
+                if (en.durationMin) patch.durationMin = Math.max(1, Math.round(en.durationMin));
+              }
+              Store.updateWorkout(editW.id, patch);
+              api.close();
+              App.toast('Workout updated', 'ok');
+              return;
+            }
+
+            const w = Store.addWorkout({
+              userId: u.id,
+              date: dateStr,
+              name: 'Durability',
+              durationMin: en.durationMin ? Math.max(1, Math.round(en.durationMin)) : null,
+              entries: [en]
+            });
+            api.close();
+            App.toast('Session saved', 'ok');
+            App.navigate('history');
+            openSessionCheckin(w);
+          }
+        }
+      ]
+    });
+  }
+
+  /* ---------- test quick-log ---------- */
+
+  function openTestLogger(edit) {
+    const u = user();
+    if (!u) { App.toast('Create a profile first', 'err'); return; }
+
+    let editW = null;
+    let editEn = null;
+    if (edit && edit.workoutId) {
+      editW = Store.workoutById(edit.workoutId);
+      editEn = editW ? (editW.entries || []).find(function (x) { return x && x.id === edit.entryId; }) : null;
+      if (!editW || !editEn) { App.toast('Workout not found', 'err'); return; }
+    }
+    const singleEntry = !editW || (editW.entries || []).length === 1;
+
+    const st = {
+      protocol: editEn && testProtocolOf(editEn.protocol) ? editEn.protocol : TEST_PROTOCOLS[0].id
+    };
+
+    function proto() { return testProtocolOf(st.protocol) || TEST_PROTOCOLS[0]; }
+
+    function valueLabel() {
+      const p = proto();
+      if (p.unit === 'time') return 'Time (' + (p.hint || 'mm:ss') + ')';
+      if (p.unit === 'score') return 'Score (points)';
+      return 'Reps';
+    }
+
+    function initialValue() {
+      if (!editEn || !editEn.results || typeof editEn.results.value !== 'number') return '';
+      const p = testProtocolOf(editEn.protocol);
+      return p && p.unit === 'time' ? fmtSec(editEn.results.value) : String(editEn.results.value);
+    }
+
+    const content = document.createElement('div');
+    content.innerHTML =
+      (singleEntry
+        ? '<div class="field"><label for="ts-date">Date</label>' +
+          '<input class="input" id="ts-date" type="date" value="' +
+          U.esc(editW ? editW.date : U.todayStr()) + '"></div>'
+        : '') +
+      '<div class="field"><label for="ts-proto">Protocol</label>' +
+      '<select class="select" id="ts-proto">' +
+      TEST_PROTOCOLS.map(function (p) {
+        return '<option value="' + p.id + '"' + (st.protocol === p.id ? ' selected' : '') + '>' +
+          U.esc(p.label) + '</option>';
+      }).join('') + '</select></div>' +
+      '<div class="field"><label for="ts-value" id="ts-value-label">' + U.esc(valueLabel()) + '</label>' +
+      '<input class="input" id="ts-value" type="text" inputmode="decimal" autocomplete="off" ' +
+      'style="' + BIG_NUM_STYLE + '" placeholder="' + U.esc(proto().unit === 'time' ? (proto().hint || 'mm:ss') : '') +
+      '" value="' + U.esc(initialValue()) + '"></div>' +
+      '<div class="field"><label for="ts-notes">Notes</label>' +
+      '<textarea class="input" id="ts-notes" rows="2" placeholder="Optional">' +
+      U.esc((editEn && editEn.notes) || '') + '</textarea></div>';
+
+    U.$('#ts-proto', content).addEventListener('change', function (e) {
+      st.protocol = e.target.value;
+      U.$('#ts-value-label', content).textContent = valueLabel();
+      U.$('#ts-value', content).placeholder = proto().unit === 'time' ? (proto().hint || 'mm:ss') : '';
+    });
+
+    App.sheet({
+      title: editEn ? 'Edit test' : 'Log a test',
+      content: content,
+      actions: [
+        { label: 'Cancel', kind: 'ghost' },
+        {
+          label: editEn ? 'Save changes' : 'Save test',
+          kind: 'primary',
+          keepOpen: true,
+          onClick: function (api) {
+            const p = proto();
+            const raw = U.$('#ts-value', content).value;
+            let value = null;
+            if (p.unit === 'time') {
+              value = parseTimeToSec(raw, p.plain || 'min');
+              if (value !== null) value = Math.round(value);
+            } else if (p.unit === 'reps') {
+              const n = parseInt(raw, 10);
+              value = isNaN(n) || n < 0 ? null : n;
+            } else {
+              const n = parseFloat(raw);
+              value = isNaN(n) || n < 0 ? null : n;
+            }
+            if (value === null || (p.unit !== 'time' && String(raw).trim() === '')) {
+              App.toast(p.unit === 'time' ? 'Enter a time like 14:30' : 'Enter a number', 'err');
+              focusInput('ts-value');
+              return;
+            }
+            const dateEl = U.$('#ts-date', content);
+            const dateStr = dateEl && /^\d{4}-\d{2}-\d{2}$/.test(dateEl.value)
+              ? dateEl.value
+              : (editW ? editW.date : U.todayStr());
+            const en = {
+              id: editEn ? editEn.id : U.uid('en'),
+              type: 'test',
+              protocol: st.protocol,
+              results: { value: value }
+            };
+            // Keep a cached score only while the underlying value is unchanged;
+            // an edited value makes the old score stale.
+            if (editEn && typeof editEn.score === 'number' &&
+                editEn.results && editEn.results.value === value) {
+              en.score = editEn.score;
+            }
+            if (p.unit === 'score') en.score = value;
+            const notes = U.$('#ts-notes', content).value.trim();
+            if (notes) en.notes = notes;
+            const durMin = p.unit === 'time' && value > 0 ? Math.max(1, Math.round(value / 60)) : null;
+
+            if (editEn) {
+              const live = Store.workoutById(editW.id);
+              if (!live) { api.close(); return; }
+              const entries = (live.entries || []).map(function (x) {
+                return x && x.id === editEn.id ? en : x;
+              });
+              const patch = { entries: entries };
+              if (singleEntry) {
+                patch.date = dateStr;
+                if (durMin) patch.durationMin = durMin;
+              }
+              Store.updateWorkout(editW.id, patch);
+              api.close();
+              App.toast('Workout updated', 'ok');
+              return;
+            }
+
+            const warns = guardrailsFor({ date: dateStr, entries: [en] }, u);
+            confirmStops(warns).then(function (ok) {
+              if (!ok) return;
+              const w = Store.addWorkout({
+                userId: u.id,
+                date: dateStr,
+                name: p.label,
+                durationMin: durMin,
+                entries: [en]
+              });
+              api.close();
+              App.toast('Test logged', 'ok');
+              toastWarns(warns);
+              App.navigate('history');
+              openSessionCheckin(w);
+            });
+          }
+        }
+      ]
+    });
+    focusInput('ts-value');
+  }
+
+  /* ---------- typed summaries / detail blocks ---------- */
+
+  function typedSummaryBits(w) {
+    const bits = [];
+    let durShown = false;
+    (w.entries || []).forEach(function (en) {
+      if (!en || isLiftEntry(en)) return;
+      if (en.type === 'cardio') {
+        if (en.distanceKm) {
+          bits.push(fmtKm(en.distanceKm));
+          const p = paceStr(en.durationMin, en.distanceKm);
+          if (p) bits.push(p);
+        } else if (en.durationMin) {
+          bits.push(U.fmtDuration(en.durationMin));
+          durShown = true;
+        }
+        if (en.mode === 'ruck') {
+          const L = en.loadKgTotal || en.loadKgDry;
+          if (L) bits.push(App.fmtWeight(L, { precise: true }) + ' load');
+        }
+      } else if (en.type === 'mobility') {
+        if (en.durationMin) { bits.push(U.fmtDuration(en.durationMin)); durShown = true; }
+        const n = (en.targetMuscles || []).length;
+        if (n) bits.push(n + ' area' + (n === 1 ? '' : 's'));
+      } else if (en.type === 'durability') {
+        const n = (en.items || []).length;
+        if (n) bits.push(n + ' drill' + (n === 1 ? '' : 's'));
+        if (en.durationMin) { bits.push(U.fmtDuration(en.durationMin)); durShown = true; }
+      } else if (en.type === 'test') {
+        const p = testProtocolOf(en.protocol);
+        const v = fmtTestValue(en.protocol, en.results, en.score);
+        bits.push((p ? p.label : String(en.protocol || 'Test')) + (v ? ' — ' + v : ''));
+      }
+    });
+    return { bits: bits, durShown: durShown };
+  }
+
+  // Kind-appropriate one-liner; pure-lift workouts keep the v1 summary verbatim.
+  function workoutSubAny(w) {
+    const typed = typedEntriesOf(w);
+    if (!typed.length) return workoutSub(w);
+    const r = typedSummaryBits(w);
+    const bits = r.bits;
+    const lifts = liftEntriesOf(w);
+    if (lifts.length) {
+      bits.push(lifts.length + ' lift' + (lifts.length === 1 ? '' : 's'));
+      const vol = Analytics.workoutVolume(w);
+      if (vol > 0) bits.push(fmtVol(vol));
+    }
+    if (!r.durShown && w.durationMin) bits.push(U.fmtDuration(w.durationMin));
+    return bits.join(' · ');
+  }
+
+  function kvRow(label, value) {
+    if (value === undefined || value === null || value === '') return '';
+    return '<div style="display:flex;justify-content:space-between;gap:12px;padding:7px 0;' +
+      'border-bottom:1px solid var(--border);font-size:14px">' +
+      '<span style="color:var(--text-2);flex:none">' + U.esc(label) + '</span>' +
+      '<span style="font-weight:500;text-align:right;overflow-wrap:anywhere">' + U.esc(value) + '</span></div>';
+  }
+
+  function typedEntryDetailHTML(en) {
+    let title = 'Session entry';
+    let rows = '';
+    if (en.type === 'cardio') {
+      title = KIND_LABELS[en.mode] || 'Cardio';
+      rows += kvRow('Distance', en.distanceKm ? fmtKm(en.distanceKm) : '');
+      rows += kvRow('Duration', en.durationMin ? U.fmtDuration(en.durationMin) : '');
+      rows += kvRow('Pace', paceStr(en.durationMin, en.distanceKm));
+      if (en.loadKgDry) rows += kvRow('Dry load', App.fmtWeight(en.loadKgDry, { precise: true }));
+      if (en.loadKgTotal) rows += kvRow('Total load', App.fmtWeight(en.loadKgTotal, { precise: true }));
+      if (en.avgHR) rows += kvRow('Avg HR', en.avgHR + ' bpm');
+      if (en.maxHR) rows += kvRow('Max HR', en.maxHR + ' bpm');
+      if (en.effort) rows += kvRow('Effort', capStr(en.effort));
+      if (en.surface) rows += kvRow('Surface', capStr(en.surface));
+      if (en.footwear) rows += kvRow('Footwear', capStr(en.footwear));
+      if (typeof en.tempC === 'number') rows += kvRow('Temp', en.tempC + ' °C');
+      if (en.fluidMl) rows += kvRow('Fluid', en.fluidMl + ' ml');
+      if (en.footNote) rows += kvRow('Foot check', en.footNote);
+    } else if (en.type === 'mobility') {
+      title = 'Mobility';
+      const mod = MODALITY_DEFS.find(function (m) { return m.id === en.modality; });
+      rows += kvRow('Modality', mod ? mod.label : capStr(en.modality));
+      rows += kvRow('Duration', en.durationMin ? U.fmtDuration(en.durationMin) : '');
+      const areas = (en.targetMuscles || []).map(muscleLabelOf).join(', ');
+      rows += kvRow('Target areas', areas || 'Whole body');
+    } else if (en.type === 'durability') {
+      title = 'Durability';
+      rows += kvRow('Drills', (en.items || []).map(exName).join(', '));
+      rows += kvRow('Duration', en.durationMin ? U.fmtDuration(en.durationMin) : '');
+    } else if (en.type === 'test') {
+      title = 'Test';
+      const p = testProtocolOf(en.protocol);
+      rows += kvRow('Protocol', p ? p.label : String(en.protocol || ''));
+      rows += kvRow('Result', fmtTestValue(en.protocol, en.results, en.score));
+      if (typeof en.score === 'number') rows += kvRow('Score', en.score + ' pts');
+    } else {
+      rows += kvRow('Type', String(en.type));
+      rows += '<p class="muted" style="font-size:13px;margin:6px 0">Logged by a newer version of IronLog — kept as-is.</p>';
+    }
+    if (en.notes) rows += kvRow('Notes', en.notes);
+    return '<div class="card" style="padding:12px 14px;margin-bottom:12px">' +
+      '<div style="display:flex;align-items:center;gap:8px;font-weight:600;margin-bottom:2px">' +
+      kindGlyph(entryKindOf(en)) + '<span>' + U.esc(title) + '</span></div>' + rows + '</div>';
+  }
+
+  /* ---------- typed / mixed workout editing ---------- */
+
+  // Entry-type dispatch around the (unchanged) lift editor.
+  function dispatchWorkoutEdit(id) {
+    const w = Store.workoutById(id);
+    if (!w) return;
+    const typed = typedEntriesOf(w);
+    if (!typed.length) { openWorkoutEdit(id); return; }
+    if (typed.length === 1 && (w.entries || []).length === 1) {
+      const en = typed[0];
+      if (en.type === 'cardio') { openCardioLogger(en.mode, { workoutId: w.id, entryId: en.id }); return; }
+      if (en.type === 'mobility') { openMobilityLogger({ workoutId: w.id, entryId: en.id }); return; }
+      if (en.type === 'durability') { openDurabilityLogger({ workoutId: w.id, entryId: en.id }); return; }
+      if (en.type === 'test') { openTestLogger({ workoutId: w.id, entryId: en.id }); return; }
+    }
+    openMixedWorkoutEdit(w.id);
+  }
+
+  function typedEntrySummaryLine(en) {
+    if (en.type === 'cardio') {
+      const parts = [];
+      if (en.distanceKm) parts.push(fmtKm(en.distanceKm));
+      if (en.durationMin) parts.push(U.fmtDuration(en.durationMin));
+      return parts.join(' · ') || 'Cardio session';
+    }
+    if (en.type === 'mobility') return (en.durationMin ? U.fmtDuration(en.durationMin) + ' · ' : '') + 'mobility';
+    if (en.type === 'durability') return ((en.items || []).length || 0) + ' drills';
+    if (en.type === 'test') return fmtTestValue(en.protocol, en.results, en.score) || 'test';
+    return 'Kept as-is';
+  }
+
+  // Editor for workouts mixing typed entries with lifts (or holding several
+  // typed entries). Lift entries reuse mountEditor on a lift-only model; typed
+  // entries edit through their own forms and are merged back in order on save.
+  function openMixedWorkoutEdit(id) {
+    const w = Store.workoutById(id);
+    if (!w) return;
+    const lifts = liftEntriesOf(w);
+    const typed = typedEntriesOf(w);
+    const model = JSON.parse(JSON.stringify({
+      name: w.name, date: w.date, notes: w.notes || '', entries: lifts
+    }));
+
+    const content = document.createElement('div');
+    content.innerHTML =
+      '<div class="field-row">' +
+      '<div class="field" style="flex:2"><label for="me-name">Name</label>' +
+      '<input class="input" id="me-name" autocomplete="off" value="' + U.esc(model.name) + '"></div>' +
+      '<div class="field" style="flex:1"><label for="me-date">Date</label>' +
+      '<input class="input" id="me-date" type="date" value="' + U.esc(model.date) + '"></div></div>' +
+      (typed.length
+        ? sectionLabel('Session entries') + '<div class="list" style="margin-bottom:12px">' +
+          typed.map(function (en) {
+            const editable = ['cardio', 'mobility', 'durability', 'test'].indexOf(en.type) >= 0;
+            return '<div class="list-row">' +
+              '<span class="leading plain">' + kindGlyph(entryKindOf(en)) + '</span>' +
+              '<div class="body"><div class="title">' + U.esc(KIND_LABELS[entryKindOf(en)] || capStr(en.type)) + '</div>' +
+              '<div class="sub">' + U.esc(typedEntrySummaryLine(en)) + '</div></div>' +
+              (editable
+                ? '<button type="button" class="btn ghost small" data-tedit="' + U.esc(en.id || '') + '">' +
+                  ic().edit + ' Edit</button>'
+                : '<span class="trailing muted" style="font-size:12px">Kept as-is</span>') +
+              '</div>';
+          }).join('') + '</div>'
+        : '') +
+      (lifts.length ? sectionLabel('Lifts') : '') +
+      '<div id="me-entries" style="display:flex;flex-direction:column;gap:12px"></div>' +
+      '<div style="margin:10px 0"><button type="button" class="btn ghost" id="me-addex" style="width:100%">' +
+      ic().plus + ' Add exercise</button></div>' +
+      '<div class="field"><label for="me-notes">Notes</label>' +
+      '<textarea class="input" id="me-notes" rows="2">' + U.esc(model.notes) + '</textarea></div>';
+
+    const editor = mountEditor(U.$('#me-entries', content), {
+      mode: 'edit',
+      model: model,
+      persist: function () {},
+      prev: function (exId) { return prevSetsFor(w.userId, exId, { excludeId: w.id, maxDate: w.date }); }
+    });
+
+    U.$('#me-name', content).addEventListener('input', function (e) { model.name = e.target.value; });
+    U.$('#me-date', content).addEventListener('input', function (e) { model.date = e.target.value; });
+    U.$('#me-notes', content).addEventListener('input', function (e) { model.notes = e.target.value; });
+    U.$('#me-addex', content).addEventListener('click', function () {
+      openExercisePicker({
+        title: 'Add exercise',
+        multi: true,
+        onPick: function (ids) {
+          ids.forEach(function (exId) { model.entries.push(newEntry(exId, 3)); });
+          editor.repaint();
+        }
+      });
+    });
+    U.on(content, 'click', '[data-tedit]', function (e, btn) {
+      const enId = btn.getAttribute('data-tedit');
+      const live = Store.workoutById(w.id);
+      const en = live ? (live.entries || []).find(function (x) { return x && x.id === enId; }) : null;
+      if (!en) return;
+      if (en.type === 'cardio') openCardioLogger(en.mode, { workoutId: w.id, entryId: en.id });
+      else if (en.type === 'mobility') openMobilityLogger({ workoutId: w.id, entryId: en.id });
+      else if (en.type === 'durability') openDurabilityLogger({ workoutId: w.id, entryId: en.id });
+      else if (en.type === 'test') openTestLogger({ workoutId: w.id, entryId: en.id });
+    });
+
+    App.sheet({
+      title: 'Edit workout',
+      content: content,
+      actions: [
+        { label: 'Cancel', kind: 'ghost' },
+        {
+          label: 'Save changes',
+          kind: 'primary',
+          onClick: function () {
+            // clean the edited lift entries exactly like the lift-only editor
+            const cleaned = {};
+            const cleanedOrder = [];
+            model.entries.forEach(function (en) {
+              if (!en.exerciseId) return;
+              const sets = (en.sets || [])
+                .filter(function (s) { return (s.reps || 0) > 0; })
+                .map(function (s) {
+                  return {
+                    weightKg: s.weightKg || 0,
+                    reps: s.reps || 0,
+                    type: s.type === 'warmup' ? 'warmup' : 'work',
+                    rpe: s.rpe === null || s.rpe === undefined ? null : s.rpe
+                  };
+                });
+              if (!sets.length) return;
+              cleaned[en.id] = { id: en.id, exerciseId: en.exerciseId, notes: en.notes || '', sets: sets };
+              cleanedOrder.push(en.id);
+            });
+            // reassemble in original order: typed entries come fresh from the
+            // store (their edits save directly), lifts from the editor model
+            const fresh = Store.workoutById(w.id);
+            const base = fresh ? (fresh.entries || []) : (w.entries || []);
+            const used = {};
+            const entries = [];
+            base.forEach(function (en) {
+              if (!en) return;
+              if (isLiftEntry(en)) {
+                if (en.id && cleaned[en.id]) { entries.push(cleaned[en.id]); used[en.id] = true; }
+              } else {
+                entries.push(en);
+              }
+            });
+            cleanedOrder.forEach(function (enId) {
+              if (!used[enId]) entries.push(cleaned[enId]);
+            });
+            Store.updateWorkout(w.id, {
+              name: model.name.trim() || w.name,
+              date: /^\d{4}-\d{2}-\d{2}$/.test(model.date) ? model.date : w.date,
+              notes: model.notes,
+              entries: entries
+            });
+            App.toast('Workout updated', 'ok');
+          }
+        }
+      ]
+    });
+  }
+
+  /* ======================================================================
      LOG view
      ====================================================================== */
 
@@ -944,7 +2348,7 @@
       // honor deep-link params
       if (params && params.repeat) {
         const w = Store.workoutById(params.repeat);
-        if (w) { beginFromWorkout(w); App.navigate('log'); return; }
+        if (w && liftEntriesOf(w).length) { beginFromWorkout(repeatableView(w)); App.navigate('log'); return; }
       }
       if (params && params.template) {
         const t = Store.templatesFor(u.id).find(function (x) { return x.id === params.template; });
@@ -991,13 +2395,15 @@
   /* ---------- state A: start screen ---------- */
 
   function renderStartScreen(container, u) {
-    const last = Store.workoutsFor(u.id)[0] || null;
+    // 'Repeat last workout' = most recent workout WITH lift entries (v2)
+    const last = Store.workoutsFor(u.id).find(function (w) { return liftEntriesOf(w).length > 0; }) || null;
     const templates = Store.templatesFor(u.id).slice()
       .sort(function (a, b) { return (b.updatedAt || 0) - (a.updatedAt || 0); });
 
     let html = '<div class="view-head"><h1>Workout</h1></div>' +
       '<button type="button" class="btn primary" id="lg-start" style="width:100%;min-height:54px;font-size:16px">' +
-      ic().plus + ' Start empty workout</button>';
+      ic().plus + ' Start empty workout</button>' +
+      kindChipRowHTML(u, false);
 
     if (last) {
       const sets = Analytics.workoutSets(last);
@@ -1040,7 +2446,14 @@
     });
     U.on(container, 'click', '[data-repeat]', function (e, btn) {
       const w = Store.workoutById(btn.getAttribute('data-repeat'));
-      if (w) { beginFromWorkout(w); App.rerender(); }
+      if (w) { beginFromWorkout(repeatableView(w)); App.rerender(); }
+    });
+    U.on(container, 'click', '[data-kind]', function (e, chip) {
+      openKindLogger(chip.getAttribute('data-kind'));
+    });
+    U.on(container, 'click', '#lg-more', function () {
+      const row = U.$('#lg-kinds', container);
+      if (row) row.outerHTML = kindChipRowHTML(u, true);
     });
     U.on(container, 'click', '[data-tstart]', function (e, btn) {
       const t = Store.templatesFor(u.id).find(function (x) { return x.id === btn.getAttribute('data-tstart'); });
@@ -1249,8 +2662,22 @@
       '<div class="field"><label for="fs-notes">Notes</label>' +
       '<textarea class="input" id="fs-notes" rows="2" placeholder="Optional">' + U.esc(draft.notes || '') + '</textarea></div>';
 
+    // v2: session RPE + feel for everyone; check-in question + guardrails in
+    // performance mode only.
+    const finishUser = user();
+    const perf = perfMode(finishUser);
+    const sel = { rpe: null, feel: null };
+    html += rpeFeelHTML(sel);
+    if (perf) {
+      html += '<div class="field"><label for="fs-checkin">How did that feel?</label>' +
+        '<textarea class="input" id="fs-checkin" rows="2" placeholder="One line — optional"></textarea></div>';
+    }
+    const warns = guardrailsFor({ date: draft.date, entries: entries }, finishUser);
+    html += guardHTML(warns);
+
     const content = document.createElement('div');
     content.innerHTML = html;
+    wireRpeFeel(content, sel);
 
     App.sheet({
       title: 'Finish workout',
@@ -1260,22 +2687,43 @@
         {
           label: 'Save workout',
           kind: 'primary',
-          onClick: function () {
-            if (!draft) return;
-            const endedAt = Date.now();
-            Store.addWorkout({
-              userId: draft.userId,
-              date: draft.date,
-              name: U.$('#fs-name', content).value.trim() || draft.name || defaultDraftName(),
-              notes: U.$('#fs-notes', content).value,
-              startedAt: draft.startedAt,
-              endedAt: endedAt,
-              durationMin: Math.max(1, Math.round((endedAt - draft.startedAt) / 60000)),
-              entries: entries
-            });
-            clearDraft();
-            App.navigate('history');
-            App.toast('Workout saved', 'ok');
+          keepOpen: true,
+          onClick: function (api) {
+            if (!draft) { api.close(); return; }
+            const doSave = function () {
+              if (!draft) { api.close(); return; }
+              const endedAt = Date.now();
+              const answerEl = U.$('#fs-checkin', content);
+              const answer = perf && answerEl ? answerEl.value.trim() : '';
+              const payload = {
+                userId: draft.userId,
+                date: draft.date,
+                name: U.$('#fs-name', content).value.trim() || draft.name || defaultDraftName(),
+                notes: U.$('#fs-notes', content).value,
+                startedAt: draft.startedAt,
+                endedAt: endedAt,
+                durationMin: Math.max(1, Math.round((endedAt - draft.startedAt) / 60000)),
+                entries: entries
+              };
+              if (sel.rpe) payload.rpe = sel.rpe;
+              if (sel.feel) payload.feel = sel.feel;
+              if (answer) payload.checkin = answer;
+              const saved = Store.addWorkout(payload);
+              if (perf && answer) {
+                Store.addJournalEntry({
+                  userId: saved.userId,
+                  date: saved.date,
+                  source: 'checkin',
+                  entry: kindOfWorkout(saved) + ' ' + saved.date + ': ' + answer
+                });
+              }
+              clearDraft();
+              api.close();
+              App.navigate('history');
+              App.toast('Workout saved', 'ok');
+              toastWarns(warns);
+            };
+            confirmStops(warns).then(function (ok) { if (ok) doSave(); });
           }
         }
       ]
@@ -1342,8 +2790,10 @@
           '<b style="font-size:15px">' + d.getDate() + '</b>' +
           '<span style="font-size:9px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted)">' +
           U.esc(U.fmtDate(w.date).split(' ')[0]) + '</span></span>' +
-          '<div class="body"><div class="title">' + U.esc(w.name) + '</div>' +
-          '<div class="sub">' + U.esc(workoutSub(w)) + '</div></div>' +
+          '<div class="body"><div class="title" style="display:flex;align-items:center;gap:6px">' +
+          kindGlyph(kindOfWorkout(w)) + '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' +
+          U.esc(w.name) + '</span></div>' +
+          '<div class="sub">' + U.esc(workoutSubAny(w)) + '</div></div>' +
           '<span class="trailing">' +
           (prCount ? '<span class="badge orange">🏆 ' + prCount + '</span>' : '') +
           '<span class="chevron">' + ic().chevron + '</span></span></button>';
@@ -1366,25 +2816,47 @@
   function openWorkoutDetail(id) {
     const w = Store.workoutById(id);
     if (!w) return;
+    const lifts = liftEntriesOf(w);
+    const typed = typedEntriesOf(w);
 
-    let html = '<p class="muted" style="font-size:13px;margin-bottom:12px">' +
-      U.esc(U.fmtDateLong(w.date)) + ' · ' + U.esc(workoutSub(w)) + '</p>';
+    let html = '<p class="muted" style="font-size:13px;margin-bottom:12px;display:flex;align-items:center;gap:6px">' +
+      kindGlyph(kindOfWorkout(w)) + '<span>' +
+      U.esc(U.fmtDateLong(w.date)) + ' · ' + U.esc(workoutSubAny(w)) + '</span></p>';
 
-    html += '<div class="table-wrap"><table class="table"><thead><tr>' +
-      '<th>Exercise</th><th>Sets (' + U.esc(U.unitLabel(App.units())) + ' × reps)</th><th class="num">Volume</th>' +
-      '</tr></thead><tbody>' +
-      w.entries.map(function (en) {
-        const vol = U.sum(en.sets || [], Analytics.setVolume);
-        return '<tr><td>' + U.esc(exName(en.exerciseId)) + '</td>' +
-          '<td style="white-space:normal">' + U.esc(setsString(en.sets)) + '</td>' +
-          '<td class="num">' + U.esc(fmtVol(vol)) + '</td></tr>';
-      }).join('') + '</tbody></table></div>';
+    if (typed.length) {
+      html += typed.map(typedEntryDetailHTML).join('');
+    }
+
+    if (lifts.length) {
+      html += '<div class="table-wrap"><table class="table"><thead><tr>' +
+        '<th>Exercise</th><th>Sets (' + U.esc(U.unitLabel(App.units())) + ' × reps)</th><th class="num">Volume</th>' +
+        '</tr></thead><tbody>' +
+        lifts.map(function (en) {
+          const vol = U.sum(en.sets || [], Analytics.setVolume);
+          return '<tr><td>' + U.esc(exName(en.exerciseId)) + '</td>' +
+            '<td style="white-space:normal">' + U.esc(setsString(en.sets)) + '</td>' +
+            '<td class="num">' + U.esc(fmtVol(vol)) + '</td></tr>';
+        }).join('') + '</tbody></table></div>';
+    }
+
+    if (w.rpe || w.feel || w.checkin) {
+      const feelDef = FEEL_DEFS.find(function (f) { return f.id === w.feel; });
+      const bits = [];
+      if (w.rpe) bits.push('RPE ' + w.rpe);
+      if (feelDef) bits.push('Felt ' + feelDef.label.toLowerCase());
+      html += sectionLabel('Session') +
+        '<p style="font-size:14px;color:var(--text-2)">' + U.esc(bits.join(' · ')) +
+        (w.checkin ? (bits.length ? '<br>' : '') + '“' + U.esc(w.checkin) + '”' : '') + '</p>';
+    }
 
     if (w.notes) {
       html += sectionLabel('Notes') +
         '<p style="font-size:14px;color:var(--text-2);white-space:pre-wrap">' + U.esc(w.notes) + '</p>';
     }
-    const exNotes = w.entries.filter(function (en) { return en.notes; });
+    // Lift entries only — typed entries render their notes in their own card.
+    const exNotes = w.entries.filter(function (en) {
+      return en.notes && (!en.type || en.type === 'lift');
+    });
     if (exNotes.length) {
       html += sectionLabel('Exercise notes') + exNotes.map(function (en) {
         return '<p style="font-size:13px;color:var(--text-2);margin-bottom:6px"><b>' +
@@ -1392,48 +2864,52 @@
       }).join('');
     }
 
+    const actions = [
+      {
+        label: 'Delete',
+        kind: 'danger',
+        onClick: function () {
+          App.confirm({
+            title: 'Delete workout?',
+            message: '“' + w.name + '” on ' + U.fmtDateLong(w.date) + ' will be permanently deleted.',
+            danger: true
+          }).then(function (ok) {
+            if (ok) {
+              Store.deleteWorkout(w.id);
+              App.toast('Workout deleted');
+            }
+          });
+        }
+      },
+      { label: 'Edit', kind: 'ghost', onClick: function () { dispatchWorkoutEdit(w.id); } }
+    ];
+    if (lifts.length) {
+      actions.push({
+        label: 'Repeat',
+        kind: 'primary',
+        onClick: function () {
+          const existing = loadDraft();
+          if (existing) {
+            App.confirm({
+              title: 'Replace workout in progress?',
+              message: 'There is already an unfinished workout. Starting this one will discard it.',
+              danger: true,
+              confirmLabel: 'Replace'
+            }).then(function (ok) {
+              if (ok) { beginFromWorkout(repeatableView(w)); App.navigate('log'); }
+            });
+          } else {
+            beginFromWorkout(repeatableView(w));
+            App.navigate('log');
+          }
+        }
+      });
+    }
+
     App.sheet({
       title: w.name,
       content: html,
-      actions: [
-        {
-          label: 'Delete',
-          kind: 'danger',
-          onClick: function () {
-            App.confirm({
-              title: 'Delete workout?',
-              message: '“' + w.name + '” on ' + U.fmtDateLong(w.date) + ' will be permanently deleted.',
-              danger: true
-            }).then(function (ok) {
-              if (ok) {
-                Store.deleteWorkout(w.id);
-                App.toast('Workout deleted');
-              }
-            });
-          }
-        },
-        { label: 'Edit', kind: 'ghost', onClick: function () { openWorkoutEdit(w.id); } },
-        {
-          label: 'Repeat',
-          kind: 'primary',
-          onClick: function () {
-            const existing = loadDraft();
-            if (existing) {
-              App.confirm({
-                title: 'Replace workout in progress?',
-                message: 'There is already an unfinished workout. Starting this one will discard it.',
-                danger: true,
-                confirmLabel: 'Replace'
-              }).then(function (ok) {
-                if (ok) { beginFromWorkout(w); App.navigate('log'); }
-              });
-            } else {
-              beginFromWorkout(w);
-              App.navigate('log');
-            }
-          }
-        }
-      ]
+      actions: actions
     });
   }
 

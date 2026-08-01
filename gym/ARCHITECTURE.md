@@ -371,3 +371,228 @@ tabbar. Focus-visible rings on all interactive elements. Subtle transitions
 - Fully usable at 375px wide and at 1440px.
 - Analytics functions are pure and unit-testable in Node with a `window` stub.
 - Everything keyboard-reachable; escape closes modals; labels on inputs.
+
+---
+
+# V2 CONTRACT ADDENDUM — "Capability" (P1)
+
+Everything above still binds. This addendum extends it; where it conflicts, the
+addendum wins. schemaVersion becomes 2 (a marker only — reading is governed by
+permanent read-time invariants, never a one-shot migration).
+
+## Read-time invariants (permanent, applied in load, mergeRemote-normalize, importJSON)
+
+- `entry.type` absent ⇒ `'lift'` (existing entries untouched, byte-for-byte).
+- `set.type` absent ⇒ `'work'`.
+- Unknown entry types pass through VERBATIM (never stripped/flattened).
+- normalizeEntry becomes a discriminated union dispatch on `entry.type` with a
+  per-type normalizer table; the 'lift' normalizer is the existing code.
+
+## Typed workout entries (inside workout.entries, alongside 'lift')
+
+```js
+// cardio — modes: run | ruck | swim | bike | row | stairs | circuit
+{ id, type:'cardio', mode, distanceKm?, durationMin, avgHR?, maxHR?,
+  effort?: 'easy'|'moderate'|'hard',      // easy/hard classification fallback when no HR
+  surface?: 'road'|'trail'|'track'|'treadmill'|'sand',
+  tempC?: number, fluidMl?: number,        // fluid prompted only when durationMin >= 90
+  // ruck-only:
+  loadKgDry?, loadKgTotal?, footwear?: 'boots'|'trainers', footNote?: string,
+  notes?: string }
+
+// mobility / durability session work
+{ id, type:'mobility', modality:'static'|'dynamic'|'yoga'|'foam_roll',
+  durationMin, targetMuscles:[muscleId], notes? }
+{ id, type:'durability', items:[exerciseId], durationMin?, notes? }
+  // durability items come from the DURABILITY_CHECKLIST exercise set
+
+// test entry (unified history — tests are workouts containing one test entry)
+{ id, type:'test', protocol: string,      // e.g. 'acft','run2mi','run5mi','ruck12mi',
+                                          // 'pushups2min','situps2min','pullups_max',
+                                          // 'plank','swim500m','slcalf_l','slcalf_r','deadhang'
+  results: object,                        // per-protocol shape, defined in P2 protocols.js;
+                                          // P1 stores {value} for simple timed/rep tests
+  score?: number, notes? }
+```
+
+Workout-level additions (all optional, old clients round-trip them):
+`workout.rpe` (session RPE 1-10, prompted at finish for every session type),
+`workout.feel` ('easy'|'normal'|'hard'|'hurt'), `workout.checkin` (string — the
+post-session check-in answer), `workout.kind` (convenience: 'lift'|'run'|'ruck'|
+'swim'|'bike'|'row'|'circuit'|'mobility'|'durability'|'test'|'mixed', derived at
+save from entries; display only, never load-bearing).
+
+## New top-level collections (shim-protected; standard tombstones in deleted.*)
+
+```js
+painLog: [{ id, userId, date, muscleId,            // canonical 18 ids; 'shin_l','shin_r',
+                                                    // 'foot_l','foot_r','knee_l','knee_r',
+                                                    // 'ankle_l','ankle_r' also allowed (region ids)
+  severity: 0-10, worseDuring: bool, boneLine: bool, morning: bool,
+  note?, createdAt, updatedAt }]
+coachJournal: [{ id, userId, date, entry, source:'user'|'checkin'|'coach',
+  createdAt, updatedAt }]
+```
+Store API: `Store.addPainEntry(p)`, `Store.painFor(userId)` (date desc),
+`Store.addJournalEntry(j)`, `Store.journalFor(userId)` (date desc), plus
+update/delete with tombstones. Red-flag evaluation lives in guardrails, not Store.
+
+## New per-user top-level fields (NOT under settings — mergeSettings whitelist trap)
+
+```js
+user.goals   = { preset: null|'sfas'|'general', selectionDate: null|'YYYY-MM-DD',
+                 targets: { [protocol]: {min, competitive} }, updatedAt }
+user.profile = { sex: null|'male'|'female', birthYear: null|number, updatedAt }
+```
+`user.settings.trainingProfile: 'simple'|'performance'` (add to defaultSettings;
+default 'simple'). Performance mode is entered via goal setup ("Training for
+something specific?") which also sets goals.preset.
+
+## New module: js/guardrails.js — namespace Guardrails (pure, node-testable)
+
+```js
+Guardrails.checkSession(draftWorkout, priorWorkouts, user) -> [{level:'warn'|'stop',
+  code, message}]   // evaluated at save: ruck load+distance double-increase vs
+                    // last week, >2 rucks this week, dry load > 22.7kg (50 lb),
+                    // longest-run jump > 25%, run mileage this week already
+                    // > 110% of trailing 4-wk avg
+Guardrails.weeklyStatus(workouts, user, weekStartStr) -> {
+  runMileageKm, runRampPct, easySharePct, ruckCount, ruckLoadMiles,
+  restDayTaken, warnings: [{code, message}] }   // >10% ramp, easy share < 75%,
+                                                 // no rest day
+Guardrails.painFlags(painLog) -> [{level:'warn'|'red', code, message, entryIds}]
+  // red: boneLine, morning pain, severity>=7, same region rising 3+ entries,
+  // worseDuring on consecutive sessions -> message includes "get it assessed"
+Guardrails.MESSAGES  // plain-language, non-preachy copy for every code
+```
+Warnings are surfaced, never blocking — the user can always save ('stop' level
+renders as a strong confirm, not a wall). All plain arithmetic, zero AI.
+
+## ExerciseDB v2
+
+- CATEGORIES gains `{id:'durability', label:'Durability'}` and
+  `{id:'mobility', label:'Mobility'}`.
+- ~40 new entries: unilateral lower (split squats, step-downs, SL RDL, SL calf
+  raises, lateral lunges), calf/tibialis (bent+straight knee raises, tib raises,
+  wall tib holds), grip (dead hangs, farmer/suitcase carries, plate pinch), core
+  anti-rotation (Pallof, side plank, suitcase hold, bird dog), Copenhagen planks,
+  hip airplanes, ankle/calf mobility, hip flexor + T-spine work. Same shape,
+  canonical muscle ids only.
+- `ExerciseDB.DURABILITY_CHECKLIST` = ordered [{id: exerciseId, slot:
+  'unilateral'|'calf_tib'|'grip'|'core'}] used by the weekly compliance UI.
+
+## Cross-type semantics (P1 acceptance criteria — binding)
+
+- Streaks, rings ("workouts"), calendar presence: ANY session with >=1 entry counts.
+- Calendar heat: volumeKg when > 0, else durationMin-scaled (charts unchanged;
+  caller passes blended values).
+- muscleWeeklySets / muscleVolume28d / muscleRecovery / recommendFocus / PRs /
+  e1RM: LIFT ENTRIES ONLY (existing Analytics functions keep exact semantics;
+  they silently skip non-lift entries — verify, don't rewrite).
+- 'Repeat last workout' = most recent workout containing lift entries.
+- History rows and workout detail get a kind glyph + kind-appropriate summary
+  line (cardio: distance · pace · load; mobility: duration · areas).
+- Leaderboard volume stays lift-volume in P1 (P3 adds badges/toggle).
+- Templates remain lift-only in P1.
+
+## Mode gate (binding)
+
+Simple mode (default): UI identical to v1 plus at most 'Cardio' and 'Stretch'
+chips on the log start screen; no guardrail banners, no pain log UI, no test
+type, no goals/countdown. Performance mode unlocks: full chip row (Run/Ruck/
+Swim/Bike/Row/Circuit/Durability/Test), guardrail surfacing, pain quick-log
+(dashboard card + body view section), check-in prompts, goals editor.
+Mode switch: Settings > Training, and via onboarding/goal question. Per-user.
+
+## Logging UX (binding)
+
+- Start screen: primary button unchanged ('Start empty workout'); chip row under
+  it ordered by that user's recency; chips unused 4+ weeks collapse into 'More…'.
+- Cardio logger: single screen, mode segmented control, big numeric fields
+  (distance, duration), pace auto-computed live, ruck reveals load/footwear/
+  foot-check fields, temp+fluid revealed for long sessions. After-the-fact entry
+  in <=20 seconds. Saves a complete typed workout directly via Store (no draft).
+- Finish flow (all types): RPE chip row 1-10 + feel chips + check-in question
+  (P1: canned per-kind questions; free-text answer -> workout.checkin + a
+  coachJournal entry with source 'checkin'). Skippable in one tap.
+- Guardrails run on save: warnings render as a pre-save summary line + toast;
+  'stop' level requires confirm. Weekly status line renders on dashboard
+  (performance mode only).
+- Pain quick-log: dashboard card 'Log a niggle' -> muscle-map tap + severity
+  slider + 3 toggles + note. Red flags -> full-screen advisory (professional
+  assessment message). History listed in Body view.
+
+---
+
+# V2 ADDENDUM — P2: STANDARDS ENGINE
+
+## New module: js/protocols.js — namespace Protocols (pure; loaded after guardrails.js)
+
+Static reference data + scoring math. NEVER stored in Store state (versioned code,
+not user data). User overrides live in user.goals.targets.
+
+```js
+Protocols.LIST // ordered [{id, name, kind:'multi'|'time'|'reps'|'hold'|'pass',
+               //  unit?, lowerIsBetter?, events?}] for:
+// acft (multi: mdl 3RM lb, spt m, hrp reps, sdc mm:ss, plk mm:ss, tmr mm:ss)
+// run2mi, run5mi, ruck12mi (time, lowerIsBetter), pushups2min, situps2min,
+// pullups_max (reps), plank, deadhang (hold mm:ss), swim500m (pass|time),
+// slcalf_l, slcalf_r (reps)
+Protocols.byId(id)
+Protocols.scoreACFT(results, {sex, birthYear}) -> { events: {mdl:{raw,points},...},
+  total, pass, minEvent }   // official 2022 ACFT scoring tables, age/sex brackets
+                            // (17-21,22-26,27-31,32-36,37-41,42-46,...), linear
+                            // interpolation between table rows; missing events
+                            // score null and exclude from total; pass = all
+                            // entered events >= 60 pts
+Protocols.DEFAULT_TIERS // {protocolId: {sfas: {min, competitive}, general: {...}}}
+  // sfas per the master plan table (run2mi 930/810s, run5mi 2400/2250s,
+  // ruck12mi 10800/9900s, pullups 8/15, pushups 60/80, plank 120/210s,
+  // trapbar_rel 1.5/2.0, acft 360? use pass-line 60x6/500, swim pass/pass)
+Protocols.tiersFor(protocolId, user) -> {min, competitive} | null
+  // user.goals.targets[protocolId] overrides defaults; preset picks column
+Protocols.currentBest(protocolId, {workouts, bodyMetrics}) -> {value, date} | null
+  // from test entries (best by direction); trapbar_rel derived: best trap-bar
+  // deadlift e1RM (Analytics.exerciseHistory ids: trap_bar_deadlift) / latest
+  // bodyweightKg — both converted lb-free (ratio)
+Protocols.readiness(user, {workouts, bodyMetrics}) -> {
+  rows: [{protocolId, name, current, min, competitive, pct,   // pct 0-1 toward
+          direction, lastTested}],                            // competitive
+  overallPct, weakest: protocolId|null }                      // weakest = lowest pct
+  // pct clamps 0..1; time protocols: pct = clamp((min-current)/(min-competitive));
+  // untested rows: current null, pct 0, sorted last but weakest ignores untested
+  // unless EVERYTHING is untested
+Protocols.phaseFor(selectionDateStr, todayStr) -> { weeksOut, phase:
+  'base'(>16w)|'build'(8-16w)|'peak'(3-8w)|'taper'(<3w), heatBlock: weeksOut<=3 }
+Protocols.fmtValue(protocolId, value, units?) // '13:42', '15 reps', '512 pts', '2.1×BW'
+```
+
+`workout.entries[].type:'test'` results shapes (P2 canonical): single-metric
+protocols {value:number} (seconds for time/hold, reps for reps); acft
+{mdl,spt,hrp,sdc,plk,tmr} raw values + computed {score} cached on the entry at
+save. P1's simple {value} entries remain readable as-is.
+
+## Views (performance mode only)
+
+- New registered view 'standards' (title 'Standards', nav:true order 55) in a NEW
+  file js/views-standards.js (script tag after views-insights.js). App nav gains
+  per-view `visible()` predicate support (App.registerView accepts visible: fn;
+  sidebar/tabbar re-evaluate on render; view itself redirects to dashboard when
+  not visible). Content: readiness scorecard (rows: name, current fmt, bar to
+  competitive with min tick, last tested), weakest-link callout card ('Attack
+  this: Pull-ups — 9 of 15'), phase/countdown card (weeksOut, phase name, phase
+  guidance line, heat-block flag), test history list (all test workouts, tap ->
+  detail), 'Record a test' button -> wizard.
+- Test wizard (in views-standards.js, App.sheet): protocol picker -> per-protocol
+  form (acft: 6 event inputs w/ live per-event points + running total; time
+  protocols mm:ss masked input; reps numeric) -> saves workout {kind:'test'} with
+  typed test entry (+cached score for acft) -> toast w/ result vs tiers.
+- Dashboard (views-insights.js): readiness snapshot card (performance mode):
+  overallPct ring + weakest link line + 'Standards' link; phase line added to
+  countdown chip ('35 weeks out · Build').
+- History detail for test workouts renders scored results (acft event table).
+
+## Store touch (minimal)
+
+Nothing new — test entries already flow through P1's normalizer; P2 may extend
+the 'test' normalizer to preserve acft fields + cached score.
