@@ -1059,3 +1059,192 @@ master plan ('activity badges so your 12-mile ruck finally counts'):
    file-input flow.
 4. sw.js CACHE_NAME → 'ironlog-v2p5'; loadmodel.js in SHELL + index.html after
    analytics.js.
+
+# V2 ADDENDUM — P4.5: ONE LIVE SESSION (pace as a layer)
+
+User-approved (with mockups) correction of P3.5. The guided player kept its OWN
+compiled timeline and actuals (`S.compiled.steps`, `S.actuals`,
+`ironlog/activeSession`) — a shadow copy of a workout. That is precisely why
+nothing could be edited mid-session: editing would have to mutate a frozen
+script that maps to nothing. This phase inverts the ownership.
+
+USER'S REQUIREMENT (binding): "I need to be able to do the durability workout
+and edit what I'm doing on it, concurrently... player can work in its sets, or
+at the level of each rep, or at the level of the exercise if rest time is
+determined... making it such that all of this is selectable and variable."
+
+## Principle
+
+**One session record: the draft.** `ironlog/activeWorkout` is the single source
+of truth for EVERY session type. The timing engine drives `draft.entries[i].sets[j]`
+directly. The focus view is a RENDERER over that draft, never an owner.
+`ironlog/activeSession`, `S.compiled`, `S.actuals` and the player's private save
+path are DELETED. Player.compile survives only as a derived projection
+recomputed on demand (for "what's next" and time-left estimates) — never as
+stored state.
+
+## Pace: a scope, with cadence as an orthogonal modifier
+
+RESOLVED against a competing "monotone ladder incl. rep" proposal: rep-cadence
+is a CUE that runs inside a timed set; it advances nothing, so it must not be a
+mutually-exclusive value of the same enum.
+
+```js
+pace: 'off' | 'set' | 'exercise' | 'session'   // what the app DRIVES
+cadence: boolean                                // tempo metronome INSIDE a timed set
+```
+
+| pace | app drives | hands back after | rest |
+|---|---|---|---|
+| `off` | nothing (elapsed clock only) | — | today's advisory pill, unchanged |
+| `set` | ONE set to completion | that set | advisory only |
+| `exercise` | remaining sets of ONE entry, work→rest→next | that entry | DRIVEN (auto-start, skippable, ±15s, no trailing rest) |
+| `session` | chains exercise-pace across entries | end of workout | driven, incl. inter-exercise transition |
+
+Governing rule: **the app drives every step it can time deterministically; the
+user triggers every step it cannot.** Holds/rests are timeable; reps are not
+unless a tempo exists. So `weight_reps` gets no set-level driver without a
+tempo — it advances on ✓.
+
+Per-shape set drivers:
+```
+hold, stretch(static|pnf|loaded) -> countdown(target); at end write
+                                    holdSec = ACTUAL elapsed seconds, done = true
+stretch(dynamic), weight_reps    -> only with a tempo: metronome + auto-✓ at
+                                    targetReps; otherwise no driver (✓ advances)
+carry                            -> elapsed stopwatch; ✓ stops it; never
+                                    auto-writes distanceM/weightKg
+```
+
+Tempo is a PRESCRIPTION, never an observation: `normalizeSet` rebuilds every
+lift set to exactly {weightKg, reps, type, rpe} on this and every older client,
+so a tempo can physically never be recorded on a lift set. Stored on the routine
+item (`item.tempo: '3-1-3'`); the UI must never imply it was recorded.
+
+## Direct manipulation beats configuration (the 95% path)
+
+- **Tap a set's NUMBER** → run exactly that set, whatever the resolved pace.
+- **Tap a card's stopwatch** → run that exercise (its sets + rests), then STOP.
+The picker exists only for Off / Whole-session / cadence / changing defaults.
+
+## Precedence (lowest → highest)
+
+```
+user.settings.pace[kind]      // per-workout-kind default
+  -> routine.pace             // routine-level, when seeded from a routine
+  -> item.pace                // routine item override
+  -> draft._pace              // session chip (this session only)
+  -> entry._pace              // card override
+  -> the button just tapped   // wins for that one action
+```
+
+Defaults table (binding): durability `set` · stretch `set` · **lift `off`** ·
+circuit `session` · interval (run/swim) `set` · steady cardio `off` (quick
+logger unchanged — a 40-minute steady run does not belong in a live session
+screen). cadence default false.
+
+Storage: `user.settings.pace` (object keyed by kind), `user.settings.cadence`,
+`user.settings.restSec`. VERIFIED SAFE: mergeSettings carries unknown settings
+keys through untouched (P0 forward-compat clause, store.js), so old clients
+preserve these. `settings.restTimerSec` and `settings.playerVoice` keep their
+current meanings. Routine-level `pace`/`tempo` ride the routines collection's
+existing unknown-key preservation.
+
+## Set identity — draft-local, provably unpersisted
+
+Timers bind to `(entryId, _sid)`, never to array index or object reference
+(`repaint()` rebuilds `root.innerHTML`, destroying identity).
+
+```js
+function sidOf(set) { return set._sid || (set._sid = U.uid('s')); }
+// loadDraft() backfills alongside the existing `if (!en.id)` loop.
+```
+
+`_sid` is draft-local and MUST NOT reach Store or sync. Proof chain (all
+pre-existing, verify in tests): `cleanSetworkEntry` skips `_`-prefixed keys at
+entry AND set level; `buildFinishedEntries` builds lift sets as 4-key literals;
+the finish payload enumerates its fields. NO normalizer change, NO contract
+change, NO old-client exposure. Do NOT introduce a persisted set id — lift sets
+are rebuilt to four keys by `normalizeSet` on every client, so a persisted id
+would be legal on setwork and silently dropped on lifts; asymmetric set identity
+is a permanent trap.
+
+## Reconciliation — one choke point
+
+Every draft mutation already funnels through `saveDraft()` (`ctx.persist`), so:
+
+```js
+function saveDraft() {
+  if (!draft) return;
+  rev++;
+  localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));   // existing
+  Session.reconcile();       // retarget / orphan-check the running timer
+  notifySubscribers(rev);    // focus view repaints; builder opts out
+}
+```
+
+Authoritative timer↔edit rules:
+- Editing the RUNNING set's target → retarget live, preserving elapsed
+  (`remain = newTarget - elapsed`; if already past, expire immediately).
+- Deleting the running SET, or its ENTRY → cancel the timer cleanly, keep the
+  session, record nothing for it, advance the cursor to the next pending set.
+- Reordering around the running set → binding is by `_sid`, so it follows.
+- Starting a second timer → the first is cancelled (single timer slot).
+- Backgrounded/expired while hidden → mark `boundary`, do not silently record;
+  on return show what expired and let the user confirm or adjust.
+- The cursor (`draft._active`) is ADVISORY, never modal: editing any other row
+  never moves it.
+
+## Two presentations, one state
+
+`draft._view: 'builder'|'focus'`. Switching is one tap in BOTH directions and
+never interrupts a running timer. Focus view keeps every bit of P3.5 chrome
+(name, ring, ±15s, pause, side badge, next-up, depth ask, voice/vibrate/beep,
+wake lock) and gains: a Builder button, and a tap-a-set sheet that edits the
+draft in place WHILE THE CLOCK KEEPS RUNNING. Circuits open in focus by default;
+durability/stretch open in builder.
+
+## Bug fixed in passing (binding)
+
+Today the builder's hold timer writes `holdSec = target` while the player writes
+actual elapsed — two answers for one thing. ONE RULE EVERYWHERE: `holdSec` is
+always the seconds ACTUALLY held (early stop records the short time; overtime
+records the long one).
+
+## Scope boundary
+
+In the live substrate: lift (pace off by default), durability, stretch,
+circuit/AMRAP, run/swim intervals. NOT in it: steady cardio — its quick logger
+is unchanged. Manual after-the-fact logging for every type stays exactly as it
+is today.
+
+## Mode gate
+
+Performance mode only for all pace UI. Simple mode BYTE-IDENTICAL: family users
+keep today's lift flow (pace off, advisory rest pill), the quick loggers, and no
+pace controls anywhere. Lift default `off` guarantees the flow the user praised
+is unchanged for everyone.
+
+## Acceptance tests (binding)
+
+1. `_sid` never persists: fixtures through save/finish/merge/import contain no
+   `_`-prefixed key at workout, entry, or set level; P1-era client sim
+   round-trips a player-written workout unchanged.
+2. Concurrent edit (Playwright, short targets): with set 2 running, edit set 3's
+   target, add a set, delete a different exercise, reorder — the timer keeps
+   running, stays bound to set 2, and records set 2's ACTUAL seconds.
+3. Retarget/orphan rules: each authoritative rule above asserted.
+4. Pace precedence resolves per the chain; the tapped button wins; defaults
+   table honored per kind.
+5. Builder↔focus toggle mid-timer preserves timer, cursor and edits in both
+   directions; editing from inside focus writes through to the draft.
+6. holdSec is ACTUAL in both views (early stop and overtime cases).
+7. Simple-mode leak sweep: no pace UI anywhere; lift flow byte-identical to the
+   P4 baseline.
+8. Existing suites stay green; `ironlog/activeSession` is gone and a stale one
+   left by P3.5 is discarded safely on boot.
+
+## Release
+
+sw.js CACHE_NAME → next version; no new files expected (player.js is
+refactored, not replaced).
