@@ -7,6 +7,16 @@ trends, body metrics), and **ExRx.net** (a 250+ exercise encyclopedia).
 Pure static HTML/CSS/JS. No accounts, no server, no build step, no dependencies.
 Works offline once loaded (PWA) and installs to your home screen.
 
+## Screenshots
+
+| Dashboard | Workout logging | Analytics |
+|---|---|---|
+| ![Dashboard](screenshots/dashboard.png) | ![Logging](screenshots/logging.png) | ![Analytics](screenshots/analytics.png) |
+
+| Family leaderboard | Exercise library | On mobile |
+|---|---|---|
+| ![Family](screenshots/family.png) | ![Exercise detail](screenshots/exercise-detail.png) | ![Mobile](screenshots/mobile-dashboard.png) |
+
 ## Features
 
 - 👥 **Profiles** — unlimited family members, each with their own units (lb/kg),
