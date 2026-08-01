@@ -441,8 +441,10 @@
 
     // 7) Repeated deep stretching: >= 3 intensity-3+ sets on the SAME
     //    exerciseRef within 14 days (draft included) AND a pain-log entry in
-    //    the same window on a muscle that drill touches. The draft must
-    //    contribute at least one deep set — this fires on new information only.
+    //    the same window on a muscle that drill touches. Resolved pain entries
+    //    are closed episodes and never link (same convention as the dashboards'
+    //    !p.resolved filters). The draft must contribute at least one deep
+    //    set — this fires on new information only.
     const deepByRef = {};
     const deepOrder = [];
     for (const e of entriesOf(draft)) {
@@ -468,7 +470,7 @@
       }
       const uid = user && user.id;
       const pains = (painLog || []).filter(function (p) {
-        return p && p.muscleId && inRange(p.date, winStart, date) &&
+        return p && p.muscleId && !p.resolved && inRange(p.date, winStart, date) &&
           (!uid || !p.userId || p.userId === uid);
       });
       for (const ref of deepOrder) {

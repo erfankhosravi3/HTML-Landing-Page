@@ -370,6 +370,7 @@
     pushups2min: { sfas: { min: 60, competitive: 80 }, general: { min: 40, competitive: 70 } },
     pullups_max: { sfas: { min: 8, competitive: 15 }, general: { min: 5, competitive: 12 } },
     plank: { sfas: { min: 120, competitive: 210 }, general: { min: 60, competitive: 180 } },
+    deadhang: { sfas: { min: 60, competitive: 120 }, general: { min: 30, competitive: 90 } },
     swim500m: { sfas: { min: 'pass', competitive: 'pass' }, general: { min: 'pass', competitive: 'pass' } }
   };
 

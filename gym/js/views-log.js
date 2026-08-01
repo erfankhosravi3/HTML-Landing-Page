@@ -145,25 +145,31 @@
   }
 
   function beginFromWorkout(w) {
-    startDraft({
-      name: w.name || defaultDraftName(),
-      entries: (w.entries || []).map(function (en) {
-        return {
-          id: U.uid('en'),
-          exerciseId: en.exerciseId,
-          notes: '',
-          sets: (en.sets || []).map(function (s) {
-            return {
-              weightKg: s.weightKg || 0,
-              reps: s.reps || 0,
-              type: s.type === 'warmup' ? 'warmup' : 'work',
-              rpe: null,
-              done: false
-            };
-          })
-        };
-      })
+    const entries = [];
+    (w.entries || []).forEach(function (en) {
+      if (!en) return;
+      // P3: setwork entries repeat as draft-editable copies (values prefilled,
+      // not done) — same copy path the durability sheet's 'Repeat last' uses.
+      if (isSetworkEntry(en)) { entries.push(swDraftCopyOf(en)); return; }
+      // other typed entries (cardio/mobility/durability/test blobs) never
+      // flow through the lift editor
+      if (!isLiftEntry(en)) return;
+      entries.push({
+        id: U.uid('en'),
+        exerciseId: en.exerciseId,
+        notes: '',
+        sets: (en.sets || []).map(function (s) {
+          return {
+            weightKg: s.weightKg || 0,
+            reps: s.reps || 0,
+            type: s.type === 'warmup' ? 'warmup' : 'work',
+            rpe: null,
+            done: false
+          };
+        })
+      });
     });
+    startDraft({ name: w.name || defaultDraftName(), entries: entries });
   }
 
   function beginFromTemplate(t) {
@@ -904,7 +910,21 @@
       }
 
       if (act === 'sw-method') {
+        const prevShape = swRowShapeOf(en);
         en.method = btn.getAttribute('data-method');
+        const nextShape = swRowShapeOf(en);
+        // A hold<->reps flip changes which value field the rows display; clear
+        // the now-hidden field on draft rows the user hasn't checked so no
+        // phantom value keeps an empty-looking row 'valid' or gets saved.
+        // Done rows — and saved sets in the edit sheet — keep their recorded
+        // data intact (flipping back re-displays it).
+        if (prevShape !== nextShape && ctx.mode === 'draft') {
+          (en.sets || []).forEach(function (s) {
+            if (!s || s.done) return;
+            if (nextShape === 'reps') delete s.holdSec;
+            else if (nextShape === 'hold') delete s.reps;
+          });
+        }
         ctx.persist();
         repaint();
         return;
@@ -1711,13 +1731,20 @@
     return ((w && w.entries) || []).filter(function (en) { return en && !isLiftEntry(en); });
   }
 
-  // Repeating a workout only ever seeds lift entries into the draft — typed
-  // entries never flow through the lift editor.
+  function setworkEntriesOf(w) {
+    return ((w && w.entries) || []).filter(isSetworkEntry);
+  }
+
+  // Repeating a workout seeds lift entries and (P3) draft-editable setwork
+  // entries into the draft — other typed entries (cardio/mobility/durability/
+  // test blobs) stay non-repeatable and never flow through the editor.
   function repeatableView(w) {
-    const lifts = liftEntriesOf(w);
-    return lifts.length === ((w && w.entries) || []).length
+    const keep = ((w && w.entries) || []).filter(function (en) {
+      return isLiftEntry(en) || isSetworkEntry(en);
+    });
+    return keep.length === ((w && w.entries) || []).length
       ? w
-      : { name: w.name, entries: lifts };
+      : { name: w.name, entries: keep };
   }
 
   function entryKindOf(en) {
@@ -3028,7 +3055,11 @@
         if (it.weightHint) en.notes = it.weightHint;
         return en;
       }
-      return newSetworkEntry(it.exerciseId, it.sets || 3, {
+      // perSide setwork drills: the routine's 'sets' is a PER-SIDE count —
+      // emit sets*2 rows (newSetworkEntry alternates L/R) so an odd routine
+      // count can never prescribe one side more work than the other.
+      const rows = (it.sets || 3) * (ex && ex.perSide ? 2 : 1);
+      return newSetworkEntry(it.exerciseId, rows, {
         holdSec: it.targetHoldSec, reps: it.targetReps, distanceM: it.targetDistanceM
       });
     });
@@ -3660,6 +3691,14 @@
       const first = (en.sets || []).find(function (s) { return s && s.intensity >= 1; });
       en._depth = first ? U.clamp(Math.round(first.intensity), 1, 4) : 2;
     });
+    // Snapshot each editable setwork entry's model as opened: entries the user
+    // never touches re-emit the LIVE store entry verbatim on save instead of a
+    // rebuilt model, so a zero-edit save can never normalize values or drop
+    // off-nominal/future-format sets it didn't touch.
+    const swOpenSnapshot = {};
+    model.entries.forEach(function (en) {
+      if (isSetworkEntry(en) && en.id) swOpenSnapshot[en.id] = JSON.stringify(en);
+    });
 
     const content = document.createElement('div');
     content.innerHTML =
@@ -3742,8 +3781,15 @@
             // setwork entries clean through their own (unknown-key-preserving) path
             const cleaned = {};
             const cleanedOrder = [];
+            const untouchedSw = {};
             model.entries.forEach(function (en) {
               if (isSetworkEntry(en)) {
+                if (en.id && swOpenSnapshot[en.id] &&
+                    JSON.stringify(en) === swOpenSnapshot[en.id]) {
+                  // untouched — the live store entry passes through verbatim
+                  untouchedSw[en.id] = true;
+                  return;
+                }
                 const c = cleanSetworkEntry(en);
                 if (c) { cleaned[en.id] = c; cleanedOrder.push(en.id); }
                 return;
@@ -3774,8 +3820,10 @@
               if (isLiftEntry(en)) {
                 if (en.id && cleaned[en.id]) { entries.push(cleaned[en.id]); used[en.id] = true; }
               } else if (isSetworkEntry(en) && en.id && editableSw[en.id]) {
-                // edited here — deleted/emptied entries drop, the rest round-trip
-                if (cleaned[en.id]) { entries.push(cleaned[en.id]); used[en.id] = true; }
+                // untouched entries round-trip verbatim; edited ones come from
+                // the cleaner (deleted/emptied entries drop)
+                if (untouchedSw[en.id]) { entries.push(en); used[en.id] = true; }
+                else if (cleaned[en.id]) { entries.push(cleaned[en.id]); used[en.id] = true; }
               } else {
                 entries.push(en);
               }
@@ -3824,7 +3872,11 @@
       // honor deep-link params
       if (params && params.repeat) {
         const w = Store.workoutById(params.repeat);
-        if (w && liftEntriesOf(w).length) { beginFromWorkout(repeatableView(w)); App.navigate('log'); return; }
+        if (w && (liftEntriesOf(w).length || setworkEntriesOf(w).length)) {
+          beginFromWorkout(repeatableView(w));
+          App.navigate('log');
+          return;
+        }
       }
       if (params && params.template) {
         const t = Store.templatesFor(u.id).find(function (x) { return x.id === params.template; });
@@ -3871,7 +3923,8 @@
   /* ---------- state A: start screen ---------- */
 
   function renderStartScreen(container, u) {
-    // 'Repeat last workout' = most recent workout WITH lift entries (v2)
+    // 'Repeat last workout' = most recent workout WITH lift entries (v2);
+    // P3: its setwork entries seed too, so the card counts the repeatable view.
     const last = Store.workoutsFor(u.id).find(function (w) { return liftEntriesOf(w).length > 0; }) || null;
     const templates = Store.templatesFor(u.id).slice()
       .sort(function (a, b) { return (b.updatedAt || 0) - (a.updatedAt || 0); });
@@ -3882,12 +3935,16 @@
       kindChipRowHTML(u, false);
 
     if (last) {
-      const sets = Analytics.workoutSets(last);
+      // count only what Repeat will actually seed (lift + setwork entries)
+      const rep = repeatableView(last);
+      const sets = Analytics.workoutSets(rep) + rep.entries.reduce(function (a, en) {
+        return isSetworkEntry(en) ? a + (en.sets || []).length : a;
+      }, 0);
       html += '<div class="card"><div class="card-title">Repeat last workout</div>' +
         '<div class="list-row" style="padding:0;min-height:0">' +
         '<div class="body"><div class="title">' + U.esc(last.name) + '</div>' +
-        '<div class="sub">' + U.esc(U.relDate(last.date)) + ' · ' + last.entries.length + ' exercises · ' +
-        sets + ' sets · ' + U.esc(fmtVol(Analytics.workoutVolume(last))) + '</div></div>' +
+        '<div class="sub">' + U.esc(U.relDate(last.date)) + ' · ' + rep.entries.length + ' exercises · ' +
+        sets + ' sets · ' + U.esc(fmtVol(Analytics.workoutVolume(rep))) + '</div></div>' +
         '<button type="button" class="btn ghost small" data-repeat="' + U.esc(last.id) + '">' +
         ic().copy + ' Start</button></div></div>';
     }
@@ -4180,6 +4237,11 @@
             if (!draft) { api.close(); return; }
             const doSave = function () {
               if (!draft) { api.close(); return; }
+              // Rebuild at save time: the hold countdown keeps running behind
+              // this sheet and writes holdSec+done into the draft — persisting
+              // the open-time snapshot would silently drop that set.
+              const rebuilt = buildFinishedEntries();
+              const finalEntries = rebuilt.length ? rebuilt : entries;
               const endedAt = Date.now();
               const answerEl = U.$('#fs-checkin', content);
               const answer = perf && answerEl ? answerEl.value.trim() : '';
@@ -4191,7 +4253,7 @@
                 startedAt: draft.startedAt,
                 endedAt: endedAt,
                 durationMin: Math.max(1, Math.round((endedAt - draft.startedAt) / 60000)),
-                entries: entries
+                entries: finalEntries
               };
               if (sel.rpe) payload.rpe = sel.rpe;
               if (sel.feel) payload.feel = sel.feel;
@@ -4385,7 +4447,7 @@
       },
       { label: 'Edit', kind: 'ghost', onClick: function () { dispatchWorkoutEdit(w.id); } }
     ];
-    if (lifts.length) {
+    if (lifts.length || swEntries.length) {
       actions.push({
         label: 'Repeat',
         kind: 'primary',

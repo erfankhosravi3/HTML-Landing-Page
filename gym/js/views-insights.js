@@ -188,14 +188,41 @@
     const map = {
       run: ic.run, ruck: ic.ruck, swim: ic.swim, bike: ic.bike, row: ic.row,
       stairs: ic.stairs, circuit: ic.flame, mobility: ic.stretch,
-      durability: ic.shield, test: ic.clipboard
+      durability: ic.shield, setwork: ic.shield, test: ic.clipboard
     };
     return map[kind] || ic.log;
   }
 
+  // P3: is a setwork entry a stretch? Mirrors views-log's swIsStretch —
+  // method is stretch-only, else the exercise's setShape. Guarded so the
+  // dashboard never crashes when ExerciseDB failed to load.
+  function setworkIsStretch(e) {
+    if (e && e.method) return true;
+    const db = window.ExerciseDB;
+    const ex = db && db.byId ? db.byId(e && e.exerciseRef) : null;
+    return !!(ex && ex.setShape === 'stretch');
+  }
+
+  // P3: setwork workouts pick their glyph by majority exercise category —
+  // mobility-heavy sessions read as stretch, everything else as durability
+  // (same rule as views-log's workoutGlyphKind).
+  function workoutGlyphKind(w) {
+    const k = workoutKind(w);
+    if (k !== 'setwork') return k;
+    let mob = 0;
+    let oth = 0;
+    for (const e of (w && w.entries) || []) {
+      if (!e || e.type !== 'setwork') continue;
+      if (setworkIsStretch(e)) mob++;
+      else oth++;
+    }
+    return mob >= oth && mob > 0 ? 'mobility' : 'durability';
+  }
+
   // Kind-appropriate one-line summary for the typed (non-lift) part of a
   // workout: cardio -> distance · pace · load; mobility -> duration · areas;
-  // durability -> duration · drills; test -> protocol.
+  // durability -> duration · drills; test -> protocol; setwork (P3) ->
+  // 'N stretches · duration · areas' | 'N drills · M sets'.
   function typedSummary(w) {
     const typed = typedEntries(w);
     const parts = [];
@@ -238,6 +265,51 @@
       parts.push('Test');
       parts.push(PROTOCOL_LABEL[test.protocol] || String(test.protocol || 'protocol'));
       if (typeof test.score === 'number' && isFinite(test.score)) parts.push('score ' + test.score);
+      return parts.join(' · ');
+    }
+    // P3 setwork aggregates like the History summaries: 'N stretches ·
+    // duration · areas' when stretches are the majority, else 'N drills ·
+    // M sets'. Valid set = reps>0||holdSec>0||distanceM>0 (setwork rule,
+    // never the lift filter). Area labels need ExerciseDB; skipped without it.
+    const sw = typed.filter(function (e) { return e.type === 'setwork'; });
+    if (sw.length) {
+      const db = window.ExerciseDB;
+      const refs = {};
+      const areaCounts = {};
+      let sets = 0;
+      let mob = 0;
+      let oth = 0;
+      sw.forEach(function (e) {
+        refs[e.exerciseRef || ''] = true;
+        const stretch = setworkIsStretch(e);
+        if (stretch) mob++;
+        else oth++;
+        const valid = (e.sets || []).filter(function (s) {
+          return !!s && ((Number(s.reps) || 0) > 0 ||
+            (Number(s.holdSec) || 0) > 0 || (Number(s.distanceM) || 0) > 0);
+        }).length;
+        sets += valid;
+        if (stretch && db && db.byId) {
+          const ex = db.byId(e.exerciseRef);
+          ((ex && ex.primaryMuscles) || []).forEach(function (m) {
+            areaCounts[m] = (areaCounts[m] || 0) + Math.max(valid, 1);
+          });
+        }
+      });
+      const n = Object.keys(refs).length;
+      if (mob >= oth && mob > 0) {
+        parts.push(n + (n === 1 ? ' stretch' : ' stretches'));
+        if (typeof w.durationMin === 'number' && w.durationMin > 0) {
+          parts.push(U.fmtDuration(w.durationMin));
+        }
+        const top = Object.keys(areaCounts).sort(function (a, b) {
+          return areaCounts[b] - areaCounts[a];
+        }).slice(0, 2).map(function (m) { return muscleLabel(m).toLowerCase(); });
+        if (top.length) parts.push(top.join(', '));
+      } else {
+        parts.push(n + (n === 1 ? ' drill' : ' drills'));
+        if (sets) parts.push(sets + (sets === 1 ? ' set' : ' sets'));
+      }
       return parts.join(' · ');
     }
     // Unknown entry types pass through the store verbatim — count, don't guess.
@@ -891,7 +963,7 @@
       }
       sub += ' · ' + U.esc(typedSummary(last));
       html += '<div class="list-row" style="padding-left:0;padding-right:0;">' +
-        '<span class="leading">' + sizedIcon(kindIcon(workoutKind(last)), 20) + '</span>' +
+        '<span class="leading">' + sizedIcon(kindIcon(workoutGlyphKind(last)), 20) + '</span>' +
         '<div class="body"><span class="title">' + U.esc(last.name || 'Workout') + '</span>' +
         '<span class="sub">' + sub + '</span></div>' +
         (liftSets > 0
