@@ -596,3 +596,230 @@ save. P1's simple {value} entries remain readable as-is.
 
 Nothing new — test entries already flow through P1's normalizer; P2 may extend
 the 'test' normalizer to preserve acft fields + cached score.
+# V2 ADDENDUM — P3: STRUCTURED SET WORK (setwork)
+
+User-approved rework (with mockups) of how flexibility, durability, and circuit
+work are logged. Motivation: mobility was a minutes+body-map blob and durability
+a tick-only checklist — both are really *sets of something that isn't
+weight×reps* (holds, carries, per-side reps, stretches with an exertion scale)
+and deserve the same logging quality as lifts. The capability attaches to the
+EXERCISE, not to a workout mode: any workout may mix lift, setwork, cardio,
+mobility, durability, and test entries.
+
+## Why a NEW entry type (binding rationale — do not "simplify" this away)
+
+Verified against old-client code paths; the fleet is mixed-version:
+
+- New fields on LIFT sets are FATAL: old normalizeSet rebuilds every lift set to
+  exactly {weightKg, reps, type, rpe} at load time, and Store.save on a stale
+  device pushes the stripped state through sync — silent fleet-wide loss. All
+  lift edit paths also filter sets to reps>0 and delete entries with no
+  surviving sets, which would destroy hold-only sets outright.
+- New fields on the existing 'mobility'/'durability' types are FATAL on edit:
+  old quick-logger save paths rebuild those entries from scratch, dropping
+  unknown fields, and dispatchWorkoutEdit routes single-entry sessions straight
+  into them.
+- Unknown entry TYPES are provably safe: normalizeEntry passes them through
+  verbatim (incl. mergeRemote/importJSON via normalizeState), the detail view
+  renders "Logged by a newer version of IronLog — kept as-is", and the mixed
+  editor lists them read-only and re-emits them untouched on save.
+
+## New entry type: 'setwork'
+
+```js
+{ id,                              // U.uid('en')
+  type: 'setwork',
+  exerciseRef: 'dead_hang',        // ExerciseDB or custom id.
+  method?: 'static'|'dynamic'|'pnf'|'loaded',  // stretches only; omit otherwise
+  sets: [ {                        // >=1 valid set; valid = reps>0||holdSec>0||distanceM>0
+    reps?: number,                 // >0 — rep-based drills / dynamic stretches
+    holdSec?: number,              // >0 — timed holds & static/pnf/loaded stretches
+    distanceM?: number,            // >0 — carries (meters; km belongs to cardio)
+    weightKg?: number,             // >=0 — added/implement load; absent = bodyweight.
+                                   //   Carries: TOTAL implement load per hand summed.
+    side?: 'L'|'R',                // absent = bilateral/both
+    intensity?: 1|2|3|4,           // STRETCH DEPTH scale (below); stretches only
+    rpe?: number                   // 6-10, durability strength drills only
+  } ],
+  notes?: string }
+```
+
+FORBIDDEN NAMES (load-bearing invisibility guarantees — binding):
+
+| Never | Why |
+|---|---|
+| `exerciseId` on a setwork entry | old exerciseHistory/prevSetsFor/creditWorkSets dispatch on that key and would pollute lift charts and hints with zero-value rows |
+| `type` on a setwork set (esp. `'work'`) | old workSets/setVolume/workoutSets/creditWorkSets count s.type==='work'; absent key ⇒ old clients compute zero volume/PRs/muscle credit from setwork |
+
+normalizeSetworkEntry (added to the entry-normalizer dispatch): shallow-copy,
+coerce id/exerciseRef/notes, coerce each set (delete `type` defensively; numeric
+coercion deletes non-finite; intensity clamps to int 1..4; side coerced to
+'L'|'R' or deleted), UNKNOWN KEYS PASS THROUGH VERBATIM at both entry and set
+level. `method` coerced to the enum or deleted. This normalizer must never
+strip fields it does not know — that asymmetry is the bug this phase fixes;
+same rule applies to every NEW edit form this phase adds.
+
+Division of labor (binding): weighted-reps durability drills (split squat,
+single-leg RDL, lateral step-down, weighted calf raises...) are logged as PLAIN
+LIFT ENTRIES — they already earn volume/PRs/e1RM/muscle credit. setwork covers
+holds, carries, stretches, and per-side bodyweight rep work. The exercise's
+`setShape` (below) decides, not the workout kind.
+
+## ExerciseDB additions
+
+- Every exercise MAY carry `setShape: 'weight_reps'|'hold'|'carry'|'stretch'`;
+  absent ⇒ 'weight_reps' (all existing entries unchanged). Set on: planks,
+  hangs, wall-sits → 'hold'; farmer/suitcase/overhead carries → 'carry'; all
+  category-'mobility' entries → 'stretch'.
+- `perSide: true` on unilateral exercises (side chips + L/R auto-alternate).
+- ~20 new stretch entries (category 'mobility', setShape 'stretch', method
+  defaults, primary/secondary muscles) covering an SFAS athlete's gaps:
+  couch stretch, pigeon, 90/90, pancake, seated/standing hamstring, jefferson
+  curl (loaded), calf wall + soleus, ankle KOT, hip flexor kneeling, adductor
+  rockback, thoracic extension, wall slide, pec doorway, lat hang side bend,
+  wrist flexor/extensor, plantar rolling, cossack squat, world's greatest,
+  leg swings (dynamic), elephant walk (dynamic).
+- `ExerciseDB.DURABILITY_ROUTINES` — code-defined (NOT user templates: the
+  template normalizer on old clients flattens structured targets):
+  `{ A: [{exerciseId, sets, targetReps?|targetHoldSec?|targetDistanceM?, weightHint?}], B: [...] }`
+  A: split_squat, single_leg_calf_raise, dead_hang, pallof_press, farmer_carry.
+  B: lateral_step_down, tibialis_raise, side_plank, copenhagen_plank, single_leg_rdl.
+  DURABILITY_CHECKLIST and its slots stay — they now power derived coverage.
+
+## Stretch depth scale (intensity 1–4) — binding anchors, shown in the UI
+
+1 **Easy** — first stretch sensation, ~50–70% of range; could hold for minutes.
+2 **Working** — clear stretch that FADES over the hold; slow nasal breathing.
+    The daily-driver dose.
+3 **Deep** — end range, does not fade, needs deliberate exhales. PNF/loaded
+    only, warm, 2–3×/week.
+4 **Limit** — involuntary guarding: shaking, breath-holding, sharp/nervy.
+    Loggable for honesty; treated as a flag, never a target.
+
+## Builder integration (views-log.js)
+
+- mountEditor dispatches a row renderer per entry type at the top of
+  setRowHTML/entryCardHTML/buildFinishedEntries; the lift branch stays
+  byte-for-byte current behavior. Simple mode can never create setwork entries.
+- Row grids reuse .set-row vocabulary:
+  hold → SET | PREV | HOLD (mm:ss mask, shared parser) | SIDE | ✓
+  carry → SET | PREV | KG | METERS | ✓
+  stretch → hold/reps rows per method + one 4-chip STRETCH DEPTH row per entry
+  (sticky per entry; default 2 · Working)
+- SIDE chip cycles L→R; Add set on a perSide exercise auto-alternates and
+  clones the previous row otherwise (same as lifts). PREV hints come from the
+  user's last setwork entry for that exerciseRef; ✓ accepts hint values.
+- Hold countdown timer: timer glyph on hold-shape cards starts a countdown pill
+  reusing the rest-timer singleton chrome, target = filled/prefilled seconds
+  (default 30); on finish: vibrate, write holdSec = target, mark set done.
+  Starting it cancels a running rest timer. Typing always works; the timer is
+  never required. Countdown only — max-effort hangs belong in the Test wizard.
+- Exercise picker inside a draft: picking a setShape-'hold'/'carry'/'stretch'
+  exercise creates a setwork entry (performance mode; in simple mode those
+  categories stay filtered out of the picker as today).
+- Durability chip → mini-sheet: "Durability B" primary (auto-alternates vs the
+  user's last routine letter), "Repeat last", "Quick checklist" (legacy path,
+  unchanged shape). First two seed a normal draft via startDraft.
+- Stretch quick sheet (legacy 'mobility' shape, still the default forever):
+  adds (a) "Same as last time" prefill chip when a prior mobility session
+  exists — the one family-visible change, it writes the unchanged legacy shape;
+  (b) performance-mode-only "Log individual stretches" button swapping the
+  sheet content to a mini-builder of setwork stretch cards ('Add stretch' →
+  picker filtered to category mobility). If the last stretch session was
+  structured, the repeat chip repeats THAT (values prefilled, ~3 taps).
+- Edit: setwork sessions get an editable branch in dispatchWorkoutEdit/mixed
+  editor (new clients). PATCH THE CURRENT GEN TOO: mobility/durability/test
+  edit forms must start preserving unknown keys (cardio's CARDIO_KNOWN_KEYS
+  pattern) so the NEXT schema evolution isn't trapped by rebuilt entries.
+
+## Cardio entry — additive fields (safe: old cardio editor preserves unknown keys)
+
+```js
+{ ...existing cardio fields...,
+  elevationM?: number,          // vert gain — run/ruck/stairs
+  intervals?: { reps, distanceM?, workSec?, restSec?, restType?: 'jog'|'stand' },
+  rounds?: number,              // circuit mode
+  stations?: [{ exerciseId?, name?, reps?, durationSec?, weightKg? }] }
+```
+- Circuit logger: collapsed optional "Structure" card (rounds stepper + station
+  list); zero new required fields; "repeat last circuit" prefills everything.
+- Run/swim interval section writes the interval TOTAL into distanceKm so weekly
+  mileage guardrails stay truthful on every client.
+- Stations NEVER feed volume/muscle analytics (lift-only semantics stay binding).
+- normalizeCardioEntry keeps preserving unknown keys; the new fields get
+  numeric/shape coercion, station array items shallow-copied.
+
+## Derivations (read-time unions over legacy + setwork; no migrations)
+
+- Guardrails.weeklyStatus gains durability coverage:
+  `durability: { slots: { unilateral, calf_tib, grip, core }, covered, total: 4 }`
+  where each slot = work-set count vs code-defined target
+  (unilateral 6, calf_tib 4, grip 3, core 4). Sources, week-windowed:
+  (a) lift-entry work sets whose exerciseId is in DURABILITY_CHECKLIST,
+  (b) setwork valid sets whose exerciseRef is in the checklist (L and R rows
+  count 1 each), (c) legacy durability items[] — 1 nominal set per id.
+  'durability_gap' warning fires only from day 5 of the week (no mid-week nag).
+- Stretch-intensity guardrails: any intensity-4 set → 'warn' nudge at save
+  ("that's guarding, not stretching — back off and log a niggle if it's
+  sharp"); >=3 intensity-3+ sets on the SAME exerciseRef within 14 days AND a
+  pain-log entry on an overlapping muscle → 'warn' with a pain quick-log link.
+  Deterministic, pure, unit-tested in guardrails.js.
+- Analytics additions (pure): `drillHistory(workouts, exerciseRef)` →
+  [{date, bestHoldSec?, topWeightKg?, distanceM?, side?}] for library
+  progression charts (hold seconds / carry load over time);
+  `stretchMinutesByMuscle(workouts, since)` → {muscleId: minutes} from setwork
+  stretch sets (holdSec, primary 1.0 / secondary 0.5 weighting; dynamic sets
+  0.5 min nominal each) UNIONED with legacy mobility blobs (durationMin split
+  across targetMuscles). Powers a performance-mode-only "Stretched" toggle
+  layer on the Body view muscle map.
+- Standards: `Protocols.trainingBest(protocolId, workouts)` reads setwork holds
+  (dead_hang → deadhang, plank family → plank) and renders as a secondary
+  "training" series + "Record as test" CTA prefilling the test wizard.
+  currentBest/readiness stay TEST-ONLY — training data never writes them.
+- PR semantics: Analytics.prs stays lift-only (P1 contract). Hold/carry bests
+  surface via drillHistory only this phase.
+
+## Rendering
+
+- History summaries: 'Durability · 4 drills · 14 sets · 25 min',
+  'Stretch · 6 stretches · 18 min · hips, hamstrings'; kind glyphs for setwork
+  chosen by majority exercise category (mobility → stretch glyph, else shield).
+- Detail: lifts-style table per setwork entry with unit-aware strings —
+  '3×8/side @ 24 kg', '3×0:45', 'L 0:40 · R 0:38', '3 × 40 m @ 32 kg',
+  stretch rows append depth ('@ Working'). Old clients degrade to the
+  kept-as-is card (acceptable, documented).
+- workout.kind for setwork-only sessions derives via the existing generic path;
+  display-only as before.
+
+## Mode gate & family safety
+
+Simple mode is byte-identical EXCEPT the "Same as last time" chip on the quick
+stretch sheet. Simple-mode UI can neither create nor edit setwork entries.
+Automated leak check extends to: no SIDE/HOLD/depth UI, no durability routine
+sheet, no structure card, no stretched-map toggle in simple mode.
+
+## Acceptance tests (binding)
+
+1. setwork fixture round-trips byte-identical through normalizeState (unknown
+   entry/set keys preserved).
+2. Every existing Analytics function returns IDENTICAL output on a state with
+   and without setwork entries (invisibility proof).
+3. Old-client simulation: P1-era normalizers (from git history) preserve a
+   setwork workout through load→save→merge unchanged.
+4. Mixed workout (lift + setwork): lift edit paths untouched; setwork editable
+   branch round-trips; legacy mobility/durability quick edits still work.
+5. Coverage math: lift + setwork + legacy checklist sources union correctly;
+   L/R rows count 1 each; double-logging the same drill both ways never
+   produces NaN or double compliance beyond set counts.
+6. Guardrail intensity rules unit-tested incl. the 14-day window and muscle
+   overlap.
+7. Playwright smoke extends: durability routine flow (seed B, ✓ a hold with
+   timer, save), structured stretch flow (repeat chip, depth chip, save),
+   circuit structure add + repeat, simple-mode leak check additions.
+
+## Release
+
+sw.js CACHE_NAME bumps to 'ironlog-v2p3'; no SHELL additions expected (no new
+files planned — protocols/views files exist; if a new file IS added, SHELL must
+list it). Deploy = PR → squash merge → verify live cache string.
+

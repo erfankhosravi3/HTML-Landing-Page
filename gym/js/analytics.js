@@ -188,6 +188,102 @@
     return rows;
   };
 
+  /* ---------- setwork: drill history & stretch minutes (P3) ----------
+     Setwork entries reference exercises via exerciseRef (never exerciseId) and
+     their sets carry no 'type' key — both deliberate, so every other function
+     in this file ignores them untouched. The two functions below are the only
+     setwork readers; PRs/volume/muscle credit stay lift-only by contract. */
+
+  const SETWORK_METHODS = { static: 1, dynamic: 1, pnf: 1, loaded: 1 };
+
+  // Valid setwork set per contract: reps>0 || holdSec>0 || distanceM>0.
+  function validSetworkSet(s) {
+    return !!s && (num(s.reps) > 0 || num(s.holdSec) > 0 || num(s.distanceM) > 0);
+  }
+
+  // Per-workout bests for one setwork drill, split by side when sets carry
+  // L/R. Rows date asc; within a date: bilateral row first, then L, then R.
+  // A row exists only when the group has a measurable best (hold seconds,
+  // added load, or carry distance) — rep-only bodyweight groups chart nothing.
+  Analytics.drillHistory = function (workouts, exerciseRef) {
+    const rows = [];
+    if (!exerciseRef) return rows;
+    for (const w of sortedAsc(workouts)) {
+      const groups = {};
+      for (const entry of (w && w.entries) || []) {
+        if (!entry || entry.type !== 'setwork' || entry.exerciseRef !== exerciseRef) continue;
+        for (const s of entry.sets || []) {
+          if (!validSetworkSet(s)) continue;
+          const key = (s.side === 'L' || s.side === 'R') ? s.side : '';
+          const g = groups[key] || (groups[key] = { holdSec: 0, weightKg: 0, distanceM: 0 });
+          if (num(s.holdSec) > g.holdSec) g.holdSec = num(s.holdSec);
+          if (num(s.weightKg) > g.weightKg) g.weightKg = num(s.weightKg);
+          if (num(s.distanceM) > g.distanceM) g.distanceM = num(s.distanceM);
+        }
+      }
+      for (const key of ['', 'L', 'R']) {
+        const g = groups[key];
+        if (!g || (g.holdSec <= 0 && g.weightKg <= 0 && g.distanceM <= 0)) continue;
+        const row = { date: w.date };
+        if (g.holdSec > 0) row.bestHoldSec = U.round1(g.holdSec);
+        if (g.weightKg > 0) row.topWeightKg = U.round1(g.weightKg);
+        if (g.distanceM > 0) row.distanceM = U.round1(g.distanceM);
+        if (key) row.side = key;
+        rows.push(row);
+      }
+    }
+    return rows;
+  };
+
+  // Minutes of stretching per muscle since a date (inclusive; falsy = all
+  // time). Read-time union of two shapes, no migrations:
+  //  - setwork stretch sets: holdSec/60 per set (rep-only dynamic sets count
+  //    0.5 min nominal each), credited primary 1.0 / secondary 0.5;
+  //  - legacy mobility blobs: durationMin split evenly across the entry's
+  //    canonical targetMuscles.
+  Analytics.stretchMinutesByMuscle = function (workouts, since) {
+    const out = zeroMuscles();
+    const DB = db();
+    for (const w of workouts || []) {
+      if (!w || !w.date) continue;
+      if (since && w.date < since) continue;
+      for (const e of w.entries || []) {
+        if (!e) continue;
+        if (e.type === 'mobility') {
+          const min = num(e.durationMin);
+          if (min <= 0) continue;
+          const targets = [];
+          for (const m of e.targetMuscles || []) {
+            if (m in MUSCLE_INDEX) targets.push(m);
+          }
+          if (!targets.length) continue;
+          const share = min / targets.length;
+          for (const m of targets) out[m] += share;
+        } else if (e.type === 'setwork') {
+          const ex = (DB && typeof DB.byId === 'function') ? DB.byId(e.exerciseRef) : null;
+          if (!ex) continue; // unknown drill: no muscle attribution possible
+          const isStretch = ex.setShape === 'stretch' || ex.category === 'mobility' ||
+            SETWORK_METHODS[e.method] === 1;
+          if (!isStretch) continue;
+          let minutes = 0;
+          for (const s of e.sets || []) {
+            if (!s) continue;
+            if (num(s.holdSec) > 0) minutes += num(s.holdSec) / 60;
+            else if (num(s.reps) > 0) minutes += 0.5;
+          }
+          if (minutes <= 0) continue;
+          for (const m of ex.primaryMuscles || []) {
+            if (m in MUSCLE_INDEX) out[m] += minutes;
+          }
+          for (const m of ex.secondaryMuscles || []) {
+            if (m in MUSCLE_INDEX) out[m] += minutes * 0.5;
+          }
+        }
+      }
+    }
+    return roundMuscles(out);
+  };
+
   /* ---------- PRs ----------
      Scan date asc (ties by createdAt). Per exercise, track running bests of:
      weight (top work-set weight), e1rm, reps (most reps in a single work set at

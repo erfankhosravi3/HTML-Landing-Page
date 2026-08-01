@@ -1093,8 +1093,10 @@
         'Lift with the glutes, not by yanking the lower back into extension — stop at horizontal.'
       ]),
 
-    E('jefferson_curl', 'Jefferson Curl', ['weighted spinal roll'],
-      ['lower_back'], ['hamstrings', 'glutes'], 'dumbbell', 'legs', 'isolation', 'advanced', [
+    // P3: recategorized legs -> mobility (it is a loaded stretch, logged as
+    // setwork with method 'loaded', not a strength lift).
+    E('jefferson_curl', 'Jefferson Curl', ['weighted spinal roll', 'loaded spinal roll'],
+      ['lower_back'], ['hamstrings', 'glutes'], 'dumbbell', 'mobility', 'isolation', 'advanced', [
         'Stand on a low box holding a light dumbbell, feet together, legs straight but not locked.',
         'Tuck your chin and roll down one vertebra at a time, letting the weight hang toward your toes.',
         'Reach maximal comfortable depth with a fully rounded spine, breathing calmly.',
@@ -2350,8 +2352,10 @@
         'Torso stays vertical — the wide stance exists so you can sink between your legs, not fold over them.'
       ]),
 
-    E('cossack_squat', 'Cossack Squat', ['side to side squat'],
-      ['adductors', 'quads'], ['glutes', 'hamstrings'], 'bodyweight', 'legs', 'compound', 'intermediate', [
+    // P3: recategorized legs -> mobility (a dynamic stretch with a squat inside
+    // it — logged as setwork stretch, method 'dynamic').
+    E('cossack_squat', 'Cossack Squat', ['side to side squat', 'lateral squat stretch'],
+      ['adductors', 'quads'], ['glutes', 'hamstrings'], 'bodyweight', 'mobility', 'compound', 'intermediate', [
         'Take a very wide stance with toes slightly out, arms forward for balance.',
         'Shift your weight onto one leg and squat fully down over it, the other leg straightening with toes up, inhaling.',
         'Keep the working heel down and chest as tall as possible.',
@@ -3168,6 +3172,192 @@
         'The moment the ribs flare or the wrists leave the wall, you have found your current range — work there, not past it.'
       ]),
 
+    /* ===== MOBILITY (V3 — structured stretch library) ===== */
+
+    E('pancake_stretch', 'Pancake Stretch', ['seated straddle fold', 'pancake fold'],
+      ['adductors'], ['hamstrings', 'lower_back'], 'bodyweight', 'mobility', 'compound', 'intermediate', [
+        'Sit tall with your legs spread wide, kneecaps and toes pointing straight up at the ceiling.',
+        'Hinge forward from the hips with a long spine, reaching your chest — not your head — toward the floor.',
+        'Walk your hands forward only as far as the hips keep folding; stop the moment the spine starts rounding to fake depth.',
+        'Breathe slowly for 30-60 seconds, easing a little deeper on each exhale.'
+      ], [
+        'Elevating the hips on a folded mat unlocks the fold for almost everyone with tight hamstrings.',
+        'Knees rolling inward means the adductors have quit — back off until they point up again.'
+      ]),
+
+    E('seated_hamstring_stretch', 'Seated Hamstring Stretch', ['seated forward fold', 'sit and reach stretch'],
+      ['hamstrings'], ['calves', 'lower_back'], 'bodyweight', 'mobility', 'isolation', 'beginner', [
+        'Sit with both legs extended together, heels pushed away and toes pulled back toward you.',
+        'Hinge forward from the hips with a proud chest, sliding your hands down your shins.',
+        'Stop where the back of the thighs stretch clearly and hold, breathing slowly for 30-45 seconds.',
+        'On each exhale, fold a centimeter further from the hips — never by rounding the upper back.'
+      ], [
+        'Reaching past your toes with a rounded spine stretches nothing useful — a shorter, hip-driven fold wins.'
+      ]),
+
+    E('standing_hamstring_stretch', 'Standing Hamstring Stretch', ['heel on box hamstring stretch', 'single leg forward fold'],
+      ['hamstrings'], ['calves'], 'bodyweight', 'mobility', 'isolation', 'beginner', [
+        'Place one heel on a low bench or step, that leg straight, toes pulled back toward the shin.',
+        'Stand tall on the support leg with a soft knee and square hips.',
+        'Hinge forward from the hips with a flat back until the raised hamstring stretches, hands resting on the raised thigh.',
+        'Hold 30-45 seconds breathing slowly, then switch legs.'
+      ], [
+        'Height is not the goal — a knee-high step with a flat-back hinge beats a hip-high box with a rounded one.'
+      ]),
+
+    E('adductor_rockback', 'Adductor Rockback', ['half kneeling groin rock', 'adductor rock back'],
+      ['adductors'], ['glutes'], 'bodyweight', 'mobility', 'isolation', 'beginner', [
+        'Start on all fours and extend one leg straight out to the side, foot flat on the floor, toes forward.',
+        'Keeping the back flat, rock your hips slowly back toward your heel until the inner thigh of the straight leg stretches.',
+        'Pause for a breath at the end range, then rock forward to the start.',
+        'Do 8-12 slow rocks per side, sinking slightly deeper as the groin releases.'
+      ], [
+        'The moving version of the frog stretch — rocking with breath beats forcing a longer hold.'
+      ]),
+
+    E('doorway_pec_stretch', 'Doorway Pec Stretch', ['door frame chest stretch', 'pec doorway stretch'],
+      ['chest'], ['front_delts', 'biceps'], 'bodyweight', 'mobility', 'isolation', 'beginner', [
+        'Stand in a doorway and place one forearm vertically against the frame, elbow at shoulder height and bent 90 degrees.',
+        'Step the same-side foot forward and rotate your torso gently away from the arm.',
+        'Stop when the chest and front shoulder stretch clearly — never at pins-and-needles in the hand.',
+        'Hold 30-45 seconds breathing slowly, then switch arms; raise or lower the elbow to bias different pec fibers.'
+      ], [
+        'Numbness or tingling means nerve, not muscle — reduce the angle until it disappears.',
+        'The antidote to bench-press posture; a round per side after every push day pays off.'
+      ]),
+
+    E('lat_hang_side_bend', 'Lat Hang Side Bend', ['side bend bar hang', 'single arm lat stretch hang'],
+      ['lats'], ['obliques', 'forearms'], 'bodyweight', 'mobility', 'isolation', 'intermediate', [
+        'Grip a pull-up bar with one hand (or both hands offset to one side) and let your body hang.',
+        'Keep feet or toes lightly on the floor or a box so the shoulder is stretched, not fully loaded.',
+        'Shift your hips away from the gripping arm, bending gently sideways until the lat and ribcage side stretch.',
+        'Breathe into the stretched side for 20-30 seconds, then switch arms.'
+      ], [
+        'Overhead position plus side bend is the full lat length — climbers and swimmers live on this one.'
+      ]),
+
+    E('wrist_flexor_stretch', 'Wrist Flexor Stretch', ['palm up wrist stretch', 'forearm flexor stretch'],
+      ['forearms'], [], 'bodyweight', 'mobility', 'isolation', 'beginner', [
+        'Extend one arm forward, palm up, and grasp the fingers of that hand with the other hand.',
+        'Gently pull the fingers back and down until the inside of the forearm stretches.',
+        'Keep the elbow straight but not locked, shoulder relaxed away from the ear.',
+        'Hold 20-30 seconds breathing easily, then switch hands.'
+      ], [
+        'Front-rack work, curls, and typing all shorten these — stretch them before grip work, not just after.'
+      ]),
+
+    E('wrist_extensor_stretch', 'Wrist Extensor Stretch', ['palm down wrist stretch', 'forearm extensor stretch'],
+      ['forearms'], [], 'bodyweight', 'mobility', 'isolation', 'beginner', [
+        'Extend one arm forward, palm down, and let the wrist relax so the fingers point at the floor.',
+        'With the other hand, gently press the back of the hand toward you until the top of the forearm stretches.',
+        'Keep the elbow straight but soft and the shoulder quiet.',
+        'Hold 20-30 seconds, then switch hands; repeat with a lightly closed fist to deepen it.'
+      ], [
+        'The forgotten half of forearm care — pair every flexor stretch with this one to keep elbows happy.'
+      ]),
+
+    E('plantar_fascia_roll', 'Plantar Fascia Rolling', ['foot arch rolling', 'lacrosse ball foot roll', 'plantar rolling'],
+      ['calves'], [], 'other', 'mobility', 'isolation', 'beginner', [
+        'Stand with one foot on a lacrosse ball or firm massage ball, holding a wall for balance.',
+        'Roll the ball slowly from the base of the toes to the front of the heel, covering the whole arch.',
+        'Pause on tender spots for a few slow breaths, letting the foot soften over the ball.',
+        'Spend 60-90 seconds per foot; the arch tissue feeds directly into the calf and Achilles line.'
+      ], [
+        'Firm pressure that you can breathe through — sharp heel-bone pain is a stop sign, not a target.',
+        'Gold before morning runs and after long rucks; feet carry every mile you log.'
+      ]),
+
+    E('leg_swing', 'Leg Swings', ['dynamic leg swings', 'front to back leg swing', 'lateral leg swing'],
+      ['hamstrings'], ['quads', 'adductors', 'glutes'], 'bodyweight', 'mobility', 'isolation', 'beginner', [
+        'Stand side-on to a wall with one hand on it and swing the outside leg forward and back like a pendulum.',
+        'Keep the torso tall and the swing smooth — height comes from momentum and relaxation, never from forcing.',
+        'Do 10-15 swings, then face the wall and swing the same leg side to side across your body.',
+        'Switch legs and repeat both directions; range should grow noticeably across the set.'
+      ], [
+        'The classic pre-run primer: dynamic swings before, long static holds after.',
+        'Start at half height — the first swings of a cold morning are a warm-up for the warm-up.'
+      ]),
+
+    E('elephant_walk', 'Elephant Walk', ['alternating hamstring pedal', 'standing pike pedal'],
+      ['hamstrings'], ['calves', 'lower_back'], 'bodyweight', 'mobility', 'compound', 'beginner', [
+        'Fold forward from standing and rest your fingertips or palms on the floor or a low box, knees bent as needed.',
+        'Straighten one knee fully while the other bends, pressing that heel down and sitting the same-side hip up and back.',
+        'Alternate legs in a slow walking rhythm, keeping the hands planted and the back long.',
+        'Pedal 10-16 total reps, letting the straightening leg get a full hamstring stretch each time.'
+      ], [
+        'A moving hamstring stretch that greases the fold pattern — perfect between the couch and a training session.'
+      ]),
+
+    E('butterfly_stretch', 'Butterfly Stretch', ['seated groin stretch', 'bound angle stretch'],
+      ['adductors'], ['glutes'], 'bodyweight', 'mobility', 'isolation', 'beginner', [
+        'Sit tall and bring the soles of your feet together, letting the knees fall out to the sides.',
+        'Hold your ankles — not your toes — and rest the elbows lightly on the inner thighs.',
+        'Hinge slightly forward from the hips with a long spine until the groin stretches.',
+        'Breathe slowly for 30-60 seconds, letting the knees sink with gravity rather than pressing them down hard.'
+      ], [
+        'Feet further from the hips biases the long adductors; feet close biases the deep groin — use both positions.'
+      ]),
+
+    E('standing_quad_stretch', 'Standing Quad Stretch', ['standing quadriceps stretch', 'heel to glute stretch'],
+      ['quads'], [], 'bodyweight', 'mobility', 'isolation', 'beginner', [
+        'Stand tall holding a wall with one hand and grab the opposite ankle behind you with the other.',
+        'Pull the heel gently toward your glute, knees staying close together.',
+        'Squeeze the glute of the stretching leg and tuck the pelvis slightly — the stretch should live in the front thigh.',
+        'Hold 20-40 seconds breathing easily, then switch legs.'
+      ], [
+        'Arching the lower back fakes the range — the pelvic tuck is what makes this stretch honest.'
+      ]),
+
+    E('cross_body_shoulder_stretch', 'Cross-Body Shoulder Stretch', ['posterior delt stretch', 'arm across chest stretch'],
+      ['rear_delts'], ['side_delts', 'traps'], 'bodyweight', 'mobility', 'isolation', 'beginner', [
+        'Bring one arm straight across your chest at shoulder height.',
+        'With the other forearm, hook just above the elbow and gently pull the arm closer to your chest.',
+        'Keep both shoulders down and square — do not let the stretching shoulder shrug or roll forward.',
+        'Hold 20-30 seconds breathing slowly, then switch arms.'
+      ], [
+        'Pin the shoulder blade down first, then pull — otherwise the blade slides and the stretch evaporates.'
+      ]),
+
+    E('overhead_triceps_stretch', 'Overhead Triceps Stretch', ['triceps stretch', 'elbow behind head stretch'],
+      ['triceps'], ['lats'], 'bodyweight', 'mobility', 'isolation', 'beginner', [
+        'Reach one arm overhead and drop the hand behind your neck, elbow pointing at the ceiling.',
+        'With the other hand, gently press the raised elbow back and toward the midline.',
+        'Keep the ribs down and stand tall — no arching to fake extra range.',
+        'Hold 20-30 seconds breathing easily, then switch arms; add a slight side bend to reach the lat.'
+      ], [
+        'Great between pressing sessions — long triceps and lats are half of a comfortable overhead position.'
+      ]),
+
+    E('childs_pose', 'Child\'s Pose', ['prayer stretch', 'kneeling lat stretch'],
+      ['lats'], ['lower_back'], 'bodyweight', 'mobility', 'isolation', 'beginner', [
+        'Kneel with big toes together and knees apart, then sit your hips back onto your heels.',
+        'Walk both hands far forward and lower your chest between your thighs, forehead resting down.',
+        'Press the palms lightly into the floor to lengthen the lats and sides of the back.',
+        'Breathe into the back of the ribs for 45-60 seconds; walk the hands to one side to bias each lat.'
+      ], [
+        'The off-center version is the secret — hands walked left stretches the right lat, and vice versa.'
+      ]),
+
+    E('scorpion_stretch', 'Scorpion Stretch', ['prone scorpion', 'lying scorpion twist'],
+      ['quads'], ['obliques', 'chest'], 'bodyweight', 'mobility', 'compound', 'intermediate', [
+        'Lie face down with arms out wide in a T, chin resting on the floor.',
+        'Bend one knee and slowly sweep that foot up and across your body toward the opposite hand.',
+        'Let the hip roll open while the chest and arms stay as flat as comfortable, feeling the front hip and trunk rotate.',
+        'Pause for a breath at end range, return, and alternate sides; 5-8 slow reps per side.'
+      ], [
+        'Slow and smooth — momentum turns a great hip-flexor and trunk opener into a lower-back tweak.'
+      ]),
+
+    E('seated_spinal_twist', 'Seated Spinal Twist', ['seated twist stretch', 'half lord of the fishes'],
+      ['obliques'], ['glutes', 'upper_back'], 'bodyweight', 'mobility', 'isolation', 'beginner', [
+        'Sit tall with one leg extended and the other foot crossed over it, planted outside the straight knee.',
+        'Hug the bent knee with the opposite arm and place the other hand on the floor behind you like a kickstand.',
+        'Inhale to grow tall, then exhale and rotate your torso toward the bent-knee side, looking over that shoulder.',
+        'Hold 30-45 seconds breathing slowly, unwinding a little taller on each inhale, then switch sides.'
+      ], [
+        'Height first, twist second — a tall slow twist beats a slumped deep one every time.'
+      ]),
+
     /* ===== SHOULDER/SCAP DURABILITY (V2) ===== */
 
     E('scapular_pull_up', 'Scapular Pull-Up', ['scap pull', 'scapular shrug'],
@@ -3197,6 +3387,88 @@
   const BY_ID = {};
   EXERCISES.forEach(function (x) { BY_ID[x.id] = x; });
 
+  /* ---------- P3: set-shape metadata ----------
+     setShape decides how an exercise is logged: 'hold' (timed), 'carry'
+     (load x meters), 'stretch' (holds/reps + depth scale). Absent =>
+     'weight_reps' — every pre-P3 entry is untouched. Weighted-reps durability
+     drills (split squats, SL RDLs, step-downs, calf raises...) stay
+     weight_reps on purpose: they log as plain lift entries and keep earning
+     volume/PRs/muscle credit. */
+
+  const HOLD_SHAPE = [
+    'plank', 'side_plank', 'copenhagen_plank', 'copenhagen_plank_short',
+    'dead_hang', 'towel_hang', 'wall_sit', 'wall_tibialis_hold',
+    'hollow_body_hold', 'l_sit', 'suitcase_hold'
+  ];
+  const CARRY_SHAPE = [
+    'farmer_carry', 'suitcase_carry', 'overhead_carry', 'bottoms_up_carry',
+    'heel_walk', 'toe_walk'
+  ];
+  HOLD_SHAPE.forEach(function (id) { if (BY_ID[id]) BY_ID[id].setShape = 'hold'; });
+  CARRY_SHAPE.forEach(function (id) { if (BY_ID[id]) BY_ID[id].setShape = 'carry'; });
+  EXERCISES.forEach(function (x) {
+    if (x.category === 'mobility') x.setShape = 'stretch';
+  });
+
+  // Stretch method defaults (setwork entry 'method' prefill). Anything not
+  // listed defaults to 'static'.
+  const STRETCH_METHOD_OVERRIDES = {
+    ankle_dorsiflexion_rock: 'dynamic',
+    downward_dog_pedal: 'dynamic',
+    worlds_greatest_stretch: 'dynamic',
+    ninety_ninety_hip_switch: 'dynamic',
+    foam_roll_t_spine_extension: 'dynamic',
+    open_book_stretch: 'dynamic',
+    thread_the_needle: 'dynamic',
+    cat_cow: 'dynamic',
+    wall_slide: 'dynamic',
+    adductor_rockback: 'dynamic',
+    plantar_fascia_roll: 'dynamic',
+    cossack_squat: 'dynamic',
+    leg_swing: 'dynamic',
+    elephant_walk: 'dynamic',
+    scorpion_stretch: 'dynamic',
+    jefferson_curl: 'loaded'
+  };
+  EXERCISES.forEach(function (x) {
+    if (x.setShape === 'stretch') {
+      x.defaultMethod = STRETCH_METHOD_OVERRIDES[x.id] || 'static';
+    }
+  });
+
+  // perSide: one full set per side (side chips + L/R auto-alternate in the
+  // builder). Alternating-within-a-set moves (walking lunge, bird dog...) are
+  // deliberately NOT flagged.
+  const PER_SIDE = [
+    // unilateral lower (lift-shaped)
+    'split_squat', 'bulgarian_split_squat', 'lateral_lunge', 'reverse_lunge',
+    'curtsy_lunge', 'deficit_reverse_lunge', 'step_up', 'lateral_step_down',
+    'skater_squat', 'pistol_squat', 'single_leg_squat_to_box', 'kickstand_rdl',
+    'single_leg_rdl', 'single_leg_hip_thrust', 'single_leg_glute_bridge',
+    'single_leg_calf_raise', 'banded_terminal_knee_extension', 'hip_airplane',
+    'clamshell', 'donkey_kick', 'side_lying_hip_abduction',
+    'cable_glute_kickback', 'machine_glute_kickback',
+    // unilateral upper (lift-shaped)
+    'single_arm_lat_pulldown', 'dumbbell_row', 'meadows_row',
+    'concentration_curl', 'single_arm_pushdown', 'dumbbell_kickback',
+    'cable_kickback', 'dumbbell_side_bend', 'pallof_press',
+    'half_kneeling_pallof_press',
+    // holds & carries
+    'side_plank', 'side_plank_leg_lift', 'copenhagen_plank',
+    'copenhagen_plank_short', 'suitcase_hold', 'suitcase_carry',
+    'overhead_carry', 'bottoms_up_carry',
+    // stretches
+    'wall_calf_stretch', 'bent_knee_calf_stretch', 'ankle_dorsiflexion_rock',
+    'couch_stretch', 'half_kneeling_hip_flexor_stretch', 'pigeon_stretch',
+    'thread_the_needle', 'open_book_stretch', 'standing_hamstring_stretch',
+    'adductor_rockback', 'doorway_pec_stretch', 'lat_hang_side_bend',
+    'wrist_flexor_stretch', 'wrist_extensor_stretch', 'plantar_fascia_roll',
+    'cossack_squat', 'leg_swing', 'standing_quad_stretch',
+    'cross_body_shoulder_stretch', 'overhead_triceps_stretch',
+    'seated_spinal_twist'
+  ];
+  PER_SIDE.forEach(function (id) { if (BY_ID[id]) BY_ID[id].perSide = true; });
+
   // V2: curated weekly durability checklist. Ordered; every id resolves via byId().
   // Slots: unilateral | calf_tib | grip | core (weekly compliance UI groups by slot).
   ExerciseDB.DURABILITY_CHECKLIST = [
@@ -3211,6 +3483,27 @@
     { id: 'side_plank', slot: 'core' },
     { id: 'copenhagen_plank', slot: 'core' }
   ];
+
+  // P3: code-defined durability routines (NOT user templates — the template
+  // normalizer on old clients flattens structured targets). The builder seeds
+  // a normal draft from these; each item logs per its exercise setShape
+  // (weight_reps items become plain lift entries and keep earning credit).
+  ExerciseDB.DURABILITY_ROUTINES = {
+    A: [
+      { exerciseId: 'split_squat', sets: 3, targetReps: 8, weightHint: 'dumbbells at sides' },
+      { exerciseId: 'single_leg_calf_raise', sets: 3, targetReps: 12 },
+      { exerciseId: 'dead_hang', sets: 3, targetHoldSec: 45 },
+      { exerciseId: 'pallof_press', sets: 3, targetReps: 10 },
+      { exerciseId: 'farmer_carry', sets: 3, targetDistanceM: 40, weightHint: 'heavy — roughly a quarter bodyweight per hand' }
+    ],
+    B: [
+      { exerciseId: 'lateral_step_down', sets: 3, targetReps: 8 },
+      { exerciseId: 'tibialis_raise', sets: 3, targetReps: 15 },
+      { exerciseId: 'side_plank', sets: 3, targetHoldSec: 30 },
+      { exerciseId: 'copenhagen_plank', sets: 3, targetHoldSec: 20 },
+      { exerciseId: 'single_leg_rdl', sets: 3, targetReps: 8, weightHint: 'light dumbbell' }
+    ]
+  };
 
   function customList() {
     // Lazy read: Store loads after this file, so only touch it inside calls.

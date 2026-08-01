@@ -370,6 +370,7 @@
     pushups2min: { sfas: { min: 60, competitive: 80 }, general: { min: 40, competitive: 70 } },
     pullups_max: { sfas: { min: 8, competitive: 15 }, general: { min: 5, competitive: 12 } },
     plank: { sfas: { min: 120, competitive: 210 }, general: { min: 60, competitive: 180 } },
+    deadhang: { sfas: { min: 60, competitive: 120 }, general: { min: 30, competitive: 90 } },
     swim500m: { sfas: { min: 'pass', competitive: 'pass' }, general: { min: 'pass', competitive: 'pass' } }
   };
 
@@ -528,6 +529,38 @@
         best = { value: v, date: w.date };
       }
     });
+    return best;
+  };
+
+  /* ---------- training bests (P3 setwork) ----------
+     Longest hold logged in TRAINING via setwork entries, for the hold
+     protocols. Display-only nudge data (the "training" series + 'Record as
+     test' CTA in views-standards): it NEVER feeds currentBest or readiness —
+     the scorecard stays test-only by contract. exerciseRef -> protocol:
+     dead_hang -> deadhang; the plank family -> plank. */
+
+  const TRAINING_HOLD_REFS = {
+    deadhang: { dead_hang: 1 },
+    plank: { plank: 1, side_plank: 1, copenhagen_plank: 1, copenhagen_plank_short: 1 }
+  };
+
+  // Best setwork hold for a protocol -> {value: seconds, date} | null.
+  // Only setwork entries count (never lift/test/durability entries); only
+  // holdSec counts; date = when the best was first achieved (ties keep the
+  // earliest, matching currentBest).
+  Protocols.trainingBest = function (protocolId, workouts) {
+    const refs = TRAINING_HOLD_REFS[protocolId];
+    if (!refs) return null;
+    let best = null;
+    for (const w of sortedAsc(workouts)) {
+      for (const e of (w && w.entries) || []) {
+        if (!e || e.type !== 'setwork' || !refs[e.exerciseRef]) continue;
+        for (const s of e.sets || []) {
+          if (!s || !isNum(s.holdSec) || s.holdSec <= 0) continue;
+          if (!best || s.holdSec > best.value) best = { value: s.holdSec, date: w.date };
+        }
+      }
+    }
     return best;
   };
 
