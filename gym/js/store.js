@@ -3,8 +3,8 @@
   'use strict';
 
   const KEY = 'ironlog/v1';
-  const COLLECTIONS = ['users', 'workouts', 'templates', 'bodyMetrics', 'healthSamples', 'customExercises', 'painLog', 'coachJournal'];
-  const DELETED_KEYS = ['workouts', 'templates', 'bodyMetrics', 'healthSamples', 'customExercises', 'users', 'painLog', 'coachJournal'];
+  const COLLECTIONS = ['users', 'workouts', 'templates', 'bodyMetrics', 'healthSamples', 'customExercises', 'painLog', 'coachJournal', 'routines'];
+  const DELETED_KEYS = ['workouts', 'templates', 'bodyMetrics', 'healthSamples', 'customExercises', 'users', 'painLog', 'coachJournal', 'routines'];
   const SERIES = ['#2ca350', '#0a84ff', '#cf7c00', '#bf5af2', '#ff375f', '#3399cc'];
 
   const Store = {};
@@ -66,6 +66,7 @@
       customExercises: [],
       painLog: [],
       coachJournal: [],
+      routines: [],
       deleted: emptyDeleted(),
       sync: { url: '', secret: '', enabled: false, lastSyncAt: null, deviceId: U.uid('dev') }
     };
@@ -111,6 +112,10 @@
     // set.type absent => 'work', unknown entry types pass through verbatim.
     // Workouts are shallow-copied so caller-owned objects are never mutated.
     st.workouts = st.workouts.map(normalizeWorkoutRead);
+    // P3.5: routines are per-entity normalized on every read (shallow copies —
+    // caller-owned objects never mutated; unknown keys preserved at routine AND
+    // item level so newer-version data survives this client).
+    st.routines = st.routines.map(normalizeRoutine);
     if (typeof raw.currentUserId === 'string' &&
         st.users.some(function (u) { return u.id === raw.currentUserId; })) {
       st.currentUserId = raw.currentUserId;
@@ -240,7 +245,8 @@
       ['bodyMetrics', 'bodyMetrics'],
       ['healthSamples', 'healthSamples'],
       ['painLog', 'painLog'],
-      ['coachJournal', 'coachJournal']
+      ['coachJournal', 'coachJournal'],
+      ['routines', 'routines']
     ];
     for (const pair of cascade) {
       const coll = pair[0];
@@ -715,6 +721,103 @@
     return state.templates.filter(function (t) {
       return t.userId === userId || t.userId === null || t.userId === undefined;
     });
+  };
+
+  /* ---------- routines (P3.5 planner) ---------- */
+
+  // NOT templates (binding): the template normalizer — here and on every old
+  // client — rebuilds items to {exerciseId,targetSets,targetRepsLow,
+  // targetRepsHigh} and would flatten structured targets. routines is its own
+  // entity collection: old clients preserve and entity-merge it via the P0
+  // unknown-collection pathway (tombstone union included). Same forward-compat
+  // rule as typed entries: unknown keys pass through VERBATIM at both routine
+  // and item level — never strip what we don't know.
+
+  const ROUTINE_KINDS = ['stretch', 'durability', 'circuit', 'custom'];
+
+  function normalizeRoutineItem(it) {
+    it = it && typeof it === 'object' ? it : {};
+    const out = shallowCopy(it);
+    out.exerciseId = typeof it.exerciseId === 'string' ? it.exerciseId : String(it.exerciseId || '');
+    const n = Number(it.sets);
+    out.sets = isFinite(n) && n >= 1 ? Math.round(n) : 1;
+    coerceNum(out, 'targetReps');
+    coerceNum(out, 'targetHoldSec');
+    coerceNum(out, 'targetDistanceM');
+    coerceNum(out, 'targetWeightKg');
+    coerceNum(out, 'restSec'); // per-item override of routine restSec
+    coerceEnum(out, 'method', SETWORK_METHODS); // stretch method override
+    coerceStr(out, 'note');
+    return out;
+  }
+
+  function normalizeRoutine(r) {
+    const out = shallowCopy(r);
+    out.id = r.id || U.uid('rt');
+    out.userId = typeof r.userId === 'string' ? r.userId : null;
+    out.name = typeof r.name === 'string' ? r.name : String(r.name || '');
+    out.kind = ROUTINE_KINDS.indexOf(r.kind) >= 0 ? r.kind : 'custom';
+    out.items = (Array.isArray(r.items) ? r.items : []).map(normalizeRoutineItem);
+    const rs = Number(r.restSec);
+    out.restSec = isFinite(rs) && rs >= 0 ? rs : 60; // default rest between sets
+    out.createdAt = Number(r.createdAt) || 0;
+    out.updatedAt = Number(r.updatedAt) || 0;
+    return out;
+  }
+
+  Store.addRoutine = function (r) {
+    ensureLoaded();
+    r = r || {};
+    const now = Date.now();
+    const routine = normalizeRoutine(r);
+    if (!routine.userId) routine.userId = state.currentUserId;
+    if (!routine.name.trim()) routine.name = 'Routine';
+    routine.createdAt = typeof r.createdAt === 'number' ? r.createdAt : now;
+    routine.updatedAt = now;
+    state.routines.push(routine);
+    Store.save();
+    return routine;
+  };
+
+  Store.updateRoutine = function (id, patch) {
+    ensureLoaded();
+    const i = state.routines.findIndex(function (x) { return x.id === id; });
+    if (i < 0) return null;
+    patch = patch || {};
+    const r = state.routines[i];
+    for (const k in patch) {
+      if (k === 'id' || k === 'createdAt') continue;
+      r[k] = patch[k];
+    }
+    // Re-normalize the whole routine so patched kind/restSec/items get the same
+    // coercion as a load; unknown keys survive (shallow-copy semantics).
+    const norm = normalizeRoutine(r);
+    norm.updatedAt = Date.now();
+    state.routines[i] = norm;
+    Store.save();
+    return norm;
+  };
+
+  Store.deleteRoutine = function (id) {
+    ensureLoaded();
+    const i = state.routines.findIndex(function (x) { return x.id === id; });
+    if (i < 0) return false;
+    state.routines.splice(i, 1);
+    state.deleted.routines[id] = Date.now();
+    Store.save();
+    return true;
+  };
+
+  Store.routinesFor = function (userId) {
+    ensureLoaded();
+    return state.routines
+      .filter(function (r) { return r.userId === userId; })
+      .sort(function (a, b) {
+        const an = String(a.name || '').toLowerCase();
+        const bn = String(b.name || '').toLowerCase();
+        if (an !== bn) return an < bn ? -1 : 1;
+        return (a.createdAt || 0) - (b.createdAt || 0);
+      });
   };
 
   /* ---------- body metrics ---------- */
