@@ -2313,3 +2313,122 @@ button.list-row:active,
     box-shadow: none;
   }
 }
+
+/* ---- P2: Standards ---- */
+
+/* readiness scorecard rows (buttons when the protocol is testable) */
+.std-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.std-row {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 12px 2px;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+}
+
+.std-list > .std-row:last-child {
+  border-bottom: none;
+  padding-bottom: 4px;
+}
+
+button.std-row:hover .std-name {
+  color: var(--accent);
+}
+
+.std-row-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 7px;
+}
+
+.std-name {
+  font-size: 14px;
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.std-val {
+  flex: none;
+  font-size: 13px;
+}
+
+/* progress bar toward competitive, with a notch at the minimum tier */
+.std-bar {
+  position: relative;
+  margin: 2px 0 7px;
+}
+
+.std-bar .progress-bar {
+  height: 6px;
+  border-radius: 3px;
+}
+
+.std-bar .progress-bar > span {
+  border-radius: 3px;
+}
+
+.std-bar .tick {
+  position: absolute;
+  top: -2px;
+  width: 2px;
+  height: 10px;
+  border-radius: 1px;
+  background: var(--text-muted);
+  pointer-events: none;
+}
+
+.std-sub {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* ACFT wizard: label · input · live points, one grid row per event */
+.acft-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 104px 58px;
+  gap: 8px;
+  align-items: center;
+  padding: 5px 0;
+}
+
+.acft-row label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-2);
+  min-width: 0;
+}
+
+.acft-row .input {
+  text-align: center;
+  padding: 8px 6px;
+  min-height: 44px;
+  font-variant-numeric: tabular-nums;
+}
+
+.acft-row .pts {
+  font-size: 13px;
+  font-weight: 700;
+  text-align: right;
+  color: var(--text-2);
+}
+
+.acft-total {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  font-weight: 700;
+}

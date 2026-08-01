@@ -268,6 +268,68 @@
     return out;
   }
 
+  /* ---------- readiness snapshot (P2, performance mode) ---------- */
+
+  // Compact single-value ring in the Charts.rings visual language (track at
+  // 12% opacity, round cap, -90° start) with the percentage in the center.
+  function readinessRingSvg(pct, color) {
+    const R = 34;
+    const C = Math.round(2 * Math.PI * R * 10) / 10;
+    const off = Math.round(C * (1 - U.clamp(pct, 0, 100) / 100) * 10) / 10;
+    return '<svg viewBox="0 0 84 84" width="84" height="84" role="img" ' +
+      'aria-label="Overall readiness ' + pct + '%" style="flex:none">' +
+      '<circle cx="42" cy="42" r="' + R + '" fill="none" stroke="' + color +
+        '" stroke-opacity=".12" stroke-width="10"/>' +
+      '<circle cx="42" cy="42" r="' + R + '" fill="none" stroke="' + color +
+        '" stroke-width="10" stroke-linecap="round" stroke-dasharray="' + C +
+        '" stroke-dashoffset="' + off + '" transform="rotate(-90 42 42)"/>' +
+      '<text x="42" y="48" text-anchor="middle" style="font-size:19px;font-weight:700;' +
+        'fill:var(--text)">' + pct + '%</text></svg>';
+  }
+
+  // Dashboard readiness snapshot card. Returns '' unless Protocols is loaded
+  // and produced rows — the dashboard must never crash on a bad load order.
+  function readinessCardHTML(u, w) {
+    if (typeof Protocols === 'undefined' || !Protocols || !Protocols.readiness) return '';
+    let rd = null;
+    try {
+      rd = Protocols.readiness(u, { workouts: w, bodyMetrics: Store.bodyMetricsFor(u.id, 'weightKg') });
+    } catch (e) { rd = null; }
+    if (!rd || !Array.isArray(rd.rows) || !rd.rows.length) return '';
+    const pct = Math.round(U.clamp(rd.overallPct || 0, 0, 1) * 100);
+    const anyTested = rd.rows.some(function (r) {
+      return r.current !== null && r.current !== undefined;
+    });
+    const weakRow = rd.weakest
+      ? rd.rows.filter(function (r) { return r.protocolId === rd.weakest; })[0]
+      : null;
+    let weakLine = '';
+    if (!anyTested) {
+      weakLine = 'No tests recorded yet — record one to see where you stand.';
+    } else if (weakRow) {
+      let cur = '', target = '';
+      try {
+        cur = Protocols.fmtValue(weakRow.protocolId, weakRow.current, App.units());
+        target = Protocols.fmtValue(weakRow.protocolId, weakRow.competitive, App.units());
+      } catch (e) { /* formatting is cosmetic */ }
+      weakLine = 'Weakest link: ' + weakRow.name +
+        (cur ? ' — ' + cur : '') + (target ? ' vs ' + target + ' target' : '');
+    }
+    let html = cardOpen('Readiness',
+      '<button type="button" class="btn ghost small" data-act="go-standards">Standards</button>');
+    html += '<div style="display:flex;align-items:center;gap:16px;margin-top:4px">' +
+      readinessRingSvg(pct, Charts.SERIES[0]) +
+      '<div style="flex:1;min-width:0">' +
+        '<div style="font-size:14px;font-weight:600">' + pct + '% of the way to competitive</div>' +
+        (weakLine
+          ? '<div style="font-size:13px;color:var(--text-2);margin-top:4px;line-height:1.5">' +
+            U.esc(weakLine) + '</div>'
+          : '') +
+      '</div></div>';
+    html += '</section>';
+    return html;
+  }
+
   /* ---------- pain quick-log ---------- */
 
   function toggleRow(id, label) {
@@ -524,8 +586,17 @@
       const daysTo = U.daysBetween(today, u.goals.selectionDate);
       if (daysTo >= 0) {
         const wksTo = Math.ceil(daysTo / 7);
-        const cdLabel = daysTo === 0 ? 'Selection is today'
+        let cdLabel = daysTo === 0 ? 'Selection is today'
           : wksTo + (wksTo === 1 ? ' week' : ' weeks') + ' to selection';
+        // v2 (P2): training phase appended — '35 weeks to selection · Build'
+        if (typeof Protocols !== 'undefined' && Protocols && Protocols.phaseFor) {
+          try {
+            const ph = Protocols.phaseFor(u.goals.selectionDate, today);
+            if (ph && ph.phase) {
+              cdLabel += ' · ' + ph.phase.charAt(0).toUpperCase() + ph.phase.slice(1);
+            }
+          } catch (e) { /* phase is decoration — the chip still renders */ }
+        }
         html += '<div style="margin:-6px 0 14px">' +
           '<span class="badge" style="display:inline-flex;align-items:center;gap:6px;font-size:13px;padding:6px 12px">' +
           sizedIcon(App.icons.roadmap, 16) + '<span>' + U.esc(cdLabel) + '</span></span></div>';
@@ -576,6 +647,9 @@
       '<span>' + prsMonth + '</span></span>' +
       '<span class="delta flat">' + (prsMonth ? 'keep it up' : 'none yet') + '</span></div>';
     html += '</div>';
+
+    /* readiness snapshot (performance mode + Protocols loaded) */
+    if (perf) html += readinessCardHTML(u, w);
 
     /* weekly status line (performance mode only) */
     if (perf && window.Guardrails && Guardrails.weeklyStatus) {
@@ -760,6 +834,7 @@
     });
     U.on(container, 'click', '[data-act="log-pain"]', function () { openPainSheet(u); });
     U.on(container, 'click', '[data-act="go-body"]', function () { App.navigate('body'); });
+    U.on(container, 'click', '[data-act="go-standards"]', function () { App.navigate('standards'); });
   }
 
   function startSuggestedWorkout(ids, labels) {
