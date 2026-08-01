@@ -723,6 +723,19 @@
   function stageEl() { return root ? root.querySelector('[data-p="stage"]') : null; }
   function footEl() { return root ? root.querySelector('[data-p="foot"]') : null; }
 
+  // Every screen render REPLACES the stage/foot nodes so the previous step's
+  // delegated listeners die with them. Without this they accumulate on the
+  // persistent elements and a tap replays stale closures (e.g. a ring tap on
+  // step 3 recording a ghost set for step 1's exercise).
+  function resetStageFoot() {
+    if (!root) return;
+    ['stage', 'foot'].forEach(function (key) {
+      const el = root.querySelector('[data-p="' + key + '"]');
+      if (!el || !el.parentNode) return;
+      el.parentNode.replaceChild(el.cloneNode(false), el);
+    });
+  }
+
   function setSub(text) {
     const el = root && root.querySelector('[data-p="sub"]');
     if (el) el.textContent = text;
@@ -899,6 +912,7 @@
   function renderStep() {
     const step = curStep();
     if (!step) { showSummary(); return; }
+    resetStageFoot();
     S.lastDoneVisible = false;
     if (step.type === 'rest') renderRest(step);
     else if (step.shape === 'hold') renderHold(step);
@@ -1243,6 +1257,7 @@
 
   function renderCircuit() {
     const c = S.compiled;
+    resetStageFoot();
     const stage = stageEl();
     const foot = footEl();
     setSub(c.amrapSec ? 'AMRAP · ' + fmtClock(c.amrapSec) : 'Circuit · ' + c.rounds + ' rounds');
@@ -1337,6 +1352,7 @@
     S.finished = true;
     stopCountdown();
     updateHeaderDone();
+    resetStageFoot();
     const stage = stageEl();
     const foot = footEl();
     const items = Array.isArray(S.routine.items) ? S.routine.items : [];

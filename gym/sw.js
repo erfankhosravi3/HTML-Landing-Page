@@ -3,7 +3,7 @@
    or installed PWAs keep serving the old cache forever. */
 'use strict';
 
-const CACHE_NAME = 'ironlog-v2p3';
+const CACHE_NAME = 'ironlog-v2p4';
 
 const SHELL = [
   './',
@@ -21,6 +21,7 @@ const SHELL = [
   './js/applehealth.js',
   './js/app.js',
   './js/views-log.js',
+  './js/player.js',
   './js/views-library.js',
   './js/views-insights.js',
   './js/views-standards.js',
