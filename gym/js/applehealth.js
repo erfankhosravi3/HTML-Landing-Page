@@ -45,12 +45,18 @@
     return /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : '';
   }
 
+  // '2026-06-14 07:30:00 -0700' -> epoch ms. Explicit math — Date.parse handling
+  // of '-0700'-style offsets is engine-dependent.
+  const TS_RE = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(?:\s*([+-])(\d{2}):?(\d{2}))?/;
   function parseHKTime(s) {
-    if (!s) return null;
-    const p = String(s).trim().split(' ');
-    if (p.length < 2) return null;
-    const t = Date.parse(p[0] + 'T' + p[1] + (p[2] || ''));
-    return isFinite(t) ? t : null;
+    const m = TS_RE.exec(String(s || '').trim());
+    if (!m) return null;
+    let t = Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
+    if (m[7]) {
+      const off = (+m[8] * 60 + +m[9]) * 60000;
+      t += m[7] === '-' ? off : -off;
+    }
+    return t;
   }
 
   // 'HKWorkoutActivityTypeTraditionalStrengthTraining' -> 'Traditional Strength Training'
