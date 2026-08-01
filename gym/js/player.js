@@ -318,8 +318,12 @@
         return;
       }
       if (en.exerciseId && !en.type) {
-        // legacy-shaped lift entry (no type key)
-        const ls = (en.sets || []).filter(function (s) { return s && num(s.reps) > 0; });
+        // legacy-shaped lift entry (no type key). Seed from WORK sets — warmup
+        // sets must not set the target load or inflate the set count; fall back
+        // to all rep-bearing sets only when no work sets exist.
+        const all = (en.sets || []).filter(function (s) { return s && num(s.reps) > 0; });
+        const work = all.filter(function (s) { return s.type !== 'warmup'; });
+        const ls = work.length ? work : all;
         if (!ls.length) return;
         const item = { exerciseId: en.exerciseId, sets: ls.length };
         item.targetReps = Math.round(num(ls[0].reps));
@@ -328,7 +332,9 @@
         return;
       }
       if (en.exerciseId && en.type === 'lift') {
-        const ls2 = (en.sets || []).filter(function (s) { return s && num(s.reps) > 0; });
+        const all2 = (en.sets || []).filter(function (s) { return s && num(s.reps) > 0; });
+        const work2 = all2.filter(function (s) { return s.type !== 'warmup'; });
+        const ls2 = work2.length ? work2 : all2;
         if (!ls2.length) return;
         const item2 = { exerciseId: en.exerciseId, sets: ls2.length };
         item2.targetReps = Math.round(num(ls2[0].reps));
@@ -475,6 +481,7 @@
         stepIdx: S.stepIdx,
         actuals: S.actuals,
         stickyDepth: S.stickyDepth,
+        lastDone: S.lastDone || null,
         roundsDone: S.roundsDone,
         stationIdx: S.stationIdx,
         startedAt: S.startedAt,
@@ -485,6 +492,26 @@
 
   function clearPending() {
     try { localStorage.removeItem(LS_KEY); } catch (e) { /* ignore */ }
+  }
+
+  // Does a persisted pending session hold any recorded work worth protecting?
+  function pendingHasWork(p) {
+    if (!p) return false;
+    if (Math.round(num(p.roundsDone)) > 0) return true;
+    return Array.isArray(p.actuals) && p.actuals.some(function (a) {
+      return a && Array.isArray(a.sets) && a.sets.length > 0;
+    });
+  }
+
+  // Resolve the profile that owns a pending session (falls back to current).
+  function pendingOwner(p) {
+    const users = window.Store && Store.state && Array.isArray(Store.state.users)
+      ? Store.state.users : [];
+    let owner = null;
+    if (p && p.userId) {
+      owner = users.find(function (x) { return x && x.id === p.userId; }) || null;
+    }
+    return owner || user();
   }
 
   // App-boot hook: pending session info (or null). The boot wiring offers
@@ -507,6 +534,16 @@
     const p = readPending();
     if (!p) return false;
     if (S) return false;
+    // Mode gate parity with Player.start, resolved against the pending
+    // session's OWNER (the boot flow switches currentUser to the owner before
+    // resuming; a bare resume call falls back to the current user). A
+    // simple-mode profile must never see the player. Refuse WITHOUT clearing
+    // the pending, so switching back to Performance mode can still resume it.
+    const owner = pendingOwner(p);
+    if (!perfMode(owner)) {
+      toast('Guided sessions live in Performance mode', 'err');
+      return false;
+    }
     return startSession(p.routine, {
       routineRef: p.routineRef,
       name: p.name,
@@ -533,7 +570,14 @@
 
   function onHashChange() {
     // Contract: navigation while a session is active pauses — never destroys.
-    if (S && S.counting && !S.paused) togglePause(true);
+    // Rest steps are exempt: rest keeps counting through a glance elsewhere
+    // (pausing recovery time helps no one), and only work steps pause.
+    if (!S || !S.counting || S.paused) return;
+    if (S.compiled && S.compiled.kind === 'steps') {
+      const st = curStep();
+      if (st && st.type === 'rest') return;
+    }
+    togglePause(true);
   }
 
   function onKeydown(e) {
@@ -580,6 +624,47 @@
     const u = user();
     if (!u) { toast('Create a profile first', 'err'); return false; }
     if (!perfMode(u)) { toast('Guided sessions live in Performance mode', 'err'); return false; }
+    // Never silently clobber a deferred pending session that holds recorded
+    // work (or belongs to someone else) — mirror the manual draft's
+    // 'Starting this one will discard it' semantics, with a resume-instead
+    // escape hatch. An empty pending owned by the current user is overwritten
+    // silently, matching draft behavior.
+    const pend = readPending();
+    const foreign = !!(pend && pend.userId && pend.userId !== u.id);
+    if (pend && (foreign || pendingHasWork(pend)) && window.App && App.modal) {
+      const owner = pendingOwner(pend);
+      const ownerName = owner && owner.name ? owner.name : 'Someone';
+      const pendName = pend.name || (pend.routine && pend.routine.name) || 'Guided session';
+      App.modal({
+        title: 'Unfinished guided session',
+        content: '<p class="text-2" style="font-size:14px;line-height:1.55;margin:4px 0 8px">' +
+          U.esc(ownerName) + ' has an unfinished guided session — “' + U.esc(pendName) +
+          '”. Starting a new one discards its recorded work.</p>',
+        actions: [
+          { label: 'Cancel', kind: 'ghost' },
+          {
+            label: 'Resume it',
+            kind: 'primary',
+            onClick: function () {
+              if (owner && window.Store && Store.setCurrentUser) {
+                const cur = user();
+                if (!cur || cur.id !== owner.id) Store.setCurrentUser(owner.id);
+              }
+              if (!Player.resume()) toast('Could not resume that session', 'err');
+            }
+          },
+          {
+            label: 'Discard & start new',
+            kind: 'danger',
+            onClick: function () {
+              clearPending();
+              startSession(routine, opts);
+            }
+          }
+        ]
+      });
+      return false; // deferred to the modal — nothing started yet
+    }
     return startSession(routine, opts);
   };
 
@@ -624,6 +709,13 @@
         });
       }
       if (resume.stickyDepth && typeof resume.stickyDepth === 'object') S.stickyDepth = resume.stickyDepth;
+      // restore the just-finished-set pointer so a mid-rest reload keeps the
+      // depth ask (validated against the restored actuals before trusting it)
+      if (resume.lastDone && typeof resume.lastDone === 'object' &&
+          S.actuals[resume.lastDone.itemIdx] &&
+          S.actuals[resume.lastDone.itemIdx].sets[resume.lastDone.setPos]) {
+        S.lastDone = resume.lastDone;
+      }
       if (compiled.kind === 'steps') {
         S.stepIdx = Math.min(Math.max(0, Math.round(num(resume.stepIdx))), compiled.steps.length);
       }
@@ -952,7 +1044,14 @@
       '</div>';
     foot.innerHTML = nextStripHTML();
 
+    const armedAt = Date.now(); // when this hold screen rendered
+
     U.on(stage, 'click', '[data-p="ring"]', function () {
+      // Re-render-under-pointer guard: the second click of a physical
+      // double-tap on the PREVIOUS step's ring lands on this freshly rendered
+      // one (identical coordinates). Ignore taps within ~300ms of render so a
+      // double-tap can't record a ghost ~1s set for a side never shown.
+      if (Date.now() - armedAt < 300) return;
       // completing early records the ACTUAL elapsed seconds — never the plan
       const remain = S.paused
         ? Math.round(S.remainMsAtPause / 1000)
@@ -968,13 +1067,18 @@
 
   function adjustHold(deltaSec) {
     if (!S.counting) return;
-    // −15s/+15s adjusts the CURRENT step target; never below 5s total or 1s left
-    const newTotal = Math.max(5, S.totalSec + deltaSec);
-    const applied = newTotal - S.totalSec;
-    if (!applied) return;
+    // −15s/+15s adjusts the CURRENT step target; never below 5s total or 1s
+    // left. When the floor clamps, re-derive the new total from the REAL
+    // elapsed time so totalSec − remain always equals seconds actually held —
+    // both completion paths record from totalSec (ACTUAL-elapsed contract).
+    const remainMs = S.paused ? S.remainMsAtPause : Math.max(0, S.endsAt - Date.now());
+    const elapsedSec = Math.max(0, Math.round((S.totalSec * 1000 - remainMs) / 1000));
+    const newTotal = Math.max(5, Math.max(elapsedSec + 1, S.totalSec + deltaSec));
+    if (newTotal === S.totalSec) return;
     S.totalSec = newTotal;
-    if (S.paused) S.remainMsAtPause = Math.max(1000, S.remainMsAtPause + applied * 1000);
-    else S.endsAt = Math.max(Date.now() + 1000, S.endsAt + applied * 1000);
+    const newRemainMs = Math.max(1000, (newTotal - elapsedSec) * 1000);
+    if (S.paused) S.remainMsAtPause = newRemainMs;
+    else S.endsAt = Date.now() + newRemainMs;
     paintCountdown();
   }
 
@@ -1138,6 +1242,9 @@
     stage.innerHTML =
       '<div class="player-phase-lbl">REST</div>' +
       ringHTML(164, 72, 9, 'var(--blue)', false) +
+      '<div class="player-adjust">' +
+        '<button type="button" class="pause" data-p="pause" aria-label="Pause">⏸</button>' +
+      '</div>' +
       depthAsk + nextCard;
     foot.innerHTML = '<button type="button" class="player-bigbtn ghost" data-p="skip">Skip rest →</button>';
 
@@ -1154,6 +1261,7 @@
         c.classList.toggle('active', c === b);
       });
     });
+    U.on(stage, 'click', '[data-p="pause"]', function () { togglePause(); });
     U.on(foot, 'click', '[data-p="skip"]', function () { finishRest(true); });
     paintCountdown();
   }
@@ -1285,7 +1393,17 @@
       '<div class="player-stations">' + c.stations.map(stationRow).join('') + '</div>';
     foot.innerHTML = '<button type="button" class="player-bigbtn" data-p="rounddone">Round done ✓</button>';
 
+    // Re-render-under-pointer guard: closeRound() synchronously re-renders an
+    // identical armed button at the same coordinates, so the second click of a
+    // physical double-tap would close ANOTHER round. Ignore round-advance taps
+    // for ~400ms after a round closes (covers both the Round-done button and
+    // the last-station tap path).
+    function roundCooling() {
+      return S.lastRoundCloseAt && Date.now() - S.lastRoundCloseAt < 400;
+    }
+
     U.on(stage, 'click', '[data-st]', function (e, b) {
+      if (roundCooling()) return;
       const i = parseInt(b.getAttribute('data-st'), 10) || 0;
       // tap the current station to advance past it; tap another to jump there
       if (i === S.stationIdx) S.stationIdx = Math.min(c.stations.length, S.stationIdx + 1);
@@ -1294,7 +1412,10 @@
       writePending(S);
       renderCircuit();
     });
-    U.on(foot, 'click', '[data-p="rounddone"]', function () { closeRound(); });
+    U.on(foot, 'click', '[data-p="rounddone"]', function () {
+      if (roundCooling()) return;
+      closeRound();
+    });
     tickCircuit();
   }
 
@@ -1302,6 +1423,7 @@
     const c = S.compiled;
     S.roundsDone++;
     S.stationIdx = 0;
+    S.lastRoundCloseAt = Date.now(); // arms the double-tap cooldown
     vibrate([180, 90, 180]);
     beep('work');
     writePending(S);
@@ -1316,6 +1438,10 @@
 
   function tickCircuit() {
     if (!root || !S) return;
+    // Once the summary is up, the expiry side effects (vibrate/beep/'time'
+    // voice/showSummary) must never re-fire — without this guard an expired
+    // AMRAP re-triggered them every 250ms tick, forever.
+    if (S.finished) return;
     const c = S.compiled;
     const el = root.querySelector('[data-p="circlock"]');
     const elapsedSec = Math.round((Date.now() - S.startedAt) / 1000);
@@ -1396,17 +1522,25 @@
           }
           rows += '<div class="player-sum-row">' +
             '<span class="lb">' + (si + 1) + (s.side ? ' · ' + s.side : '') + '</span>' + inputs + '</div>';
+          if (stretch) {
+            // per-set depth control — prefilled from the in-session taps;
+            // each button writes ONLY this set's intensity (never flattens
+            // the per-set actuals recorded during the rests)
+            const curDepth = U.clamp(Math.round(num(s.intensity)) || 2, 1, 4);
+            rows += '<div class="player-sum-row">' +
+              '<span class="lb">Depth</span>' +
+              '<div class="segmented block player-depth" data-sumdepth="' + i + ':' + si + '">' +
+                DEPTHS.map(function (d) {
+                  return '<button type="button" data-depth="' + d.n + '"' +
+                    (d.n === curDepth ? ' class="active"' : '') +
+                    ' aria-label="Depth ' + d.n + ' — ' + U.esc(d.label) + '">' + d.n + '</button>';
+                }).join('') +
+              '</div></div>';
+          }
         });
         entriesHTML +=
           '<div class="card player-sum-entry">' +
             '<div class="ti">' + U.esc(exName(item.exerciseId)) + '</div>' + rows +
-            (stretch
-              ? '<div class="segmented block player-depth" data-sumdepth="' + i + '">' +
-                  DEPTHS.map(function (d) {
-                    return '<button type="button" data-depth="' + d.n + '">' + d.n + ' · ' + d.label + '</button>';
-                  }).join('') +
-                '</div>'
-              : '') +
           '</div>';
       });
     }
@@ -1429,10 +1563,13 @@
 
     U.on(stage, 'click', '[data-sumdepth] [data-depth]', function (e, b) {
       const wrap = b.closest('[data-sumdepth]');
-      const i = parseInt(wrap.getAttribute('data-sumdepth'), 10) || 0;
+      const addr = wrap.getAttribute('data-sumdepth').split(':');
+      const i = parseInt(addr[0], 10);
+      const si = parseInt(addr[1], 10);
       const n = U.clamp(parseInt(b.getAttribute('data-depth'), 10) || 2, 1, 4);
       const a = S.actuals[i];
-      if (a) a.sets.forEach(function (s) { s.intensity = n; });
+      const set = a && a.sets[si];
+      if (set) set.intensity = n; // this set only — per-set actuals stay per-set
       U.$$('[data-depth]', wrap).forEach(function (cbtn) { cbtn.classList.toggle('active', cbtn === b); });
     });
     U.on(stage, 'input', '[data-sum]', function (e, inp) { readSummaryInput(inp); });

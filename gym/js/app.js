@@ -1573,6 +1573,11 @@
       ? Store.state.users.find(function (x) { return x.id === pend.userId; })
       : Store.currentUser();
     if (!owner) { P.discardPending(); return; } // orphaned (profile deleted)
+    // Mode gate: guided sessions are Performance-mode only. If the owner has
+    // since switched to simple mode, show nothing (simple mode stays
+    // byte-identical) but KEEP the pending — switching back to performance
+    // mode makes the offer reappear.
+    if (!(owner.settings && owner.settings.trainingProfile === 'performance')) return;
     App.modal({
       title: 'Guided session in progress',
       content: '<p class="text-2" style="font-size:14px;line-height:1.55;margin:4px 0 8px">' +
