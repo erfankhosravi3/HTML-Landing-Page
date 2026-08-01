@@ -960,3 +960,102 @@ the existing kept-as-is path. No changes to lift analytics semantics.
 js/player.js added: index.html script tag AFTER views-log.js; sw.js SHELL adds
 './js/player.js'; CACHE_NAME → 'ironlog-v2p4'. Deploy = PR → squash merge →
 verify live cache string.
+
+# V2 ADDENDUM — P4: INTELLIGENCE (load model · recovery · Apple Health v2)
+
+Implements the master plan's "P3 · Intelligence" phase (renumbered P4 after the
+setwork/player insertions) and its Daily/Weekly feedback loops. Deterministic
+arithmetic only — same philosophy as guardrails: auditable thresholds, no ML.
+
+## New module: js/loadmodel.js — namespace LoadModel (pure; after analytics.js)
+
+Per-modality load, NEVER blended into one number:
+- run: km/week (runs incl. treadmill; surface-agnostic)
+- ruck: load-miles/week = Σ(loadKgTotal × km) (per plan, headline ruck number)
+- lift: tonnage kg/week (existing Analytics.workoutVolume over lift entries)
+- engine-other: minutes/week (swim/bike/row/stairs/circuit durationMin)
+
+```js
+LoadModel.weekly(workouts, modality, weekStart) -> number
+LoadModel.acwr(workouts, modality, todayStr) -> { acute, chronic, ratio|null }
+  // acute = trailing 7d sum; chronic = mean of trailing 4 weekly sums (7d
+  // windows ending today); ratio null when chronic < a floor (insufficient
+  // history — never divide by ~0)
+LoadModel.status(workouts, todayStr) -> {
+  perModality: { run:{acute,chronic,ratio,zone}, ruck:{...}, lift:{...},
+                 other:{...} },
+  headline: string|null }        // plain-language daily guidance, worst zone
+  // zones: ratio > 1.4 'ramping-fast' · 1.3–1.4 'ramping' · 0.8–1.3 'steady'
+  //        < 0.8 'detraining' (chronic-established only)
+  // headline example (plan verbatim style): 'Ramping fast — 40% above your
+  // 4-week ruck average. Today should be easy or off.'
+LoadModel.restingHR(healthSamples, todayStr) -> { today|latest, baseline28,
+  spike: bool }                  // spike = latest >= baseline28 × 1.07 for the
+                                 // 2 most recent consecutive sampled days
+LoadModel.greenWeek(workouts, user, weekStart) -> { sessions, restDayTaken,
+  green: bool }                  // green = >=4 sessions AND >=1 full rest day
+                                 // (elapsed-days rule for the current week)
+LoadModel.ruckEconomy(workouts) -> [{ date, km, loadKg, minPerKm }]
+  // rucks with distance+duration; view plots pace vs load
+```
+
+## Surfaces (performance mode only; typeof-guarded everywhere)
+
+- Dashboard: TODAY strip at top — LoadModel.status headline + per-modality
+  ACWR chips (zone-colored, CVD-safe palette); resting-HR spike appends an
+  'easy day' advisory. Green-week chip replaces the streak flame for
+  performance users only (simple-mode streaks byte-identical).
+- Analytics view gains a Performance section: easy/hard weekly split stacked
+  bars (existing classification) · ruck economy scatter (pace vs load, last 12
+  wk highlighted) · benchmark pace trends (2mi/5mi from test entries + best
+  cardio efforts at those distances) · per-modality weekly load bars with
+  chronic line. Max 3 series/chart, direct labels, existing Charts idioms.
+- Recovery strip (dashboard card): resting-HR sparkline w/ baseline + spike
+  flag · sleep hours (7d avg vs 28d) from healthSamples · open pain entries
+  count · rest-day status. Absent data degrades to hints, never crashes.
+- Deload integration: guardrails gains checkWeekly inputs — easy-split
+  collapse and restingHR spike produce 'warn' advisories in weekly status
+  (existing TEMPLATES pattern); red-flag pain rules unchanged and still
+  supreme.
+
+## Apple Health v2 (applehealth.js + views wiring)
+
+- Workout import: parse <Workout> elements for Running/Walking/Hiking (ruck
+  candidate)/Swimming/Cycling/Rowing/StairClimbing → typed cardio entries
+  (distanceKm, durationMin, avgHR when present, source 'apple'); Hiking with
+  the user's confirmation maps to ruck (loadKg left null — prompt once per
+  import session). Import writes workouts with source:'apple' + a stable
+  appleId (HK uuid or start-timestamp hash) on the workout.
+- Double-count protection: skip an Apple workout when (a) same appleId already
+  imported, or (b) a manual workout of the same user exists on the same date
+  whose kind matches and |durationMin delta| <= 25% — list skipped items in
+  the import summary instead of silently dropping.
+- healthSamples continues to carry restingHR/sleep/steps/vo2max rows (already
+  implemented); the recovery strip reads them read-only.
+- Old clients: imported workouts are ordinary cardio workouts (P1 shape) —
+  no new entry types; forward-compat untouched.
+
+## Leaderboard (family view) — the one family-visible change, per the approved
+master plan ('activity badges so your 12-mile ruck finally counts'):
+- Each member card gains small activity badges for the trailing 4 weeks:
+  sessions count + per-kind icons (lift/run/ruck/swim/other) with counts.
+  Volume metric stays lift-only. Additive rows only; no layout reflow of
+  existing elements; simple-mode users see the same badges (they are part of
+  the shared family surface, sanctioned by the plan).
+
+## Acceptance tests (binding)
+
+1. LoadModel pure functions: weekly windows (Mon boundaries per app
+   convention), ACWR floors/zones incl. insufficient-history null, headline
+   selection (worst zone wins; ties: ruck > run > lift > other), restingHR
+   spike (consecutive-sampled-days rule, gaps tolerated), greenWeek elapsed
+   rule, ruckEconomy filtering. 100+ asserts.
+2. Analytics invisibility: existing functions byte-identical outputs (suite
+   extension); simple-mode leak sweep extended (no TODAY strip, no recovery
+   strip, no perf analytics section; leaderboard badges ARE allowed).
+3. Apple import: fixture export.xml with workouts+samples → correct typed
+   entries, appleId dedupe, manual-overlap skip, Hiking→ruck confirm path,
+   import summary counts. Node-level harness on the parser + Playwright
+   file-input flow.
+4. sw.js CACHE_NAME → 'ironlog-v2p5'; loadmodel.js in SHELL + index.html after
+   analytics.js.
