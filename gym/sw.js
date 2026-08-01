@@ -1,7 +1,7 @@
 /* IronLog service worker — cache-first app shell, network-first navigations. */
 'use strict';
 
-const CACHE_NAME = 'ironlog-v1';
+const CACHE_NAME = 'ironlog-v2p0';
 
 const SHELL = [
   './',

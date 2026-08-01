@@ -39,6 +39,10 @@
         if (src[k] === undefined) continue;
         out[k] = Array.isArray(out[k]) ? (Array.isArray(src[k]) ? src[k].slice() : out[k]) : src[k];
       }
+      // Forward-compat: settings keys from newer app versions pass through untouched.
+      for (const k in src) {
+        if (!(k in out)) out[k] = src[k];
+      }
     }
     return out;
   }
@@ -95,6 +99,30 @@
     if (typeof raw.currentUserId === 'string' &&
         st.users.some(function (u) { return u.id === raw.currentUserId; })) {
       st.currentUserId = raw.currentUserId;
+    }
+    // Forward-compat: data written by newer app versions must survive a load by
+    // this version — unknown top-level fields, unknown tombstone maps, and a
+    // newer schemaVersion marker all pass through instead of being dropped.
+    // Without this, one out-of-date phone would erase new collections for the
+    // whole family on its next sync push.
+    const knownTop = ['schemaVersion', 'currentUserId', 'deleted', 'sync'].concat(COLLECTIONS);
+    for (const k in raw) {
+      if (knownTop.indexOf(k) === -1) st[k] = raw[k];
+    }
+    if (raw.deleted && typeof raw.deleted === 'object') {
+      for (const k in raw.deleted) {
+        if (DELETED_KEYS.indexOf(k) !== -1) continue;
+        const src = raw.deleted[k];
+        if (!src || typeof src !== 'object' || Array.isArray(src)) continue;
+        st.deleted[k] = {};
+        for (const id in src) {
+          const t = Number(src[id]);
+          if (isFinite(t) && t > 0) st.deleted[k][id] = t;
+        }
+      }
+    }
+    if (typeof raw.schemaVersion === 'number' && raw.schemaVersion > st.schemaVersion) {
+      st.schemaVersion = raw.schemaVersion;
     }
     return st;
   }
@@ -562,7 +590,8 @@
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
       return { ok: false, error: 'Backup must be a JSON object.' };
     }
-    const recognizable = raw.schemaVersion === 1 || COLLECTIONS.some(function (c) { return Array.isArray(raw[c]); });
+    const recognizable = (typeof raw.schemaVersion === 'number' && raw.schemaVersion >= 1) ||
+      COLLECTIONS.some(function (c) { return Array.isArray(raw[c]); });
     if (!recognizable) {
       return { ok: false, error: 'Not an IronLog backup — no recognizable data found.' };
     }
@@ -581,17 +610,33 @@
   /* ---------- sync merge (entity-level last-write-wins) ---------- */
 
   function mergeFingerprint() {
-    const snap = { currentUserId: state.currentUserId, deleted: state.deleted };
-    for (const c of COLLECTIONS) snap[c] = state[c];
+    const snap = {};
+    for (const k in state) {
+      if (k !== 'sync') snap[k] = state[k];
+    }
     return JSON.stringify(snap);
+  }
+
+  // Entity-shaped array collections beyond COLLECTIONS (from newer app versions)
+  // get the same LWW merge so an old client never loses them.
+  function unknownCollectionsOf(obj) {
+    const out = [];
+    for (const k in obj) {
+      if (k === 'sync' || k === 'deleted' || COLLECTIONS.indexOf(k) !== -1) continue;
+      if (Array.isArray(obj[k]) && obj[k].every(function (e) {
+        return e && typeof e === 'object' && typeof e.id === 'string';
+      })) out.push(k);
+    }
+    return out;
   }
 
   // Merges remote entities/tombstones into local state. Does NOT persist.
   function mergeEntities(remote) {
     const rDel = remote.deleted && typeof remote.deleted === 'object' ? remote.deleted : {};
-    for (const k of DELETED_KEYS) {
+    for (const k in rDel) {
       const src = rDel[k];
       if (!src || typeof src !== 'object' || Array.isArray(src)) continue;
+      if (!state.deleted[k]) state.deleted[k] = {};
       for (const id in src) {
         const t = Number(src[id]);
         if (isFinite(t) && t > 0) {
@@ -599,7 +644,12 @@
         }
       }
     }
-    for (const coll of COLLECTIONS) {
+    const colls = COLLECTIONS.slice();
+    for (const k of unknownCollectionsOf(remote)) {
+      if (colls.indexOf(k) === -1) colls.push(k);
+    }
+    for (const coll of colls) {
+      if (!Array.isArray(state[coll])) state[coll] = [];
       const remoteArr = Array.isArray(remote[coll]) ? remote[coll] : [];
       const byId = new Map();
       for (const e of state[coll]) {
