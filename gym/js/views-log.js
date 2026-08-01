@@ -1798,7 +1798,12 @@
       if (!checklist.length) {
         return '<p class="muted" style="font-size:13px;padding:6px 2px">Durability checklist unavailable — update the app to get the built-in drill list.</p>';
       }
-      const bySlot = U.groupBy(checklist, function (it) { return it.slot || 'other'; });
+      // Items on the entry but not on the checklist (older logs, future
+      // checklist revisions) must render and survive a save, not vanish.
+      const extras = ((editEn && editEn.items) || [])
+        .filter(function (id) { return !checklist.some(function (it) { return it.id === id; }); })
+        .map(function (id) { return { id: id, slot: 'other' }; });
+      const bySlot = U.groupBy(checklist.concat(extras), function (it) { return it.slot || 'other'; });
       let html = '';
       Object.keys(SLOT_LABELS).forEach(function (slot) {
         const items = bySlot[slot];
@@ -1848,7 +1853,10 @@
           kind: 'primary',
           keepOpen: true,
           onClick: function (api) {
-            const items = checklist.map(function (it) { return it.id; })
+            const knownIds = checklist.map(function (it) { return it.id; });
+            const extraIds = ((editEn && editEn.items) || [])
+              .filter(function (id) { return knownIds.indexOf(id) === -1; });
+            const items = knownIds.concat(extraIds)
               .filter(function (id) { return picked[id]; });
             if (!items.length) { App.toast('Tick at least one drill', 'err'); return; }
             const dateEl = U.$('#db-date', content);
@@ -1994,7 +2002,12 @@
               protocol: st.protocol,
               results: { value: value }
             };
-            if (editEn && typeof editEn.score === 'number') en.score = editEn.score;
+            // Keep a cached score only while the underlying value is unchanged;
+            // an edited value makes the old score stale.
+            if (editEn && typeof editEn.score === 'number' &&
+                editEn.results && editEn.results.value === value) {
+              en.score = editEn.score;
+            }
             if (p.unit === 'score') en.score = value;
             const notes = U.$('#ts-notes', content).value.trim();
             if (notes) en.notes = notes;
@@ -2840,7 +2853,10 @@
       html += sectionLabel('Notes') +
         '<p style="font-size:14px;color:var(--text-2);white-space:pre-wrap">' + U.esc(w.notes) + '</p>';
     }
-    const exNotes = w.entries.filter(function (en) { return en.notes; });
+    // Lift entries only — typed entries render their notes in their own card.
+    const exNotes = w.entries.filter(function (en) {
+      return en.notes && (!en.type || en.type === 'lift');
+    });
     if (exNotes.length) {
       html += sectionLabel('Exercise notes') + exNotes.map(function (en) {
         return '<p style="font-size:13px;color:var(--text-2);margin-bottom:6px"><b>' +

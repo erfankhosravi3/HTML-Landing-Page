@@ -392,9 +392,14 @@
     const avg = trailKm / 4;
     const rampPct = avg > 0 ? U.round1((runKm / avg - 1) * 100) : 0;
     const easySharePct = classifiedN > 0 ? U.round1((easyN / classifiedN) * 100) : null;
+    // Only elapsed days can count as rest taken — mid-week, the untrained
+    // remainder of the week isn't rest yet.
     let restDayTaken = false;
+    const today = U.todayStr();
     for (let i = 0; i < 7; i++) {
-      if (!sessionDates[U.addDays(ws, i)]) { restDayTaken = true; break; }
+      const day = U.addDays(ws, i);
+      if (day > today) break;
+      if (!sessionDates[day]) { restDayTaken = true; break; }
     }
 
     const warnings = [];

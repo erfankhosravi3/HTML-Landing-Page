@@ -1372,7 +1372,7 @@
       const mildDate = U.addDays(yesterday, -3);
       state.painLog.push({
         id: U.uid('pn'), userId: erfan.id, date: resolvedDate, muscleId: 'foot_r',
-        severity: 4, worseDuring: true, boneLine: false, morning: false,
+        severity: 4, worseDuring: true, boneLine: false, morning: false, resolved: true,
         note: 'Right arch ache after the 30 lb ruck — resolved after two rest days',
         createdAt: painMs(resolvedDate), updatedAt: painMs(resolvedDate)
       }, {
