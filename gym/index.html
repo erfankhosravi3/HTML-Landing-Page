@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0d10">
+  <meta name="description" content="IronLog — the gym log for your whole family. Track workouts, sets and PRs, import Apple Health data, and sync across devices.">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="IronLog">
+  <title>IronLog — Family Gym Tracker</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon.svg">
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <div class="app" id="app">
+    <aside class="sidebar" id="sidebar" aria-label="Primary navigation"></aside>
+    <header class="topbar" id="topbar"></header>
+    <main class="content" id="content"></main>
+    <nav class="tabbar" id="tabbar" aria-label="Primary navigation"></nav>
+    <div class="toast-wrap" id="toast-wrap" role="status" aria-live="polite"></div>
+  </div>
+
+  <script src="js/util.js"></script>
+  <script src="js/exercises.js"></script>
+  <script src="js/store.js"></script>
+  <script src="js/sync.js"></script>
+  <script src="js/analytics.js"></script>
+  <script src="js/charts.js"></script>
+  <script src="js/musclemap.js"></script>
+  <script src="js/applehealth.js"></script>
+  <script src="js/app.js"></script>
+  <script src="js/views-log.js"></script>
+  <script src="js/views-library.js"></script>
+  <script src="js/views-insights.js"></script>
+  <script>
+    document.addEventListener('DOMContentLoaded', function () {
+      App.init();
+    });
+    // Service worker: only when served over http(s) — never on file://
+    if ('serviceWorker' in navigator &&
+        (location.protocol === 'http:' || location.protocol === 'https:')) {
+      window.addEventListener('load', function () {
+        navigator.serviceWorker.register('./sw.js', { scope: './' }).catch(function () {
+          /* offline caching is a progressive enhancement — ignore failures */
+        });
+      });
+    }
+  </script>
+</body>
+</html>
