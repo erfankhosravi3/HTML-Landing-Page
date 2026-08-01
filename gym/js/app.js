@@ -107,9 +107,20 @@
       icon: def.icon || icons.dashboard,
       render: def.render || function () {},
       nav: !!def.nav,
-      order: typeof def.order === 'number' ? def.order : 99
+      order: typeof def.order === 'number' ? def.order : 99,
+      // v2 (P2): optional predicate — nav re-evaluates it on every render and
+      // navigating to a view whose predicate is false lands on the dashboard.
+      // Views without visible() behave exactly as before.
+      visible: typeof def.visible === 'function' ? def.visible : null
     };
   };
+
+  function viewVisible(id) {
+    const v = views[id];
+    if (!v) return false;
+    if (!v.visible) return true;
+    try { return !!v.visible(); } catch (e) { return false; }
+  }
 
   function parseHash() {
     const raw = (location.hash || '').replace(/^#\/?/, '');
@@ -142,15 +153,23 @@
     return h;
   }
 
+  let navViaApi = false;
+
   App.navigate = function (id, params) {
     const h = hashFor(id, params);
-    if (location.hash === h) render();
-    else location.hash = h; // hashchange handler renders
+    if (location.hash === h) { render(); return; }
+    // Leaving a view: stale sheets/modals must not survive the switch. Close
+    // synchronously so sheets opened right after (post-save check-in) stay up.
+    overlayStack.slice().forEach(function (o) { o.close(); });
+    navViaApi = true;
+    location.hash = h; // hashchange handler renders
   };
 
   function onHashChange() {
     scrollPos[App.current.view] = window.scrollY;
     closeUserMenu(); // stale popover must not survive navigation
+    if (!navViaApi) overlayStack.slice().forEach(function (o) { o.close(); }); // browser back/forward
+    navViaApi = false;
     render();
     const y = scrollPos[App.current.view] || 0;
     requestAnimationFrame(function () { window.scrollTo(0, y); });
@@ -191,7 +210,8 @@
 
     const route = parseHash();
     let def = views[route.view];
-    if (!def) { route.view = 'dashboard'; route.params = {}; def = views.dashboard; }
+    // unknown view OR a view hidden by its visible() predicate → dashboard
+    if (!def || !viewVisible(route.view)) { route.view = 'dashboard'; route.params = {}; def = views.dashboard; }
     App.current = { view: route.view, params: route.params };
     document.title = (def ? def.title + ' · ' : '') + 'IronLog';
 
@@ -433,40 +453,78 @@
     U.$('#sync-btn').addEventListener('click', function () { App.navigate('settings'); });
     U.$('#user-btn').addEventListener('click', function (e) { openUserMenu(e.currentTarget); });
 
-    // ---- sidebar ----
+    // ---- sidebar shell — nav items are (re)painted by refreshNav ----
     const sidebar = U.$('#sidebar');
-    const navViews = Object.keys(views)
-      .filter(function (id) { return views[id].nav; })
-      .sort(function (a, b) { return views[a].order - views[b].order; });
     sidebar.innerHTML =
       '<a class="wordmark" href="#/dashboard">' + icons.log + '<span>Iron<span class="accent">Log</span></span></a>' +
-      '<nav>' + navViews.map(function (id) {
-        return '<a class="nav-item" data-view="' + U.esc(id) + '" href="#/' + U.esc(id) + '">' +
-          views[id].icon + '<span>' + U.esc(views[id].title) + '</span></a>';
-      }).join('') + '</nav>' +
+      '<nav id="sidebar-nav"></nav>' +
       '<div class="sidebar-bottom">' +
         '<a class="nav-item" data-view="settings" href="#/settings">' + icons.settings + '<span>Settings</span></a>' +
         '<a class="nav-item" data-view="profiles" href="#/profiles">' + icons.users + '<span>Profiles</span></a>' +
       '</div>';
 
     // ---- tabbar: dashboard, history, [fab log], analytics, library ----
-    const tabbar = U.$('#tabbar');
-    function tabHTML(id) {
+    // Items are (re)painted by refreshNav, so the fab click is delegated —
+    // repaints never lose the handler.
+    U.on(U.$('#tabbar'), 'click', '#fab-log', function () { App.navigate('log'); });
+
+    navSig = null;
+    refreshNav();
+  }
+
+  /* Re-evaluate view visible() predicates and repaint sidebar nav + tabbar.
+     Runs on every render (via updateChrome); the signature check keeps it a
+     no-op unless the set of visible views actually changed. */
+  let navSig = null;
+
+  function sidebarNavIds() {
+    return Object.keys(views)
+      .filter(function (id) { return views[id].nav && viewVisible(id); })
+      .sort(function (a, b) { return views[a].order - views[b].order; });
+  }
+
+  function tabbarIds() {
+    // A TABS id whose view never registered still renders (graceful fallback);
+    // only a visible() predicate returning false hides a tab.
+    return TABS.filter(function (id) {
       const v = views[id];
-      const title = v ? v.title : id.charAt(0).toUpperCase() + id.slice(1);
-      const icon = v ? v.icon : icons[id] || icons.dashboard;
-      return '<a class="tab" data-view="' + U.esc(id) + '" href="#/' + U.esc(id) + '">' +
-        icon + '<span>' + U.esc(title) + '</span></a>';
+      return !(v && v.visible) || viewVisible(id);
+    });
+  }
+
+  function refreshNav() {
+    const ids = sidebarNavIds();
+    const tabs = tabbarIds();
+    const sig = ids.join(',') + '|' + tabs.join(',');
+    if (sig === navSig) return;
+    navSig = sig;
+
+    const nav = U.$('#sidebar-nav');
+    if (nav) {
+      nav.innerHTML = ids.map(function (id) {
+        return '<a class="nav-item" data-view="' + U.esc(id) + '" href="#/' + U.esc(id) + '">' +
+          views[id].icon + '<span>' + U.esc(views[id].title) + '</span></a>';
+      }).join('');
     }
-    tabbar.innerHTML =
-      tabHTML(TABS[0]) + tabHTML(TABS[1]) +
-      '<button type="button" class="fab-log" id="fab-log" aria-label="Log a workout" style="position:relative">' +
-        icons.log +
-        '<span id="fab-draft-dot" style="display:none;position:absolute;top:6px;right:6px;width:9px;height:9px;' +
-          'border-radius:50%;background:var(--orange);border:2px solid var(--bg)"></span>' +
-      '</button>' +
-      tabHTML(TABS[2]) + tabHTML(TABS[3]);
-    U.$('#fab-log').addEventListener('click', function () { App.navigate('log'); });
+
+    const tabbar = U.$('#tabbar');
+    if (tabbar) {
+      function tabHTML(id) {
+        const v = views[id];
+        const title = v ? v.title : id.charAt(0).toUpperCase() + id.slice(1);
+        const icon = v ? v.icon : icons[id] || icons.dashboard;
+        return '<a class="tab" data-view="' + U.esc(id) + '" href="#/' + U.esc(id) + '">' +
+          icon + '<span>' + U.esc(title) + '</span></a>';
+      }
+      tabbar.innerHTML =
+        tabs.slice(0, 2).map(tabHTML).join('') +
+        '<button type="button" class="fab-log" id="fab-log" aria-label="Log a workout" style="position:relative">' +
+          icons.log +
+          '<span id="fab-draft-dot" style="display:none;position:absolute;top:6px;right:6px;width:9px;height:9px;' +
+            'border-radius:50%;background:var(--orange);border:2px solid var(--bg)"></span>' +
+        '</button>' +
+        tabs.slice(2).map(tabHTML).join('');
+    }
   }
 
   // Read-only peek at the log view's draft key — owned by views-log.js.
@@ -476,6 +534,8 @@
   }
 
   function updateChrome() {
+    // v2: visible() predicates may have flipped (e.g. mode switch) — repaint nav
+    refreshNav();
     // active nav states
     U.$$('.nav-item[data-view], .tab[data-view]').forEach(function (el) {
       el.classList.toggle('active', el.getAttribute('data-view') === App.current.view);

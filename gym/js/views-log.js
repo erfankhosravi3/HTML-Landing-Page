@@ -1114,6 +1114,61 @@
     return v + ' reps';
   }
 
+  /* ---------- scored test results (P2 — Protocols) ---------- */
+
+  const ACFT_EVENT_IDS = ['mdl', 'spt', 'hrp', 'sdc', 'plk', 'tmr'];
+
+  function hasAcftRaws(results) {
+    if (!results || typeof results !== 'object') return false;
+    return ACFT_EVENT_IDS.some(function (id) {
+      return typeof results[id] === 'number' && isFinite(results[id]);
+    });
+  }
+
+  function fmtAcftRaw(ev, raw) {
+    if (ev.unit === 'mm:ss') return fmtSec(raw);
+    if (ev.unit === 'lb') return Math.round(raw) + ' lb';
+    if (ev.unit === 'm') return (Math.round(raw * 10) / 10) + ' m';
+    return Math.round(raw) + ' reps';
+  }
+
+  // Scored rows for a test entry in the workout detail: ACFT entries with raw
+  // event values get a per-event table (name, raw, points) plus total and
+  // pass/fail; everything else a Protocols-formatted value. Returns '' when
+  // Protocols is unavailable so callers fall back to the P1 rendering.
+  function testScoredHTML(en, w) {
+    if (typeof Protocols === 'undefined' || !Protocols) return '';
+    if (en.protocol === 'acft' && hasAcftRaws(en.results) &&
+        typeof Protocols.scoreACFT === 'function' && typeof Protocols.byId === 'function') {
+      const owner = (Store.state.users || []).find(function (x) { return x.id === w.userId; });
+      const prof = (owner && owner.profile) || {};
+      let sc = null;
+      try {
+        sc = Protocols.scoreACFT(en.results, { sex: prof.sex, birthYear: prof.birthYear, date: w.date });
+      } catch (e) { sc = null; }
+      const def = Protocols.byId('acft');
+      if (!sc || !sc.events || !def || !Array.isArray(def.events)) return '';
+      let html = '<div class="table-wrap" style="margin:8px 0 2px"><table class="table"><thead><tr>' +
+        '<th>Event</th><th>Result</th><th class="num">Points</th></tr></thead><tbody>';
+      def.events.forEach(function (ev) {
+        const row = sc.events[ev.id] || { raw: null, points: null };
+        html += '<tr><td>' + U.esc(ev.name) + '</td>' +
+          '<td>' + (row.raw === null ? '—' : U.esc(fmtAcftRaw(ev, row.raw))) + '</td>' +
+          '<td class="num">' + (row.points === null ? '—' : row.points) + '</td></tr>';
+      });
+      html += '</tbody></table></div>';
+      html += kvRow('Total', sc.total + ' pts');
+      html += kvRow('Result', sc.pass ? 'Pass — every event 60+' : 'Fail — an event under 60');
+      return html;
+    }
+    const v = en.results && typeof en.results.value === 'number' ? en.results.value
+      : typeof en.score === 'number' ? en.score : null;
+    if (v === null || typeof Protocols.fmtValue !== 'function') return '';
+    let out = '';
+    try { out = Protocols.fmtValue(en.protocol, v, App.units()); } catch (e) { return ''; }
+    return out ? kvRow('Result', out) : '';
+  }
+
   function muscleLabelOf(m) {
     const map = window.ExerciseDB && ExerciseDB.MUSCLE_LABEL;
     return (map && map[m]) || capStr(m);
@@ -2114,7 +2169,7 @@
       '<span style="font-weight:500;text-align:right;overflow-wrap:anywhere">' + U.esc(value) + '</span></div>';
   }
 
-  function typedEntryDetailHTML(en) {
+  function typedEntryDetailHTML(en, w) {
     let title = 'Session entry';
     let rows = '';
     if (en.type === 'cardio') {
@@ -2147,8 +2202,15 @@
       title = 'Test';
       const p = testProtocolOf(en.protocol);
       rows += kvRow('Protocol', p ? p.label : String(en.protocol || ''));
-      rows += kvRow('Result', fmtTestValue(en.protocol, en.results, en.score));
-      if (typeof en.score === 'number') rows += kvRow('Score', en.score + ' pts');
+      // P2: scored rendering via Protocols (ACFT event table, formatted values);
+      // falls back to the P1 rendering when Protocols is unavailable.
+      const scored = w ? testScoredHTML(en, w) : '';
+      if (scored) {
+        rows += scored;
+      } else {
+        rows += kvRow('Result', fmtTestValue(en.protocol, en.results, en.score));
+        if (typeof en.score === 'number') rows += kvRow('Score', en.score + ' pts');
+      }
     } else {
       rows += kvRow('Type', String(en.type));
       rows += '<p class="muted" style="font-size:13px;margin:6px 0">Logged by a newer version of IronLog — kept as-is.</p>';
@@ -2824,7 +2886,7 @@
       U.esc(U.fmtDateLong(w.date)) + ' · ' + U.esc(workoutSubAny(w)) + '</span></p>';
 
     if (typed.length) {
-      html += typed.map(typedEntryDetailHTML).join('');
+      html += typed.map(function (en) { return typedEntryDetailHTML(en, w); }).join('');
     }
 
     if (lifts.length) {

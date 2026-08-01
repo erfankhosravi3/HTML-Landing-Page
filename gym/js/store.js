@@ -409,13 +409,29 @@
     return out;
   }
 
+  // P2: acft results carry six raw event fields alongside P1's simple {value}.
+  // Coercion here must be non-destructive: numeric strings become numbers, but
+  // anything else (e.g. the swim500m 'pass' sentinel, fields from newer app
+  // versions) passes through VERBATIM.
+  const ACFT_RESULT_FIELDS = ['mdl', 'spt', 'hrp', 'sdc', 'plk', 'tmr'];
+
+  function softNum(obj, key) {
+    if (!(key in obj) || typeof obj[key] === 'number') return;
+    const n = Number(obj[key]);
+    if (typeof obj[key] === 'string' && obj[key].trim() !== '' && isFinite(n)) obj[key] = n;
+  }
+
   function normalizeTestEntry(e) {
     const out = shallowCopy(e);
     out.id = e.id || U.uid('en');
     out.type = 'test';
     out.protocol = typeof e.protocol === 'string' ? e.protocol : String(e.protocol || '');
-    out.results = e.results && typeof e.results === 'object' && !Array.isArray(e.results) ? e.results : {};
-    coerceNum(out, 'score');
+    const res = e.results && typeof e.results === 'object' && !Array.isArray(e.results)
+      ? shallowCopy(e.results) : {};
+    softNum(res, 'value');
+    for (const k of ACFT_RESULT_FIELDS) softNum(res, k);
+    out.results = res;
+    coerceNum(out, 'score'); // cached numeric score (acft total; P1 mirrored value)
     coerceStr(out, 'notes');
     return out;
   }
@@ -483,6 +499,15 @@
     if (durationMin === null && startedAt !== null && endedAt !== null && endedAt > startedAt) {
       durationMin = Math.round((endedAt - startedAt) / 60000);
     }
+    // Same-date ordering ties on createdAt, so two saves within one millisecond
+    // must never share a stamp — bump past the newest existing workout.
+    let createdAt = typeof w.createdAt === 'number' ? w.createdAt : now;
+    if (typeof w.createdAt !== 'number') {
+      for (let i = 0; i < state.workouts.length; i++) {
+        const c = state.workouts[i].createdAt || 0;
+        if (c >= createdAt) createdAt = c + 1;
+      }
+    }
     const workout = {
       id: w.id || U.uid('w'),
       userId: w.userId || state.currentUserId,
@@ -493,7 +518,7 @@
       endedAt: endedAt,
       durationMin: durationMin,
       source: w.source === 'apple' ? 'apple' : 'manual',
-      createdAt: typeof w.createdAt === 'number' ? w.createdAt : now,
+      createdAt: createdAt,
       updatedAt: now,
       entries: (Array.isArray(w.entries) ? w.entries : []).map(normalizeEntry)
     };
