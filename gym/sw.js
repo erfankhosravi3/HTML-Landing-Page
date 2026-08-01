@@ -3,7 +3,7 @@
    or installed PWAs keep serving the old cache forever. */
 'use strict';
 
-const CACHE_NAME = 'ironlog-v2p4';
+const CACHE_NAME = 'ironlog-v2p5';
 
 const SHELL = [
   './',
@@ -14,6 +14,7 @@ const SHELL = [
   './js/store.js',
   './js/sync.js',
   './js/analytics.js',
+  './js/loadmodel.js',
   './js/guardrails.js',
   './js/protocols.js',
   './js/charts.js',

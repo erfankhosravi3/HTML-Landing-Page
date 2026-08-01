@@ -2757,7 +2757,11 @@
           ? '<span class="leading" style="background:rgba(255,214,10,.14);color:var(--yellow);">' +
             sizedIcon(App.icons.trophy, 20) + '</span>'
           : '<span class="leading" style="font-size:14px;font-weight:700;color:var(--text-muted);">' + (i + 1) + '</span>';
-        return '<div class="list-row"' + (isViewer ? ' style="background:rgba(48,209,88,.07);"' : '') + '>' +
+        /* P4: flex-wrap lets the activity-badge row below sit on its own line.
+           Every existing child keeps its hypothetical main size (.body is
+           flex:1 ⇒ base 0, the others are flex:none), so line 1 is laid out
+           exactly as before — proven by p4a4-lb-badges / the geometry probe. */
+        return '<div class="list-row" style="flex-wrap:wrap;' + (isViewer ? 'background:rgba(48,209,88,.07);' : '') + '">' +
           rank +
           '<span class="avatar sm" style="--c:' + U.esc(r.user.color || '#2ca350') + ';">' + U.esc(r.user.emoji || '🏋️') + '</span>' +
           '<div class="body"><span class="title">' + U.esc(r.user.name) +
@@ -2767,6 +2771,8 @@
           '<span class="trailing" style="gap:8px;">' +
           (r.prCount > 0 ? '<span class="badge orange">' + r.prCount + ' PR' + (r.prCount === 1 ? '' : 's') + '</span>' : '') +
           '<span style="font-weight:700;color:var(--text);">' + U.esc(fmtVol(r.volumeKg)) + '</span></span>' +
+          /* P4: additive activity-badge row — see "Leaderboard activity badges" below */
+          lbActivityBadgesHtml(r.user.id, allW, ws) +
           '</div>';
       }).join('') + '</div>';
     }
@@ -2854,5 +2860,122 @@
       App.rerender();
     });
     U.on(container, 'click', '[data-act="go-profiles"]', function () { App.navigate('profiles'); });
+  }
+
+  /* ======================================================================
+     P4 · Leaderboard activity badges — SELF-CONTAINED SECTION
+
+     Owned by the P4 release wiring. The ONLY code outside this section that
+     belongs to it is the single lbActivityBadgesHtml(...) call inside
+     renderLeaderboard's row map (marked with a "P4:" comment there).
+
+     Contract (ARCHITECTURE.md > "V2 ADDENDUM — P4" > Leaderboard): each member
+     card gains small activity badges for the trailing 4 weeks — session count
+     plus per-kind icons (lift/run/ruck/swim/other) with counts. Additive rows
+     only, no reflow of the existing row content, and shown to EVERY user: this
+     is the one family-visible P4 change, sanctioned by the approved plan
+     ('activity badges so your 12-mile ruck finally counts'). The volume/PR
+     metrics on the card stay lift-only and are untouched.
+     ====================================================================== */
+
+  // Icon key on App.icons + singular/plural wording for titles. Order is the
+  // display order of the badges.
+  const LB_BADGE_KINDS = [
+    { id: 'lift', icon: 'log', one: 'lift session', many: 'lift sessions' },
+    { id: 'run', icon: 'run', one: 'run', many: 'runs' },
+    { id: 'ruck', icon: 'ruck', one: 'ruck', many: 'rucks' },
+    { id: 'swim', icon: 'swim', one: 'swim', many: 'swims' },
+    { id: 'other', icon: 'dashboard', one: 'other session', many: 'other sessions' }
+  ];
+
+  function lbKindBucket(kind) {
+    if (kind === 'lift' || kind === 'run' || kind === 'ruck' || kind === 'swim') return kind;
+    return 'other';
+  }
+
+  // The single badge bucket a session belongs to. workout.kind is display-only
+  // (and absent on v1 rows), so 'mixed', missing and unknown kinds fall back to
+  // entry inspection over the P1/P3 shapes: cardio entries carry `mode`, lift
+  // entries carry no type (or 'lift'), and every other type (setwork, mobility,
+  // durability, test, or anything a newer client wrote) is 'other'. Priority
+  // ruck > run > swim > lift > other keeps a lift+ruck day in the ruck column —
+  // the whole point of the badges — and keeps the per-kind counts summing to
+  // exactly the session count.
+  function lbSessionBucket(w) {
+    const kind = w && typeof w.kind === 'string' ? w.kind : '';
+    if (kind && kind !== 'mixed') return lbKindBucket(kind);
+    let hasRuck = false;
+    let hasRun = false;
+    let hasSwim = false;
+    let hasLift = false;
+    let hasOther = false;
+    for (const e of (w && w.entries) || []) {
+      if (!e) continue;
+      if (!e.type || e.type === 'lift') { hasLift = true; continue; }
+      if (e.type === 'cardio') {
+        const mode = typeof e.mode === 'string' ? e.mode : 'run';
+        if (mode === 'ruck') hasRuck = true;
+        else if (mode === 'run') hasRun = true;
+        else if (mode === 'swim') hasSwim = true;
+        else hasOther = true;
+        continue;
+      }
+      hasOther = true;
+    }
+    if (hasRuck) return 'ruck';
+    if (hasRun) return 'run';
+    if (hasSwim) return 'swim';
+    if (hasLift) return 'lift';
+    if (hasOther) return 'other';
+    return lbKindBucket(kind); // entry-less session (e.g. an Apple Health import)
+  }
+
+  // Trailing 4 weeks = the 28 days ending on the last day of the week the card
+  // is showing, so the badges stay in step with the week navigator (offset 0 ⇒
+  // the four weeks up to and including this week). Dates are 'YYYY-MM-DD', so
+  // lexicographic comparison is chronological.
+  function lbActivityCounts(userId, allW, weekStartStr) {
+    const counts = { sessions: 0, lift: 0, run: 0, ruck: 0, swim: 0, other: 0 };
+    const to = U.addDays(weekStartStr, 6);
+    const from = U.addDays(weekStartStr, -21);
+    for (const w of allW || []) {
+      if (!w || w.userId !== userId) continue;
+      if (typeof w.date !== 'string' || w.date < from || w.date > to) continue;
+      counts.sessions++;
+      counts[lbSessionBucket(w)]++;
+    }
+    return counts;
+  }
+
+  // Compact .badge pills: the row shares its width with the (untouched) volume
+  // slot, so at 375px they have to stay small enough to fit 2-3 per line
+  // instead of stacking one per line and stretching the card.
+  function lbBadgeHtml(kindId, iconSvg, count, title, suffix) {
+    return '<span class="badge" role="img" data-lb-kind="' + U.esc(kindId) + '"' +
+      ' data-lb-count="' + count + '" aria-label="' + U.esc(title) + '" title="' + U.esc(title) + '"' +
+      ' style="padding:2px 7px;font-size:10.5px;gap:3px;">' +
+      sizedIcon(iconSvg, 11) + '<span class="tabular">' + count + '</span>' +
+      (suffix ? '<span style="opacity:.65;">' + U.esc(suffix) + '</span>' : '') + '</span>';
+  }
+
+  function lbActivityBadgesHtml(userId, allW, weekStartStr) {
+    const c = lbActivityCounts(userId, allW, weekStartStr);
+    if (!c.sessions) return ''; // nothing logged in the window — no empty row
+    const ic = App.icons || {};
+    const to = U.addDays(weekStartStr, 6);
+    const window4 = to >= U.todayStr() ? 'in the last 4 weeks' : 'in the 4 weeks to ' + U.fmtDate(to);
+    // Own line inside the member card (flex:0 0 100% can never share a line),
+    // indented to the member name: leading 40 + gap 12 + .avatar.sm 28 + gap 12.
+    let html = '<span class="lb-activity" data-lb-activity="1" data-lb-sessions="' + c.sessions +
+      '" style="flex:0 0 100%;display:flex;flex-wrap:wrap;align-items:center;gap:4px;' +
+      'padding-left:92px;">' + // the row's own 12px gap already spaces the line
+      lbBadgeHtml('sessions', ic.calendar, c.sessions,
+        c.sessions + (c.sessions === 1 ? ' session ' : ' sessions ') + window4, '· 4w');
+    for (const k of LB_BADGE_KINDS) {
+      const n = c[k.id];
+      if (!n) continue;
+      html += lbBadgeHtml(k.id, ic[k.icon], n, n + ' ' + (n === 1 ? k.one : k.many) + ' ' + window4);
+    }
+    return html + '</span>';
   }
 })();
