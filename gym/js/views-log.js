@@ -1125,6 +1125,15 @@
     });
   }
 
+  // Entries the simple test editor must never touch: ACFT results carry six
+  // raw event fields plus a cached score, and the editor's {value}-only
+  // rebuild would silently destroy them. These route to the read-only
+  // scored detail (openAcftTestDetail) instead.
+  function isAcftTestEntry(en) {
+    return !!en && en.type === 'test' &&
+      (en.protocol === 'acft' || hasAcftRaws(en.results));
+  }
+
   function fmtAcftRaw(ev, raw) {
     if (ev.unit === 'mm:ss') return fmtSec(raw);
     if (ev.unit === 'lb') return Math.round(raw) + ' lb';
@@ -1970,6 +1979,8 @@
       editW = Store.workoutById(edit.workoutId);
       editEn = editW ? (editW.entries || []).find(function (x) { return x && x.id === edit.entryId; }) : null;
       if (!editW || !editEn) { App.toast('Workout not found', 'err'); return; }
+      // Defense in depth: never let an ACFT entry into the {value}-only editor.
+      if (isAcftTestEntry(editEn)) { openAcftTestDetail(editW.id, editEn.id); return; }
     }
     const singleEntry = !editW || (editW.entries || []).length === 1;
 
@@ -2051,11 +2062,18 @@
             const dateStr = dateEl && /^\d{4}-\d{2}-\d{2}$/.test(dateEl.value)
               ? dateEl.value
               : (editW ? editW.date : U.todayStr());
+            // Merge over the entry's existing results so unknown fields (a
+            // pass marker, fields from newer versions) survive a value edit;
+            // switching protocols starts the results fresh.
+            const results = editEn && editEn.protocol === st.protocol &&
+              editEn.results && typeof editEn.results === 'object'
+              ? Object.assign({}, editEn.results) : {};
+            results.value = value;
             const en = {
               id: editEn ? editEn.id : U.uid('en'),
               type: 'test',
               protocol: st.protocol,
-              results: { value: value }
+              results: results
             };
             // Keep a cached score only while the underlying value is unchanged;
             // an edited value makes the old score stale.
@@ -2221,6 +2239,62 @@
       kindGlyph(entryKindOf(en)) + '<span>' + U.esc(title) + '</span></div>' + rows + '</div>';
   }
 
+  // Read-only detail for ACFT test entries (mirrors the Standards test detail
+  // sheet: Delete + Close). The simple test editor rebuilds results as {value}
+  // only, which would silently destroy the six raw event fields and the cached
+  // score — so ACFT entries are view/delete-only here; changes go through
+  // re-recording the test in Standards.
+  function openAcftTestDetail(workoutId, entryId) {
+    const w = Store.workoutById(workoutId);
+    if (!w) return;
+    const en = (w.entries || []).find(function (x) { return x && x.id === entryId; });
+    if (!en) return;
+    const solo = (w.entries || []).filter(function (x) { return !!x; }).length === 1;
+
+    let html = '<p class="muted" style="font-size:13px;margin-bottom:12px">' +
+      U.esc(U.fmtDateLong(w.date)) +
+      (w.durationMin ? ' · ' + U.esc(U.fmtDuration(w.durationMin)) : '') + '</p>';
+    html += typedEntryDetailHTML(en, w);
+    html += '<p class="muted" style="font-size:13px;line-height:1.5;margin-top:4px">' +
+      'ACFT results are scored from the raw event values, so they can’t be ' +
+      'edited here. To change this test, delete it and re-record it in Standards.</p>';
+
+    App.sheet({
+      title: 'ACFT',
+      content: html,
+      actions: [
+        {
+          label: 'Delete',
+          kind: 'danger',
+          onClick: function () {
+            App.confirm({
+              title: 'Delete test?',
+              message: (solo
+                ? '“' + w.name + '” on ' + U.fmtDateLong(w.date) + ' will be permanently deleted.'
+                : 'The ACFT result will be removed from “' + w.name + '”.') +
+                ' Readiness will fall back to your previous best.',
+              danger: true
+            }).then(function (ok) {
+              if (!ok) return;
+              const live = Store.workoutById(w.id);
+              if (!live) return;
+              const rest = (live.entries || []).filter(function (x) { return x && x.id !== en.id; });
+              if (rest.length) Store.updateWorkout(w.id, { entries: rest });
+              else Store.deleteWorkout(w.id);
+              App.toast('Test deleted');
+            });
+          }
+        },
+        {
+          label: 'Re-record in Standards',
+          kind: 'primary',
+          onClick: function () { App.navigate('standards'); }
+        },
+        { label: 'Close', kind: 'ghost' }
+      ]
+    });
+  }
+
   /* ---------- typed / mixed workout editing ---------- */
 
   // Entry-type dispatch around the (unchanged) lift editor.
@@ -2234,7 +2308,12 @@
       if (en.type === 'cardio') { openCardioLogger(en.mode, { workoutId: w.id, entryId: en.id }); return; }
       if (en.type === 'mobility') { openMobilityLogger({ workoutId: w.id, entryId: en.id }); return; }
       if (en.type === 'durability') { openDurabilityLogger({ workoutId: w.id, entryId: en.id }); return; }
-      if (en.type === 'test') { openTestLogger({ workoutId: w.id, entryId: en.id }); return; }
+      if (en.type === 'test') {
+        // ACFT entries can't round-trip through the simple editor — view only.
+        if (isAcftTestEntry(en)) openAcftTestDetail(w.id, en.id);
+        else openTestLogger({ workoutId: w.id, entryId: en.id });
+        return;
+      }
     }
     openMixedWorkoutEdit(w.id);
   }
@@ -2281,7 +2360,7 @@
               '<div class="sub">' + U.esc(typedEntrySummaryLine(en)) + '</div></div>' +
               (editable
                 ? '<button type="button" class="btn ghost small" data-tedit="' + U.esc(en.id || '') + '">' +
-                  ic().edit + ' Edit</button>'
+                  (isAcftTestEntry(en) ? 'View' : ic().edit + ' Edit') + '</button>'
                 : '<span class="trailing muted" style="font-size:12px">Kept as-is</span>') +
               '</div>';
           }).join('') + '</div>'
@@ -2321,7 +2400,10 @@
       if (en.type === 'cardio') openCardioLogger(en.mode, { workoutId: w.id, entryId: en.id });
       else if (en.type === 'mobility') openMobilityLogger({ workoutId: w.id, entryId: en.id });
       else if (en.type === 'durability') openDurabilityLogger({ workoutId: w.id, entryId: en.id });
-      else if (en.type === 'test') openTestLogger({ workoutId: w.id, entryId: en.id });
+      else if (en.type === 'test') {
+        if (isAcftTestEntry(en)) openAcftTestDetail(w.id, en.id);
+        else openTestLogger({ workoutId: w.id, entryId: en.id });
+      }
     });
 
     App.sheet({

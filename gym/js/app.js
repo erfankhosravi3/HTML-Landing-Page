@@ -210,8 +210,16 @@
 
     const route = parseHash();
     let def = views[route.view];
-    // unknown view OR a view hidden by its visible() predicate → dashboard
-    if (!def || !viewVisible(route.view)) { route.view = 'dashboard'; route.params = {}; def = views.dashboard; }
+    // unknown view OR a view hidden by its visible() predicate → dashboard.
+    // Also correct the URL so the stale hash (e.g. '#/standards' after a
+    // switch to a simple-mode user) doesn't linger — replaceState never fires
+    // hashchange, so this cannot re-enter render().
+    if (!def || !viewVisible(route.view)) {
+      route.view = 'dashboard'; route.params = {}; def = views.dashboard;
+      if (location.hash && location.hash !== '#/dashboard') {
+        try { history.replaceState(null, '', '#/dashboard'); } catch (e) { /* file:// or sandboxed */ }
+      }
+    }
     App.current = { view: route.view, params: route.params };
     document.title = (def ? def.title + ' · ' : '') + 'IronLog';
 
@@ -373,6 +381,7 @@
         const b = U.el('<button type="button" class="btn' + kindCls + '"></button>');
         b.textContent = a.label || 'OK';
         b.addEventListener('click', function () {
+          if (closed) return; // fading out (160ms) — ignore double-taps, onClick isn't idempotent
           if (typeof a.onClick === 'function') a.onClick(api);
           if (!a.keepOpen) api.close();
         });
@@ -391,9 +400,13 @@
     document.body.style.overflow = 'hidden'; // lock page scroll while any overlay is open
     overlayStack.push(api);
 
-    // focus the first sensible control inside
+    // focus the first sensible control inside — unless the caller's content
+    // script already focused something in the box (an explicit focus wins)
     const first = box.querySelector('input, select, textarea, .modal-foot .btn.primary, .sheet-foot .btn.primary') || closeBtn;
-    requestAnimationFrame(function () { try { first.focus(); } catch (e) { /* ignore */ } });
+    requestAnimationFrame(function () {
+      if (box.contains(document.activeElement)) return;
+      try { first.focus(); } catch (e) { /* ignore */ }
+    });
 
     return api;
   }

@@ -72,8 +72,10 @@
     return h ? h + ':' + pad2(m) + ':' + pad2(s) : m + ':' + pad2(s);
   }
 
-  // 'mm:ss' / 'h:mm:ss' or bare seconds -> seconds. null on garbage.
-  function parseClock(raw) {
+  // 'mm:ss' / 'h:mm:ss' -> seconds; a colon-less number is minutes or seconds
+  // depending on plainUnit ('min'|'sec', default 'sec') — mirrors P1's
+  // per-protocol convention (views-log.js TEST_PROTOCOLS). null on garbage.
+  function parseClock(raw, plainUnit) {
     raw = String(raw || '').trim();
     if (!raw) return null;
     if (raw.indexOf(':') >= 0) {
@@ -86,7 +88,16 @@
     }
     const v = parseFloat(raw);
     if (isNaN(v) || v < 0) return null;
-    return v; // bare number = raw seconds
+    return plainUnit === 'min' ? v * 60 : v;
+  }
+
+  // Colon-less input convention per protocol, mirroring P1 (views-log.js
+  // TEST_PROTOCOLS `plain`): a bare '14' means 14 minutes for the long
+  // efforts and 14 seconds for the short holds.
+  const PLAIN_MINUTES = ['run2mi', 'run5mi', 'ruck12mi', 'swim500m'];
+
+  function plainUnitOf(protocolId) {
+    return PLAIN_MINUTES.indexOf(protocolId) >= 0 ? 'min' : 'sec';
   }
 
   // keep only clock characters in a masked time input
@@ -200,14 +211,17 @@
 
   // ACFT event UI metadata (labels + input handling only; scoring tables live
   // in Protocols.scoreACFT). Raw units per the contract: mdl lb, spt m,
-  // hrp reps, sdc/plk/tmr seconds.
+  // hrp reps, sdc/plk/tmr seconds. `plain` sets what a colon-less number
+  // means in a clock field: sdc and plk are short sub-5-minute efforts where
+  // a bare '90' reads as 90 seconds, while tmr mirrors run2mi — a bare '14'
+  // reads as 14 minutes.
   const ACFT_EVENTS = [
     { id: 'mdl', label: '3-Rep Max Deadlift', hint: 'lb', mode: 'num' },
     { id: 'spt', label: 'Standing Power Throw', hint: 'm', mode: 'num' },
     { id: 'hrp', label: 'Hand-Release Push-ups', hint: 'reps', mode: 'int' },
-    { id: 'sdc', label: 'Sprint-Drag-Carry', hint: 'mm:ss', mode: 'clock' },
-    { id: 'plk', label: 'Plank', hint: 'mm:ss', mode: 'clock' },
-    { id: 'tmr', label: '2-Mile Run', hint: 'mm:ss', mode: 'clock' }
+    { id: 'sdc', label: 'Sprint-Drag-Carry', hint: 'mm:ss', mode: 'clock', plain: 'sec' },
+    { id: 'plk', label: 'Plank', hint: 'mm:ss', mode: 'clock', plain: 'sec' },
+    { id: 'tmr', label: '2-Mile Run', hint: 'mm:ss', mode: 'clock', plain: 'min' }
   ];
 
   function acftRawText(evId, raw) {
@@ -532,7 +546,10 @@
   function readDateField(root, id) {
     const el = U.$('#' + id, root);
     const v = el ? el.value : '';
-    return /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : U.todayStr();
+    const today = U.todayStr();
+    // typed dates can bypass the input's max, so also clamp future dates to
+    // today (string compare is safe for YYYY-MM-DD)
+    return /^\d{4}-\d{2}-\d{2}$/.test(v) && v <= today ? v : today;
   }
 
   function dateFieldHTML(id) {
@@ -547,13 +564,15 @@
 
   function openSimpleTestForm(def, u) {
     const isClock = def.kind === 'time' || def.kind === 'hold';
+    const plain = plainUnitOf(def.id);
+    const plainHint = plain === 'min' ? 'mm:ss or minutes' : 'mm:ss or raw seconds';
     const st = { pass: null };
 
     let html = dateFieldHTML('sf-date');
     if (isClock) {
       html += '<div class="field"><label for="sf-value">' +
         U.esc(def.kind === 'hold' ? 'Hold time' : 'Time') +
-        ' <span class="muted">(mm:ss or raw seconds)</span></label>' +
+        ' <span class="muted">(' + plainHint + ')</span></label>' +
         '<input class="input" id="sf-value" type="text" inputmode="numeric" autocomplete="off" ' +
         'style="' + BIG_NUM_STYLE + '" placeholder="mm:ss">' +
         '<p class="muted tabular" id="sf-live" style="font-size:13px;min-height:18px;margin:6px 2px 0"></p></div>';
@@ -562,7 +581,7 @@
         '<button type="button" class="seg" data-pf="1" aria-pressed="false">Pass</button>' +
         '<button type="button" class="seg" data-pf="0" aria-pressed="false">Fail</button>' +
         '</div></div>' +
-        '<div class="field"><label for="sf-value">Time <span class="muted">(optional — mm:ss or raw seconds)</span></label>' +
+        '<div class="field"><label for="sf-value">Time <span class="muted">(optional — ' + plainHint + ')</span></label>' +
         '<input class="input" id="sf-value" type="text" inputmode="numeric" autocomplete="off" ' +
         'style="' + BIG_NUM_STYLE + '" placeholder="mm:ss">' +
         '<p class="muted tabular" id="sf-live" style="font-size:13px;min-height:18px;margin:6px 2px 0"></p></div>';
@@ -581,7 +600,7 @@
       const valEl = U.$('#sf-value', content);
       const liveEl = U.$('#sf-live', content);
       valEl.addEventListener('input', function () {
-        const sec = parseClock(maskClockInput(valEl));
+        const sec = parseClock(maskClockInput(valEl), plain);
         liveEl.textContent = sec === null || sec <= 0 ? '' : '= ' + fmtVal(def.id, Math.round(sec));
       });
     }
@@ -607,9 +626,10 @@
             let value = null;
             let timeSec = null;
             if (isClock) {
-              const sec = parseClock(U.$('#sf-value', content).value);
+              const sec = parseClock(U.$('#sf-value', content).value, plain);
               if (sec === null || sec <= 0) {
-                App.toast('Enter a time like 13:42, or raw seconds', 'err');
+                App.toast('Enter a time like 13:42, or ' +
+                  (plain === 'min' ? 'minutes' : 'raw seconds'), 'err');
                 focusInput('sf-value');
                 return;
               }
@@ -617,7 +637,7 @@
               timeSec = value;
             } else if (def.kind === 'pass') {
               // canonical shapes: {value: seconds} when timed, {value: 'pass'|'fail'}
-              const sec = parseClock(U.$('#sf-value', content).value);
+              const sec = parseClock(U.$('#sf-value', content).value, plain);
               timeSec = sec !== null && sec > 0 ? Math.round(sec) : null;
               if (timeSec === null && st.pass === null) {
                 App.toast('Pick pass or fail — or enter a time', 'err');
@@ -688,7 +708,7 @@
         if (!raw) return;
         let v = null;
         if (ev.mode === 'clock') {
-          const sec = parseClock(raw);
+          const sec = parseClock(raw, ev.plain);
           if (sec !== null && sec > 0) v = Math.round(sec);
         } else if (ev.mode === 'int') {
           const n = parseInt(raw, 10);
@@ -751,8 +771,12 @@
               return;
             }
             const en = { id: U.uid('en'), type: 'test', protocol: def.id, results: lastResults };
-            if (lastOut && typeof lastOut.total === 'number' && isFinite(lastOut.total)) {
-              en.score = lastOut.total; // cached at save per the contract
+            // cache the score at save per the contract — but only when the
+            // user has a real sex/birth-year profile: scoreACFT silently
+            // defaults to the male 17-21 bracket otherwise, and that wrong
+            // number would be persisted on the synced entry
+            if (hasProfileFor(u) && lastOut && typeof lastOut.total === 'number' && isFinite(lastOut.total)) {
+              en.score = lastOut.total;
             }
             const notes = U.$('#af-notes', content).value.trim();
             if (notes) en.notes = notes;
@@ -837,8 +861,11 @@
         '<td class="num">' + U.esc(pts) + '</td></tr>';
     }).join('');
     html += '</tbody></table></div>';
-    const total = typeof en.score === 'number' && isFinite(en.score) ? en.score
-      : (out && typeof out.total === 'number' && isFinite(out.total) ? out.total : null);
+    // the per-event points column comes from the live rescore, so the Total
+    // must too — fall back to the cached score only when live scoring is
+    // impossible (e.g. protocols.js unavailable)
+    const total = out && typeof out.total === 'number' && isFinite(out.total) ? out.total
+      : (typeof en.score === 'number' && isFinite(en.score) ? en.score : null);
     html += '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;' +
       'font-weight:700;padding:10px 2px 0">' +
       '<span>Total</span><span class="tabular">' +

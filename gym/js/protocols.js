@@ -338,7 +338,11 @@
         continue;
       }
       const row = ACFT_TABLE[ev.id][sex][bi];
-      const pts = Math.round(U.clamp(interpPoints(row, !!ev.lowerIsBetter, raw), 0, 100));
+      const p = U.clamp(interpPoints(row, !!ev.lowerIsBetter, raw), 0, 100);
+      // Below the 60-point anchor, floor (capped at 59) so half-up rounding
+      // can never lift an officially failing raw across the pass line; a raw
+      // exactly on the anchor interpolates to 60 and still rounds to 60.
+      const pts = p < 60 ? Math.min(59, Math.floor(p)) : Math.round(p);
       events[ev.id] = { raw: raw, points: pts };
       total += pts;
       entered++;
@@ -354,7 +358,8 @@
 
   /* ---------- tiers ----------
      Time-protocol tiers are seconds; swim500m is completion-based, so both
-     tiers are the sentinel 'pass' (any recorded test counts as passing). */
+     tiers are the sentinel 'pass' (a recorded test counts when it passed:
+     the 'pass' sentinel, or a timed result whose pass flag is not false). */
 
   const DEFAULT_TIERS = {
     acft: { sfas: { min: 360, competitive: 500 }, general: { min: 360, competitive: 480 } },
@@ -402,8 +407,23 @@
       return null;
     }
     if (e.results && isNum(e.results.value)) return e.results.value;
+    const p = BY_ID[protocolId];
+    if (p && p.kind === 'pass' && e.results &&
+        (e.results.value === 'pass' || e.results.value === 'fail')) {
+      // Untimed pass-kind results are the sentinel strings the wizard writes.
+      return e.results.value;
+    }
     if (isNum(e.score)) return e.score;
     return null;
+  }
+
+  // Outcome of a pass-kind test entry: the 'pass'/'fail' sentinels are
+  // explicit; a timed result passed unless its recorded pass flag says false.
+  function testEntryPassed(e) {
+    const r = (e && e.results) || {};
+    if (r.value === 'pass') return true;
+    if (r.value === 'fail') return false;
+    return r.pass !== false;
   }
 
   // cb(entry, workout) for every matching test entry, date asc.
@@ -460,11 +480,35 @@
     return best ? best.value : null;
   }
 
+  // Pass-kind best: the fastest passing timed result, else a 'pass'
+  // sentinel (first achieved), else the latest recorded fail (its time, or
+  // the 'fail' sentinel) — a saved test never yields null. `passed` carries
+  // the outcome so readiness can score a recorded fail as 0.
+  function bestPassEntry(workouts, protocolId) {
+    let timed = null;
+    let sentinel = null;
+    let failed = null;
+    eachTestEntry(workouts, protocolId, function (e, w) {
+      const v = testEntryValue(protocolId, e);
+      if (v === null) return;
+      if (!testEntryPassed(e)) {
+        failed = { value: v, date: w.date, passed: false }; // latest (date asc)
+      } else if (isNum(v)) {
+        if (!timed || v < timed.value) timed = { value: v, date: w.date, passed: true };
+      } else if (!sentinel) {
+        sentinel = { value: 'pass', date: w.date, passed: true };
+      }
+    });
+    return timed || sentinel || failed;
+  }
+
   // Best recorded value for a protocol -> {value, date} | null. Test entries
   // match P2's `protocol` field (and P1's `protocolId` fallback); best is by
   // direction (min for lowerIsBetter, else max), date = when the best was
-  // first achieved. trapbar_rel is derived: best trap-bar e1RM (kg) / latest
-  // bodyweightKg — a unit-free ratio.
+  // first achieved. Pass-kind protocols also accept the 'pass'/'fail'
+  // sentinels (see bestPassEntry; adds a `passed` flag). trapbar_rel is
+  // derived: best trap-bar e1RM (kg) / latest bodyweightKg — a unit-free
+  // ratio.
   Protocols.currentBest = function (protocolId, data) {
     const d = data || {};
     if (protocolId === 'trapbar_rel') {
@@ -474,6 +518,7 @@
       return { value: round2(e1.value / bw), date: e1.date };
     }
     const p = BY_ID[protocolId];
+    if (p && p.kind === 'pass') return bestPassEntry(d.workouts, protocolId);
     const lower = !!(p && p.lowerIsBetter);
     let best = null;
     eachTestEntry(d.workouts, protocolId, function (e, w) {
@@ -509,10 +554,13 @@
 
   // pct 0..1 toward competitive. Time protocols (lowerIsBetter):
   // clamp((min - current) / (min - competitive)); higher-is-better mirrors it.
-  // Pass-style / non-numeric tiers: tested -> 1, untested -> 0.
-  function pctToward(current, tiers, lower, kind) {
+  // Pass-style / non-numeric tiers: tested-and-passed -> 1, a recorded fail
+  // ('fail' sentinel or passed false) -> 0, untested -> 0.
+  function pctToward(current, tiers, lower, kind, passed) {
     if (current === null) return 0;
-    if (kind === 'pass' || !isNum(tiers.min) || !isNum(tiers.competitive)) return 1;
+    if (kind === 'pass' || !isNum(tiers.min) || !isNum(tiers.competitive)) {
+      return (current === 'fail' || passed === false) ? 0 : 1;
+    }
     const min = tiers.min;
     const comp = tiers.competitive;
     let pct;
@@ -551,7 +599,8 @@
         current: current,
         min: tiers.min,
         competitive: tiers.competitive,
-        pct: pctToward(current, tiers, !!(p && p.lowerIsBetter), p && p.kind),
+        pct: pctToward(current, tiers, !!(p && p.lowerIsBetter), p && p.kind,
+          best ? best.passed : null),
         direction: p && p.lowerIsBetter ? 'lower' : 'higher',
         lastTested: lastTestedDate(workouts, id)
       };
@@ -591,12 +640,13 @@
 
   /* ---------- formatting ---------- */
 
-  // '13:42' (time/hold, seconds in), '15 reps', '512 pts', '2.1×BW', 'Pass'.
-  // units is accepted for signature compatibility — no protocol value is
-  // unit-converted (mdl is defined in lb, everything else is unit-free).
+  // '13:42' (time/hold, seconds in), '15 reps', '512 pts', '2.1×BW', 'Pass',
+  // 'Fail'. units is accepted for signature compatibility — no protocol value
+  // is unit-converted (mdl is defined in lb, everything else is unit-free).
   Protocols.fmtValue = function (protocolId, value, units) {
     if (value === null || value === undefined || value === '') return '';
     if (value === 'pass') return 'Pass';
+    if (value === 'fail') return 'Fail';
     const p = BY_ID[protocolId];
     if (!isNum(value)) return String(value);
     const kind = p ? p.kind : null;
