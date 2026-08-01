@@ -1205,7 +1205,9 @@
       return;
     }
     const durationMin = Math.max(1, Math.round((Date.now() - draft.startedAt) / 60000));
-    const candidate = { date: draft.date, entries: entries };
+    // createdAt must be later than any earlier same-day workout so PR ordering
+    // (Analytics sorts same-date ties by createdAt asc) treats this as the latest.
+    const candidate = { date: draft.date, createdAt: Date.now(), entries: entries };
     const vol = Analytics.workoutVolume(candidate);
     const sets = Analytics.workoutSets(candidate);
 
@@ -1493,7 +1495,7 @@
                 exerciseId: en.exerciseId,
                 notes: en.notes || '',
                 sets: (en.sets || [])
-                  .filter(function (s) { return (s.reps || 0) > 0 || (s.weightKg || 0) > 0; })
+                  .filter(function (s) { return (s.reps || 0) > 0; })
                   .map(function (s) {
                     return {
                       weightKg: s.weightKg || 0,
