@@ -528,6 +528,774 @@
     return html;
   }
 
+  /* ======================================================================
+     P4 (Intelligence) — load model surfaces
+     ======================================================================
+     Every surface below reads window.LoadModel LAZILY and renders nothing at
+     all when it is missing (older cached shell, script-order accident) — the
+     dashboard degrades, it never crashes. All arithmetic lives in LoadModel
+     and Guardrails; this file only picks colors, words and units. */
+
+  function loadModel() {
+    return (window.LoadModel && typeof LoadModel.status === 'function') ? window.LoadModel : null;
+  }
+
+  // ACWR zone -> plain word + CVD-safe series color. Color is never the only
+  // signal: every chip carries the word too.
+  const ZONE_META = {
+    'ramping-fast': { label: 'ramping fast', color: 'var(--s5)' },
+    ramping: { label: 'ramping', color: 'var(--s3)' },
+    steady: { label: 'steady', color: 'var(--s1)' },
+    detraining: { label: 'winding down', color: 'var(--s6)' }
+  };
+
+  // LoadModel owns the zone wording when it publishes it (lower-cased here so
+  // the chip reads '1.52× ramping fast'); the local map is the fallback.
+  function zoneWord(zone) {
+    const LM = loadModel();
+    const fromModel = LM && LM.ZONE_LABELS ? LM.ZONE_LABELS[zone] : null;
+    const word = fromModel || (ZONE_META[zone] ? ZONE_META[zone].label : '');
+    return word ? word.charAt(0).toLowerCase() + word.slice(1) : '';
+  }
+
+  const MODALITY_ORDER = ['run', 'ruck', 'lift', 'other'];
+  const MODALITY_LABEL = { run: 'Run', ruck: 'Ruck', lift: 'Lift', other: 'Engine' };
+
+  function fmtMinSec(minutes) {
+    const total = Math.max(0, Math.round((minutes || 0) * 60));
+    return Math.floor(total / 60) + ':' + String(total % 60).padStart(2, '0');
+  }
+
+  function fmtSecClock(seconds) {
+    const total = Math.max(0, Math.round(seconds || 0));
+    return Math.floor(total / 60) + ':' + String(total % 60).padStart(2, '0');
+  }
+
+  // Resting-HR snapshot for the current user, or null when there is no data.
+  // The freshness threshold comes from Guardrails.LIMITS so the dashboard and
+  // the weekly advisory agree on when a spike is still news.
+  function restingHrInfo(u, today) {
+    const rows = Store.healthFor(u.id, 'restingHR');
+    if (!rows.length) return null;
+    const last = rows[rows.length - 1];
+    const LM = loadModel();
+    if (!LM || typeof LM.restingHR !== 'function') {
+      return { latest: last.value, latestDate: last.date, baseline28: null,
+        spike: false, fresh: false, pct: null, rows: rows };
+    }
+    let hr = null;
+    try { hr = LM.restingHR(rows, today); } catch (e) { hr = null; }
+    if (!hr || hr.latest === null || hr.latest === undefined) return null;
+    const freshDays = (window.Guardrails && Guardrails.LIMITS &&
+      Guardrails.LIMITS.RESTING_HR_FRESH_DAYS) || 3;
+    const fresh = !!hr.latestDate && hr.latestDate >= U.addDays(today, -freshDays);
+    return {
+      latest: hr.latest,
+      latestDate: hr.latestDate,
+      baseline28: hr.baseline28,
+      spike: !!hr.spike && fresh,
+      fresh: fresh,
+      pct: hr.baseline28 > 0 ? Math.round((hr.latest / hr.baseline28 - 1) * 100) : null,
+      rows: rows
+    };
+  }
+
+  function greenWeekOf(w, u, today) {
+    const LM = loadModel();
+    if (!LM || typeof LM.greenWeek !== 'function') return null;
+    try { return LM.greenWeek(w, u, U.weekStart(today)); } catch (e) { return null; }
+  }
+
+  /* ---------- TODAY strip ---------- */
+
+  function acwrChipHTML(mod, row) {
+    const meta = row.zone ? ZONE_META[row.zone] : null;
+    const known = typeof row.ratio === 'number' && isFinite(row.ratio);
+    return '<span class="p4-chip" data-zone="' + U.esc(row.zone || 'none') + '"' +
+      (meta ? ' style="--zone:' + meta.color + '"' : '') + '>' +
+      '<span class="dot"></span>' +
+      '<span class="nm">' + U.esc(MODALITY_LABEL[mod] || mod) + '</span>' +
+      (known
+        ? '<b class="tabular">' + U.esc(row.ratio.toFixed(2)) + '×</b>' +
+          '<span class="zn">' + U.esc(zoneWord(row.zone)) + '</span>'
+        : '<span class="zn">building base</span>') +
+      '</span>';
+  }
+
+  // Daily guidance strip: LoadModel headline + one ACWR chip per modality that
+  // has any load in the window, plus the resting-HR easy-day advisory.
+  function todayStripHTML(w, today, hr) {
+    const LM = loadModel();
+    if (!LM) return '';
+    let st = null;
+    try { st = LM.status(w, today); } catch (e) { st = null; }
+    if (!st || !st.perModality) return '';
+
+    const chips = [];
+    for (const mod of MODALITY_ORDER) {
+      const row = st.perModality[mod];
+      if (!row) continue;
+      if (!(row.acute > 0) && !(row.chronic > 0)) continue;
+      chips.push(acwrChipHTML(mod, row));
+    }
+    let line = st.headline;
+    if (!line) {
+      line = chips.length
+        ? 'Steady — every modality is inside its four-week normal range.'
+        : 'No training load in the last four weeks. Log a session and today\'s guidance fills in.';
+    }
+    let html = '<section class="card p4-today" data-p4="today">';
+    html += '<div class="p4-eyebrow">Today</div>';
+    html += '<p class="p4-headline">' + U.esc(line) + '</p>';
+    if (chips.length) html += '<div class="p4-chips">' + chips.join('') + '</div>';
+    if (hr && hr.spike) {
+      const advisory = 'Resting HR ' + Math.round(hr.latest) + ' bpm' +
+        (hr.pct !== null ? ' is ' + hr.pct + '% over your 28-day baseline' : ' is over your baseline') +
+        ' two readings running — make today easy or take it off.';
+      html += '<div class="p4-advisory">' +
+        '<span class="ic">' + sizedIcon(App.icons.heart, 16) + '</span>' +
+        '<span>' + U.esc(advisory) + '</span></div>';
+    }
+    html += '</section>';
+    return html;
+  }
+
+  /* ---------- green-week stat tile (replaces the streak flame in perf mode) ---------- */
+
+  function greenWeekStatHTML(gw, st) {
+    const LM = loadModel();
+    const goal = Math.max(1, (LM && LM.GREEN_WEEK_SESSIONS) || 4);
+    const short = Math.max(0, goal - gw.sessions);
+    let deltaCls = 'flat';
+    let deltaTxt;
+    if (gw.green) {
+      deltaCls = 'up';
+      deltaTxt = 'green week · streak ' + st.currentWeeks + ' wk';
+    } else if (short > 0) {
+      deltaTxt = short + (short === 1 ? ' session' : ' sessions') + ' to go' +
+        (gw.restDayTaken ? '' : ' · rest day still needed');
+    } else {
+      deltaTxt = 'no rest day yet · streak ' + st.currentWeeks + ' wk';
+    }
+    return '<div class="stat" data-p4="greenweek"><span class="label">Green week</span>' +
+      '<span class="value" style="display:flex;align-items:center;gap:6px;">' +
+      '<span style="color:' + (gw.green ? 'var(--accent)' : 'var(--text-muted)') +
+      ';display:inline-flex;">' + sizedIcon(gw.green ? App.icons.check : App.icons.calendar, 20) + '</span>' +
+      '<span>' + gw.sessions + '<span class="unit">/' + goal + '</span></span></span>' +
+      '<span class="delta ' + deltaCls + '">' + U.esc(deltaTxt) + '</span></div>';
+  }
+
+  /* ---------- recovery strip ---------- */
+
+  function recCellHTML(label, value, sub) {
+    return '<div class="p4-rec-cell"><div class="lb">' + U.esc(label) + '</div>' +
+      '<div class="v tabular">' + value + '</div>' +
+      '<div class="sub">' + U.esc(sub || '') + '</div></div>';
+  }
+
+  // Resting HR (+ 28-day baseline & spike flag), sleep 7d vs 28d, open pain
+  // entries and rest-day status. Missing health data degrades to a hint line —
+  // the card always renders something useful in performance mode.
+  function recoveryCardHTML(u, today, gs, hr, gw) {
+    const sleepRows = Store.healthFor(u.id, 'sleepHours');
+
+    function meanOver(rows, days) {
+      const start = U.addDays(today, -(days - 1));
+      const win = rows.filter(function (r) { return r.date >= start && r.date <= today; });
+      if (!win.length) return null;
+      return U.round1(U.sum(win, function (r) { return r.value; }) / win.length);
+    }
+    const sleep7 = meanOver(sleepRows, 7);
+    const sleep28 = meanOver(sleepRows, 28);
+
+    const openPain = Store.painFor(u.id).filter(function (p) { return !p.resolved; });
+    const restTaken = gs && typeof gs.restDayTaken === 'boolean' ? gs.restDayTaken
+      : gw ? gw.restDayTaken : null;
+
+    let html = '<section class="card" data-p4="recovery">';
+    html += '<div class="card-title"><span>Recovery</span>' +
+      (hr && hr.spike ? '<span class="badge orange">HR spike</span>' : '') + '</div>';
+    html += '<div class="p4-rec">';
+
+    if (hr && hr.latest) {
+      let sub;
+      if (hr.baseline28) {
+        sub = '28-day baseline ' + U.round1(hr.baseline28) + ' bpm · ' +
+          (hr.pct > 0 ? '+' : '') + hr.pct + '%';
+      } else {
+        sub = 'baseline builds as more days sync';
+      }
+      if (!hr.fresh) sub += ' · last read ' + U.relDate(hr.latestDate);
+      html += '<div class="p4-rec-hr">' +
+        '<div class="lb">Resting HR</div>' +
+        '<div class="v tabular">' + Math.round(hr.latest) + '<span class="unit"> bpm</span></div>' +
+        '<div class="sub">' + U.esc(sub) + '</div>' +
+        '<div data-slot="p4-hr-spark" class="p4-spark"></div></div>';
+    } else {
+      html += '<div class="p4-rec-hr">' +
+        '<div class="lb">Resting HR</div>' +
+        '<div class="v">—</div>' +
+        '<div class="sub">No resting-heart-rate days yet.</div>' +
+        '<button type="button" class="btn ghost small" data-act="go-settings" ' +
+        'style="margin-top:8px">Import Apple Health</button></div>';
+    }
+
+    html += '<div class="p4-rec-cells">';
+    html += recCellHTML('Sleep (7-day)',
+      sleep7 === null ? '—' : U.esc(String(sleep7)) + '<span class="unit"> h</span>',
+      sleep28 === null ? 'no sleep data yet'
+        : '28-day ' + sleep28 + ' h · ' + (sleep7 >= sleep28 ? '+' : '') +
+          U.round1(sleep7 - sleep28) + ' h');
+    html += recCellHTML('Open niggles', String(openPain.length),
+      openPain.length ? 'in the pain log' : 'nothing logged');
+    html += recCellHTML('Rest day',
+      restTaken === null ? '—' : (restTaken ? 'Taken' : 'Not yet'),
+      gw ? gw.sessions + (gw.sessions === 1 ? ' session' : ' sessions') + ' this week' : 'this week');
+    html += '</div></div>';
+
+    if (!hr && sleep7 === null) {
+      html += '<p class="p4-hint">Recovery signals come from Apple Health — import once and ' +
+        'resting HR and sleep track themselves.</p>';
+    }
+    html += '</section>';
+    return html;
+  }
+
+  /* ---------- P4 mini-charts ----------
+     Two shapes js/charts.js does not cover (stacked bars, scatter). The chrome
+     deliberately mirrors it: hairline gridlines, 11px muted tick text, no chart
+     border, 2px surface gaps, viewBox sized to the measured container so text
+     renders at true 11px, re-drawn on container resize. */
+
+  const P4_GRID = 'rgba(255,255,255,.06)';
+  const P4_GOAL = 'rgba(255,255,255,.18)';
+  const P4_MUTED = '#6b7683';
+  const P4_TEXT2 = '#98a2ae';
+
+  function p4r(v) { return Math.round(v * 100) / 100; }
+
+  function p4Width(el) {
+    let width = el && el.clientWidth ? el.clientWidth : 0;
+    if (width > 0) {
+      const cs = getComputedStyle(el);
+      width -= (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
+    }
+    return width > 60 ? width : 640;
+  }
+
+  function p4Responsive(el, draw) {
+    if (!el) return;
+    draw();
+    if (el.__p4ro) { el.__p4ro.disconnect(); el.__p4ro = null; }
+    if (typeof ResizeObserver === 'undefined') return;
+    let lastW = el.clientWidth;
+    const ro = new ResizeObserver(U.debounce(function () {
+      if (!document.body.contains(el)) { ro.disconnect(); return; }
+      const now = el.clientWidth;
+      if (Math.abs(now - lastW) > 8) { lastW = now; draw(); }
+    }, 120));
+    ro.observe(el);
+    el.__p4ro = ro;
+  }
+
+  function p4Empty(el, h, note) {
+    el.innerHTML = '<div style="height:' + h + 'px;display:flex;align-items:center;' +
+      'justify-content:center;color:' + P4_MUTED + ';font-size:12px;">' +
+      U.esc(note || 'No data yet') + '</div>';
+  }
+
+  function p4Text(x, y, s, anchor, fill, size, weight) {
+    return '<text x="' + p4r(x) + '" y="' + p4r(y) + '" text-anchor="' + (anchor || 'start') +
+      '" fill="' + (fill || P4_MUTED) + '" font-size="' + (size || 11) + '"' +
+      (weight ? ' font-weight="' + weight + '"' : '') + '>' + U.esc(s) + '</text>';
+  }
+
+  function p4Legend(items) {
+    if (items.length < 2) return '';
+    return '<div style="display:flex;flex-wrap:wrap;gap:4px 14px;margin:2px 2px 8px;">' +
+      items.map(function (it) {
+        return '<span style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:' +
+          P4_TEXT2 + ';"><span style="width:10px;height:10px;border-radius:50%;background:' +
+          it.color + ';flex:none;"></span>' + U.esc(it.label) + '</span>';
+      }).join('') + '</div>';
+  }
+
+  // Clean 0..max tick ladder (1 / 2 / 5 x 10^n steps). The top tick always
+  // sits at or above max — charts scale to it, so a short ladder would draw
+  // bars and dots outside the plot.
+  function p4Ticks(max, count) {
+    if (!(max > 0)) return [0, 1];
+    const raw = max / Math.max(1, count || 4);
+    const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+    const n = raw / mag;
+    const step = (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * mag;
+    const hi = Math.ceil((max - step * 1e-9) / step) * step;
+    const out = [];
+    for (let i = 0; i * step <= hi + step * 1e-9; i++) {
+      out.push(Math.round(i * step * 1000) / 1000);
+    }
+    if (out.length < 2) out.push(Math.round(step * 1000) / 1000);
+    return out;
+  }
+
+  function p4TextWidth(s) { return String(s).length * 11 * 0.62; }
+
+  // rounded data end, square baseline (same idiom as Charts.bars)
+  function p4TopRect(x, y, w, h, r) {
+    const rr = Math.min(r, w / 2, h);
+    return 'M' + p4r(x) + ',' + p4r(y + h) + ' L' + p4r(x) + ',' + p4r(y + rr) +
+      ' Q' + p4r(x) + ',' + p4r(y) + ' ' + p4r(x + rr) + ',' + p4r(y) +
+      ' L' + p4r(x + w - rr) + ',' + p4r(y) +
+      ' Q' + p4r(x + w) + ',' + p4r(y) + ' ' + p4r(x + w) + ',' + p4r(y + rr) +
+      ' L' + p4r(x + w) + ',' + p4r(y + h) + ' Z';
+  }
+
+  // Stacked (or single-series) column chart with an optional reference line.
+  // opts: {groups:[{label, values:[{seriesLabel, value, color}]}], yFmt,
+  //        refLine, refLabel, note}
+  function p4Bars(el, opts) {
+    if (!el) return;
+    p4Responsive(el, function () {
+      const H = 200;
+      const groups = opts.groups || [];
+      const yFmt = opts.yFmt || U.fmtNum;
+      const ref = typeof opts.refLine === 'number' && isFinite(opts.refLine) && opts.refLine > 0
+        ? opts.refLine : null;
+      let maxV = ref || 0;
+      groups.forEach(function (g) {
+        let total = 0;
+        (g.values || []).forEach(function (v) { total += Math.max(0, v.value || 0); });
+        if (total > maxV) maxV = total;
+      });
+      if (!groups.length || maxV <= 0) { p4Empty(el, H, opts.note); return; }
+
+      const ticks = p4Ticks(maxV, 4);
+      const yHi = ticks[ticks.length - 1];
+      const W = p4Width(el);
+      let tickW = 0;
+      ticks.forEach(function (t) { tickW = Math.max(tickW, p4TextWidth(yFmt(t))); });
+      const pad = { t: 12, r: 10, b: 24, l: Math.max(30, Math.ceil(tickW) + 12) };
+      const pw = W - pad.l - pad.r;
+      const ph = H - pad.t - pad.b;
+      const baseY = pad.t + ph;
+      const Y = function (v) { return pad.t + (1 - v / yHi) * ph; };
+
+      let g = '';
+      ticks.forEach(function (t) {
+        const y = Y(t);
+        g += '<line x1="' + pad.l + '" y1="' + p4r(y) + '" x2="' + p4r(pad.l + pw) +
+          '" y2="' + p4r(y) + '" stroke="' + P4_GRID + '" stroke-width="1"/>';
+        g += p4Text(pad.l - 8, y + 3.5, yFmt(t), 'end');
+      });
+
+      const slot = pw / groups.length;
+      const barW = Math.max(3, Math.min(24, slot * 0.62));
+      const legendSeen = {};
+      const legend = [];
+      groups.forEach(function (grp, gi) {
+        const cx = pad.l + slot * gi + slot / 2;
+        let acc = 0;
+        const vals = (grp.values || []).filter(function (v) { return (v.value || 0) > 0; });
+        vals.forEach(function (v, vi) {
+          if (!legendSeen[v.seriesLabel]) {
+            legendSeen[v.seriesLabel] = 1;
+            legend.push({ label: v.seriesLabel, color: v.color });
+          }
+          const y0 = Y(acc);
+          const y1 = Y(acc + v.value);
+          const gap = vi === vals.length - 1 ? 0 : 2; // 2px surface gap between segments
+          const h = Math.max(0, y0 - y1 - gap);
+          if (h > 0.5) {
+            const top = vi === vals.length - 1;
+            g += '<path d="' + (top ? p4TopRect(cx - barW / 2, y1, barW, h, 4)
+              : 'M' + p4r(cx - barW / 2) + ',' + p4r(y1) + ' h' + p4r(barW) + ' v' + p4r(h) +
+                ' h' + p4r(-barW) + ' Z') +
+              '" fill="' + v.color + '"><title>' + U.esc(grp.label + ' · ' + v.seriesLabel +
+              ' ' + yFmt(v.value)) + '</title></path>';
+          }
+          acc += v.value;
+        });
+      });
+
+      if (ref !== null) {
+        const y = Y(ref);
+        g += '<line x1="' + pad.l + '" y1="' + p4r(y) + '" x2="' + p4r(pad.l + pw) + '" y2="' + p4r(y) +
+          '" stroke="' + P4_GOAL + '" stroke-width="1" stroke-dasharray="4 4"/>';
+        g += p4Text(pad.l + pw, y - 5, opts.refLabel || 'average', 'end', P4_TEXT2);
+      }
+
+      const every = Math.max(1, Math.ceil(groups.length / Math.max(2, Math.floor(pw / 76))));
+      groups.forEach(function (grp, gi) {
+        if (gi % every !== 0 && gi !== groups.length - 1) return;
+        g += p4Text(pad.l + slot * gi + slot / 2, H - 7, grp.label, 'middle');
+      });
+
+      el.innerHTML = p4Legend(legend) +
+        '<svg viewBox="0 0 ' + p4r(W) + ' ' + H + '" width="100%" style="display:block" role="img">' +
+        g + '</svg>';
+    });
+  }
+
+  // Scatter plot. opts: {points:[{x, y, label, recent}], xFmt, yFmt, xTitle,
+  //                      yTitle, color, mutedColor, note}
+  function p4Scatter(el, opts) {
+    if (!el) return;
+    p4Responsive(el, function () {
+      const H = 210;
+      const pts = (opts.points || []).filter(function (p) {
+        return p && isFinite(p.x) && isFinite(p.y);
+      });
+      if (!pts.length) { p4Empty(el, H, opts.note); return; }
+      const xFmt = opts.xFmt || U.fmtNum;
+      const yFmt = opts.yFmt || U.fmtNum;
+
+      let xMax = 0;
+      let yMin = Infinity;
+      let yMax = -Infinity;
+      pts.forEach(function (p) {
+        if (p.x > xMax) xMax = p.x;
+        if (p.y < yMin) yMin = p.y;
+        if (p.y > yMax) yMax = p.y;
+      });
+      if (yMin === yMax) { yMin -= 0.5; yMax += 0.5; }
+      const yPad = (yMax - yMin) * 0.15;
+      const yLo = Math.max(0, yMin - yPad);
+      const yHi = yMax + yPad;
+      const xTicks = p4Ticks(xMax || 1, 4);
+      const xHi = xTicks[xTicks.length - 1];
+      const yTicks = [yLo, yLo + (yHi - yLo) / 2, yHi];
+
+      const W = p4Width(el);
+      let tickW = 0;
+      yTicks.forEach(function (t) { tickW = Math.max(tickW, p4TextWidth(yFmt(t))); });
+      const pad = { t: 26, r: 12, b: 34, l: Math.max(34, Math.ceil(tickW) + 12) };
+      const pw = W - pad.l - pad.r;
+      const ph = H - pad.t - pad.b;
+      const X = function (v) { return pad.l + (xHi > 0 ? v / xHi : 0.5) * pw; };
+      const Y = function (v) { return pad.t + (1 - (v - yLo) / (yHi - yLo)) * ph; };
+
+      let g = '';
+      yTicks.forEach(function (t) {
+        const y = Y(t);
+        g += '<line x1="' + pad.l + '" y1="' + p4r(y) + '" x2="' + p4r(pad.l + pw) + '" y2="' +
+          p4r(y) + '" stroke="' + P4_GRID + '" stroke-width="1"/>';
+        g += p4Text(pad.l - 8, y + 3.5, yFmt(t), 'end');
+      });
+      xTicks.forEach(function (t) {
+        g += p4Text(X(t), H - 16, xFmt(t), 'middle');
+      });
+      if (opts.yTitle) g += p4Text(pad.l - tickW - 4, 12, opts.yTitle, 'start', P4_TEXT2);
+      if (opts.xTitle) g += p4Text(pad.l + pw / 2, H - 3, opts.xTitle, 'middle', P4_TEXT2);
+
+      const color = opts.color || Charts.SERIES[0];
+      const muted = opts.mutedColor || 'rgba(255,255,255,.28)';
+      pts.forEach(function (p) {
+        g += '<circle cx="' + p4r(X(p.x)) + '" cy="' + p4r(Y(p.y)) + '" r="4.5" fill="' +
+          (p.recent ? color : muted) + '" fill-opacity="' + (p.recent ? '.95' : '.75') +
+          '" stroke="#1b1f26" stroke-width="1.5"><title>' + U.esc(p.label || '') +
+          '</title></circle>';
+      });
+
+      const legend = [];
+      if (pts.some(function (p) { return p.recent; })) legend.push({ label: 'Last 12 weeks', color: color });
+      if (pts.some(function (p) { return !p.recent; })) legend.push({ label: 'Earlier', color: muted });
+
+      el.innerHTML = p4Legend(legend) +
+        '<svg viewBox="0 0 ' + p4r(W) + ' ' + H + '" width="100%" style="display:block" role="img">' +
+        g + '</svg>';
+    });
+  }
+
+  /* ---------- Analytics: Performance section data ---------- */
+
+  const BENCHMARKS = [
+    { id: 'run2mi', label: '2-mile', miles: 2 },
+    { id: 'run5mi', label: '5-mile', miles: 5 }
+  ];
+  // a logged run counts as a benchmark effort within +-3% of the distance
+  const BENCH_TOL = 0.03;
+
+  // Mirrors Guardrails' internal effort classification (HR beats the effort
+  // field when both avgHR and birthYear are known); the HR fraction is read
+  // from Guardrails.LIMITS so there is one source of truth for the threshold.
+  function classifyCardio(e, u, refYear) {
+    const frac = (window.Guardrails && Guardrails.LIMITS &&
+      Guardrails.LIMITS.EASY_HR_FRACTION) || 0.75;
+    const by = u && u.profile && u.profile.birthYear;
+    if (by && typeof e.avgHR === 'number' && e.avgHR > 0) {
+      return e.avgHR < frac * (220 - (refYear - by)) ? 'easy' : 'hard';
+    }
+    if (e.effort === 'easy') return 'easy';
+    if (e.effort === 'moderate' || e.effort === 'hard') return 'hard';
+    return null;
+  }
+
+  function effortSplitWeeks(w, u, weeks, today) {
+    const cw = U.weekStart(today);
+    const rows = [];
+    const index = {};
+    for (let i = weeks - 1; i >= 0; i--) {
+      const ws = U.addDays(cw, -7 * i);
+      const row = { weekStart: ws, easy: 0, hard: 0 };
+      rows.push(row);
+      index[ws] = row;
+    }
+    for (const wo of w || []) {
+      if (!wo || !wo.date) continue;
+      const row = index[U.weekStart(wo.date)];
+      if (!row) continue;
+      const refYear = parseInt(row.weekStart.slice(0, 4), 10);
+      for (const e of wo.entries || []) {
+        if (!e || e.type !== 'cardio') continue;
+        const cls = classifyCardio(e, u, refYear);
+        if (cls === 'easy') row.easy++;
+        else if (cls === 'hard') row.hard++;
+      }
+    }
+    return rows;
+  }
+
+  // Benchmark efforts per date: test entries for the protocol plus any logged
+  // run within tolerance of the distance; the fastest effort wins the day.
+  function benchmarkPoints(w) {
+    const best = { run2mi: {}, run5mi: {} };
+    function put(id, date, sec) {
+      if (!best[id] || !(sec > 0)) return;
+      if (best[id][date] === undefined || sec < best[id][date]) best[id][date] = sec;
+    }
+    for (const wo of w || []) {
+      if (!wo || !wo.date) continue;
+      for (const e of wo.entries || []) {
+        if (!e) continue;
+        if (e.type === 'test') {
+          const v = e.results && typeof e.results.value === 'number' ? e.results.value : null;
+          if (v !== null) put(e.protocol, wo.date, v);
+        } else if (e.type === 'cardio' && e.mode === 'run') {
+          const km = typeof e.distanceKm === 'number' ? e.distanceKm : 0;
+          const min = typeof e.durationMin === 'number' ? e.durationMin : 0;
+          if (km > 0 && min > 0) {
+            for (const b of BENCHMARKS) {
+              const target = b.miles * KM_PER_MILE;
+              if (Math.abs(km - target) <= target * BENCH_TOL) put(b.id, wo.date, min * 60);
+            }
+          }
+        }
+      }
+    }
+    const out = {};
+    for (const b of BENCHMARKS) {
+      out[b.id] = Object.keys(best[b.id]).sort().map(function (d) {
+        return { x: d, y: Math.round(best[b.id][d]) };
+      });
+    }
+    return out;
+  }
+
+  // Per-modality display conversion — the load model works in km, kg·mi, kg
+  // and minutes; the viewer sees their own units.
+  function modalityUnitLabel(mod) {
+    const units = App.units();
+    if (mod === 'run') return units === 'lb' ? 'mi' : 'km';
+    if (mod === 'ruck') return units === 'lb' ? 'lb·mi' : 'kg·mi';
+    if (mod === 'lift') return unitLbl();
+    return 'min';
+  }
+
+  function modalityDisplay(mod, value) {
+    const v = typeof value === 'number' && isFinite(value) ? value : 0;
+    if (mod === 'run') return U.round1(App.units() === 'lb' ? v / KM_PER_MILE : v);
+    if (mod === 'ruck' || mod === 'lift') return Math.round(dispVol(v));
+    return Math.round(v);
+  }
+
+  /* ---------- Analytics: Performance section ---------- */
+
+  // Everything the section needs, or null when LoadModel is unavailable.
+  function perfAnalyticsData(u, w, today) {
+    const LM = loadModel();
+    if (!LM) return null;
+    let economy = [];
+    try { economy = LM.ruckEconomy(w) || []; } catch (e) { economy = []; }
+
+    const cw = U.weekStart(today);
+    const load = {};
+    for (const mod of MODALITY_ORDER) {
+      const weeks = [];
+      let total = 0;
+      for (let i = 11; i >= 0; i--) {
+        const ws = U.addDays(cw, -7 * i);
+        let v = 0;
+        try { v = LM.weekly(w, mod, ws); } catch (e) { v = 0; }
+        if (!(typeof v === 'number' && isFinite(v))) v = 0;
+        total += v;
+        weeks.push({ weekStart: ws, value: v });
+      }
+      let chronic = 0;
+      try {
+        const a = LM.acwr(w, mod, today);
+        chronic = a && typeof a.chronic === 'number' && isFinite(a.chronic) ? a.chronic : 0;
+      } catch (e) { chronic = 0; }
+      load[mod] = { weeks: weeks, total: total, chronic: chronic };
+    }
+
+    // The selected modality falls back to the first one with any load, so the
+    // card opens on something worth looking at instead of an empty chart.
+    let mod = aState.loadMod;
+    if (!load[mod] || !(load[mod].total > 0)) {
+      mod = '';
+      for (const m of MODALITY_ORDER) {
+        if (load[m].total > 0) { mod = m; break; }
+      }
+      if (!mod) mod = 'run';
+      aState.loadMod = mod;
+    }
+
+    return {
+      split: effortSplitWeeks(w, u, 12, today),
+      economy: economy,
+      bench: benchmarkPoints(w),
+      load: load,
+      mod: mod,
+      today: today
+    };
+  }
+
+  function perfAnalyticsHTML(data) {
+    if (!data) return '';
+    let html = '<div class="p4-perf" data-p4="perf-analytics">';
+    html += '<div class="p4-sec-head">Performance</div>';
+
+    /* easy/hard weekly split */
+    html += cardOpen('Easy vs hard weeks');
+    const anySplit = data.split.some(function (r) { return r.easy + r.hard > 0; });
+    if (!anySplit) {
+      html += emptyHtml(App.icons.run, 'No classified cardio yet',
+        'Log runs, rucks or rows with an effort (or a heart rate) and the weekly split charts here.');
+    } else {
+      html += '<div data-slot="p4-split"></div>';
+    }
+    html += '<p class="p4-cap">Cardio sessions per week by effort — about three in four should be ' +
+      'easy. Heart rate decides when it is known, otherwise the effort you logged.</p></section>';
+
+    /* ruck economy */
+    html += cardOpen('Ruck economy');
+    if (!data.economy.length) {
+      html += emptyHtml(App.icons.ruck, 'No rucks to plot yet',
+        'Rucks logged with both distance and duration plot pace against pack load here.');
+    } else {
+      html += '<div data-slot="p4-economy"></div>';
+    }
+    html += '<p class="p4-cap">One dot per ruck: pack load across, pace down. Lower is faster — ' +
+      'watch how much pace slides as the load climbs.</p></section>';
+
+    /* benchmark pace trends */
+    html += cardOpen('Benchmark pace');
+    const benchPts = data.bench.run2mi.length + data.bench.run5mi.length;
+    if (!benchPts) {
+      html += emptyHtml(App.icons.clipboard, 'No benchmark efforts yet',
+        'Record a 2-mile or 5-mile test — or just log a run at that distance — and the trend starts here.');
+    } else {
+      html += '<div data-slot="p4-bench"></div>';
+    }
+    html += '<p class="p4-cap">Best 2-mile and 5-mile efforts as pace per ' +
+      (App.units() === 'lb' ? 'mile' : 'kilometre') + ' — recorded tests plus any logged run ' +
+      'within 3% of the distance. Lower is faster.</p></section>';
+
+    /* per-modality weekly load */
+    html += cardOpen('Weekly load', segmented('a-loadmod', 'loadMod',
+      MODALITY_ORDER.map(function (m) { return { value: m, label: MODALITY_LABEL[m] }; }), data.mod));
+    html += '<div data-slot="p4-load"></div>';
+    html += '<p class="p4-cap">' + U.esc(MODALITY_LABEL[data.mod]) + ' load per week in ' +
+      U.esc(modalityUnitLabel(data.mod)) + ' — modalities never blend into one number. ' +
+      'The dashed line is your four-week average (chronic load).</p></section>';
+
+    html += '</div>';
+    return html;
+  }
+
+  function mountPerfAnalytics(container, data) {
+    if (!data) return;
+    const units = App.units();
+
+    const splitEl = U.$('[data-slot="p4-split"]', container);
+    if (splitEl) {
+      p4Bars(splitEl, {
+        groups: data.split.map(function (r) {
+          return {
+            label: U.fmtDate(r.weekStart),
+            values: [
+              { seriesLabel: 'Easy', value: r.easy, color: Charts.SERIES[0] },
+              { seriesLabel: 'Hard', value: r.hard, color: Charts.SERIES[4] }
+            ]
+          };
+        }),
+        yFmt: function (v) { return String(Math.round(v)); }
+      });
+    }
+
+    const ecoEl = U.$('[data-slot="p4-economy"]', container);
+    if (ecoEl) {
+      const cutoff = U.addDays(data.today, -83); // last 12 weeks highlighted
+      const paceUnit = units === 'lb' ? '/mi' : '/km';
+      p4Scatter(ecoEl, {
+        points: data.economy.map(function (r) {
+          const pace = units === 'lb' ? r.minPerKm * KM_PER_MILE : r.minPerKm;
+          return {
+            x: U.kgToDisplay(r.loadKg, units),
+            y: pace,
+            recent: r.date >= cutoff,
+            label: U.fmtDate(r.date) + ' · ' + fmtDistKm(r.km) + ' @ ' +
+              App.fmtWeight(r.loadKg) + ' · ' + fmtMinSec(pace) + ' ' + paceUnit
+          };
+        }),
+        xFmt: function (v) { return U.fmtNum(Math.round(v)); },
+        yFmt: fmtMinSec,
+        xTitle: 'Pack load (' + unitLbl() + ')',
+        yTitle: 'min ' + paceUnit,
+        color: Charts.SERIES[1]
+      });
+    }
+
+    const benchEl = U.$('[data-slot="p4-bench"]', container);
+    if (benchEl) {
+      // Plotted as PACE, not finishing time: a 2-mile and a 5-mile total would
+      // never share a sensible axis, but their per-mile pace does.
+      const series = BENCHMARKS.map(function (b, i) {
+        const per = units === 'lb' ? b.miles : b.miles * KM_PER_MILE;
+        return {
+          label: b.label,
+          color: Charts.SERIES[i],
+          points: data.bench[b.id].map(function (p) {
+            return { x: p.x, y: Math.round(p.y / per) };
+          })
+        };
+      }).filter(function (s) { return s.points.length > 0; });
+      Charts.line(benchEl, { series: series, yFmt: fmtSecClock });
+    }
+
+    const loadEl = U.$('[data-slot="p4-load"]', container);
+    if (loadEl) {
+      const mod = data.mod;
+      const row = data.load[mod];
+      p4Bars(loadEl, {
+        groups: row.weeks.map(function (r) {
+          return {
+            label: U.fmtDate(r.weekStart),
+            values: [{
+              seriesLabel: MODALITY_LABEL[mod] + ' (' + modalityUnitLabel(mod) + ')',
+              value: modalityDisplay(mod, r.value),
+              color: Charts.SERIES[0]
+            }]
+          };
+        }),
+        refLine: modalityDisplay(mod, row.chronic),
+        refLabel: '4-week average',
+        yFmt: U.fmtNum,
+        note: 'No ' + MODALITY_LABEL[mod].toLowerCase() + ' load in the last 12 weeks'
+      });
+    }
+  }
+
   /* ---------- pain quick-log ---------- */
 
   function toggleRow(id, label) {
@@ -779,6 +1547,11 @@
     html += '<div class="view-head"><h2>' + U.esc(greet) + ', ' + U.esc(u.name) + '</h2>' +
       '<div class="sub">' + U.esc(U.fmtDateLong(today)) + '</div></div>';
 
+    /* TODAY strip (P4, performance mode + LoadModel loaded) */
+    const hrInfo = perf ? restingHrInfo(u, today) : null;
+    const greenWk = perf ? greenWeekOf(w, u, today) : null;
+    const todayStrip = perf ? todayStripHTML(w, today, hrInfo) : '';
+
     /* countdown chip (performance mode, selection date set) */
     if (perf && u.goals && u.goals.selectionDate) {
       const daysTo = U.daysBetween(today, u.goals.selectionDate);
@@ -800,6 +1573,8 @@
           sizedIcon(App.icons.roadmap, 16) + '<span>' + U.esc(cdLabel) + '</span></span></div>';
       }
     }
+
+    html += todayStrip;
 
     /* resume banner */
     if (draft) {
@@ -834,11 +1609,17 @@
         ? '<span class="delta up">weekly goal hit</span>'
         : '<span class="delta flat">' + (goalW - thisWk.workouts) + ' to go this week</span>') +
       '</div>';
-    html += '<div class="stat"><span class="label">Current streak</span>' +
-      '<span class="value" style="display:flex;align-items:center;gap:6px;">' +
-      '<span style="color:var(--orange);display:inline-flex;">' + sizedIcon(App.icons.flame, 20) + '</span>' +
-      '<span>' + st.currentWeeks + '<span class="unit">wk</span></span></span>' +
-      '<span class="delta flat">best ' + st.bestWeeks + ' wk</span></div>';
+    // P4: performance users get the green-week chip in place of the streak
+    // flame; simple mode keeps the flame tile byte-for-byte.
+    if (greenWk) {
+      html += greenWeekStatHTML(greenWk, st);
+    } else {
+      html += '<div class="stat"><span class="label">Current streak</span>' +
+        '<span class="value" style="display:flex;align-items:center;gap:6px;">' +
+        '<span style="color:var(--orange);display:inline-flex;">' + sizedIcon(App.icons.flame, 20) + '</span>' +
+        '<span>' + st.currentWeeks + '<span class="unit">wk</span></span></span>' +
+        '<span class="delta flat">best ' + st.bestWeeks + ' wk</span></div>';
+    }
     html += '<div class="stat"><span class="label">PRs this month</span>' +
       '<span class="value" style="display:flex;align-items:center;gap:6px;">' +
       '<span style="color:var(--yellow);display:inline-flex;">' + sizedIcon(App.icons.trophy, 20) + '</span>' +
@@ -846,12 +1627,20 @@
       '<span class="delta flat">' + (prsMonth ? 'keep it up' : 'none yet') + '</span></div>';
     html += '</div>';
 
+    /* weekly status (computed first: the recovery strip reuses its rest-day
+       verdict, and P4 feeds it resting-HR samples for the spike advisory) */
+    const gs = perf && window.Guardrails && Guardrails.weeklyStatus
+      ? Guardrails.weeklyStatus(w, u, today, { healthSamples: Store.healthFor(u.id, 'restingHR') })
+      : null;
+
+    /* recovery strip (P4, performance mode) */
+    if (perf) html += recoveryCardHTML(u, today, gs, hrInfo, greenWk);
+
     /* readiness snapshot (performance mode + Protocols loaded) */
     if (perf) html += readinessCardHTML(u, w);
 
     /* weekly status line (performance mode only) */
-    if (perf && window.Guardrails && Guardrails.weeklyStatus) {
-      const gs = Guardrails.weeklyStatus(w, u, today);
+    if (gs) {
       const bits = [];
       if (gs.runMileageKm > 0) {
         bits.push(fmtDistKm(gs.runMileageKm) + ' running' +
@@ -1021,6 +1810,18 @@
       onSelect: function (m) { App.navigate('library', { muscle: m }); }
     });
 
+    /* P4 recovery strip: 28-day resting-HR sparkline */
+    const hrSparkEl = U.$('[data-slot="p4-hr-spark"]', container);
+    if (hrSparkEl) {
+      const hrRows = (hrInfo && hrInfo.rows ? hrInfo.rows : []).filter(function (r) {
+        return r.date >= U.addDays(today, -27) && r.date <= today;
+      });
+      Charts.spark(hrSparkEl, {
+        points: hrRows.map(function (r) { return { x: r.date, y: r.value }; }),
+        color: hrInfo && hrInfo.spike ? Charts.SERIES[4] : Charts.SERIES[1]
+      });
+    }
+
     /* events */
     U.on(container, 'click', '[data-act="resume"]', function () { App.navigate('log'); });
     U.on(container, 'click', '[data-act="go-log"]', function () { App.navigate('log'); });
@@ -1036,6 +1837,7 @@
     U.on(container, 'click', '[data-act="log-pain"]', function () { openPainSheet(u); });
     U.on(container, 'click', '[data-act="go-body"]', function () { App.navigate('body'); });
     U.on(container, 'click', '[data-act="go-standards"]', function () { App.navigate('standards'); });
+    U.on(container, 'click', '[data-act="go-settings"]', function () { App.navigate('settings'); });
   }
 
   function startSuggestedWorkout(ids, labels) {
@@ -1074,7 +1876,7 @@
      Analytics
      ====================================================================== */
 
-  const aState = { exId: null, range: '8w', metric: 'volume', prKind: 'all' };
+  const aState = { exId: null, range: '8w', metric: 'volume', prKind: 'all', loadMod: 'run' };
 
   App.registerView('analytics', {
     title: 'Analytics',
@@ -1186,6 +1988,9 @@
     const prShown = aState.prKind === 'all' ? prsDesc :
       prsDesc.filter(function (p) { return p.kind === aState.prKind; });
 
+    /* P4 performance section (performance mode + LoadModel loaded) */
+    const perfData = App.isPerformance() ? perfAnalyticsData(u, w, today) : null;
+
     /* ------------------------------ markup ------------------------------ */
 
     let html = '<div class="view-head"><h2>Analytics</h2>' +
@@ -1290,6 +2095,8 @@
     }
     html += '</section>';
 
+    html += perfAnalyticsHTML(perfData);
+
     container.innerHTML = html;
 
     /* mounts */
@@ -1331,6 +2138,7 @@
       weeks: 26,
       color: Charts.SERIES[0]
     });
+    mountPerfAnalytics(container, perfData);
 
     /* events */
     U.on(container, 'click', '[data-seg-key]', function (e, btn) {

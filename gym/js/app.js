@@ -1360,38 +1360,99 @@
       App.toast('No usable health data found in that file', 'err');
       return;
     }
+    // P4: runs/rides/swims/… become typed cardio sessions. Hiking only becomes a
+    // ruck if the user says so, once, for the whole import.
+    const cardio = (parsed.hkWorkouts || []).length;
+    const hikes = (parsed.hkWorkouts || []).filter(function (r) {
+      return r && r.activityType === 'Hiking';
+    }).length;
+    const askRuck = hikes > 0 && App.isPerformance();
+
+    const content = U.el('<div>' +
+      '<p class="text-2" style="font-size:14px;line-height:1.55;margin:4px 0 10px">Found in this export' +
+        (rec.records ? ' (' + U.fmtNum(rec.records) + ' records scanned)' : '') + ':</p>' +
+      '<div class="list" style="margin-bottom:8px">' +
+        '<div class="list-row" style="min-height:44px"><span class="body"><span class="title">Weight entries</span></span>' +
+          '<span class="trailing tabular">' + U.fmtNum(weights) + '</span></div>' +
+        '<div class="list-row" style="min-height:44px"><span class="body"><span class="title">Daily metrics</span></span>' +
+          '<span class="trailing tabular">' + U.fmtNum(daily) + '</span></div>' +
+        '<div class="list-row" style="min-height:44px"><span class="body"><span class="title">Workouts</span></span>' +
+          '<span class="trailing tabular">' + U.fmtNum(workouts) + '</span></div>' +
+        (cardio ? '<div class="list-row" style="min-height:44px"><span class="body"><span class="title">Runs, rides &amp; swims</span>' +
+          '<span class="sub">Logged as cardio sessions</span></span>' +
+          '<span class="trailing tabular">' + U.fmtNum(cardio) + '</span></div>' : '') +
+      '</div>' +
+      (askRuck ? '<label for="ah-hike-ruck" style="display:flex;align-items:center;gap:10px;cursor:pointer;' +
+        'min-height:44px;font-size:14px;font-weight:600">' +
+        '<input type="checkbox" id="ah-hike-ruck" style="width:20px;height:20px;accent-color:var(--accent)">' +
+        'Log ' + (hikes === 1 ? 'the hike' : 'all ' + hikes + ' hikes') + ' as rucks' +
+        '</label>' +
+        '<p class="small-text muted" style="margin:0 0 8px">Apple doesn’t record pack weight — add the load yourself ' +
+        'afterwards. Leave this off and hikes are logged as foot mileage.</p>' : '') +
+      '<p class="small-text muted">Everything is added to ' + U.esc(user.name) + '’s profile. ' +
+        'Existing entries for the same day are updated, not duplicated.</p>' +
+      '</div>');
+
     App.modal({
       title: 'Apple Health import',
-      content:
-        '<p class="text-2" style="font-size:14px;line-height:1.55;margin:4px 0 10px">Found in this export' +
-          (rec.records ? ' (' + U.fmtNum(rec.records) + ' records scanned)' : '') + ':</p>' +
-        '<div class="list" style="margin-bottom:8px">' +
-          '<div class="list-row" style="min-height:44px"><span class="body"><span class="title">Weight entries</span></span>' +
-            '<span class="trailing tabular">' + U.fmtNum(weights) + '</span></div>' +
-          '<div class="list-row" style="min-height:44px"><span class="body"><span class="title">Daily metrics</span></span>' +
-            '<span class="trailing tabular">' + U.fmtNum(daily) + '</span></div>' +
-          '<div class="list-row" style="min-height:44px"><span class="body"><span class="title">Workouts</span></span>' +
-            '<span class="trailing tabular">' + U.fmtNum(workouts) + '</span></div>' +
-        '</div>' +
-        '<p class="small-text muted">Everything is added to ' + U.esc(user.name) + '’s profile. ' +
-          'Existing entries for the same day are updated, not duplicated.</p>',
+      content: content,
       actions: [
         { label: 'Cancel', kind: 'ghost' },
         {
           label: 'Import',
           kind: 'primary',
           onClick: function () {
+            const ruckBox = U.$('#ah-hike-ruck', content);
             try {
               const r = AppleHealth.applyImport(parsed, user.id) || {};
-              App.toast('Imported ' + (r.workoutsAdded || 0) + ' workouts, ' + (r.metricsAdded || 0) +
-                ' body metrics, ' + (r.samplesAdded || 0) + ' daily samples', 'ok');
+              let c = { workoutsAdded: 0, skipped: [] };
+              if (AppleHealth.applyWorkoutImport) {
+                c = AppleHealth.applyWorkoutImport(parsed, user.id, {
+                  hikingAsRuck: !!(ruckBox && ruckBox.checked)
+                }) || c;
+              }
               App.rerender();
+              // Anything skipped gets spelled out in a summary instead of a toast.
+              if (c.skipped && c.skipped.length) {
+                showAppleImportSummary(r, c);
+              } else {
+                App.toast('Imported ' + ((r.workoutsAdded || 0) + (c.workoutsAdded || 0)) + ' workouts, ' +
+                  (r.metricsAdded || 0) + ' body metrics, ' + (r.samplesAdded || 0) + ' daily samples', 'ok');
+              }
             } catch (e) {
               App.toast('Import failed: ' + ((e && e.message) || 'unknown error'), 'err');
             }
           }
         }
       ]
+    });
+  }
+
+  // Skipped sessions are listed, never silently dropped.
+  function showAppleImportSummary(base, cardio) {
+    const skipped = cardio.skipped || [];
+    const shown = skipped.slice(0, 12);
+    const rows = shown.map(function (s) {
+      return '<div class="list-row" style="min-height:44px"><span class="body">' +
+        '<span class="title">' + U.esc(s.name || 'Session') + '</span>' +
+        '<span class="sub">' + U.esc(U.fmtDate(s.date)) +
+          (s.durationMin > 0 ? ' · ' + U.esc(U.fmtDuration(s.durationMin)) : '') +
+          ' · ' + U.esc(s.detail || '') + '</span>' +
+        '</span></div>';
+    }).join('');
+    App.modal({
+      title: 'Import summary',
+      content:
+        '<p class="text-2" style="font-size:14px;line-height:1.55;margin:4px 0 10px">' +
+          'Added ' + ((base.workoutsAdded || 0) + (cardio.workoutsAdded || 0)) + ' workouts, ' +
+          (base.metricsAdded || 0) + ' body metrics and ' + (base.samplesAdded || 0) + ' daily samples.</p>' +
+        '<p class="text-2" style="font-size:14px;line-height:1.55;margin:0 0 8px">Skipped ' + skipped.length +
+          (skipped.length === 1 ? ' session that was' : ' sessions that were') + ' already in your log:</p>' +
+        '<div class="list">' + rows + '</div>' +
+        (skipped.length > shown.length
+          ? '<p class="small-text muted" style="margin-top:8px">+ ' + (skipped.length - shown.length) + ' more.</p>'
+          : ''),
+      actions: [{ label: 'Done', kind: 'primary' }]
     });
   }
 
