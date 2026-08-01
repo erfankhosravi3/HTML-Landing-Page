@@ -521,3 +521,78 @@ Mode switch: Settings > Training, and via onboarding/goal question. Per-user.
 - Pain quick-log: dashboard card 'Log a niggle' -> muscle-map tap + severity
   slider + 3 toggles + note. Red flags -> full-screen advisory (professional
   assessment message). History listed in Body view.
+
+---
+
+# V2 ADDENDUM — P2: STANDARDS ENGINE
+
+## New module: js/protocols.js — namespace Protocols (pure; loaded after guardrails.js)
+
+Static reference data + scoring math. NEVER stored in Store state (versioned code,
+not user data). User overrides live in user.goals.targets.
+
+```js
+Protocols.LIST // ordered [{id, name, kind:'multi'|'time'|'reps'|'hold'|'pass',
+               //  unit?, lowerIsBetter?, events?}] for:
+// acft (multi: mdl 3RM lb, spt m, hrp reps, sdc mm:ss, plk mm:ss, tmr mm:ss)
+// run2mi, run5mi, ruck12mi (time, lowerIsBetter), pushups2min, situps2min,
+// pullups_max (reps), plank, deadhang (hold mm:ss), swim500m (pass|time),
+// slcalf_l, slcalf_r (reps)
+Protocols.byId(id)
+Protocols.scoreACFT(results, {sex, birthYear}) -> { events: {mdl:{raw,points},...},
+  total, pass, minEvent }   // official 2022 ACFT scoring tables, age/sex brackets
+                            // (17-21,22-26,27-31,32-36,37-41,42-46,...), linear
+                            // interpolation between table rows; missing events
+                            // score null and exclude from total; pass = all
+                            // entered events >= 60 pts
+Protocols.DEFAULT_TIERS // {protocolId: {sfas: {min, competitive}, general: {...}}}
+  // sfas per the master plan table (run2mi 930/810s, run5mi 2400/2250s,
+  // ruck12mi 10800/9900s, pullups 8/15, pushups 60/80, plank 120/210s,
+  // trapbar_rel 1.5/2.0, acft 360? use pass-line 60x6/500, swim pass/pass)
+Protocols.tiersFor(protocolId, user) -> {min, competitive} | null
+  // user.goals.targets[protocolId] overrides defaults; preset picks column
+Protocols.currentBest(protocolId, {workouts, bodyMetrics}) -> {value, date} | null
+  // from test entries (best by direction); trapbar_rel derived: best trap-bar
+  // deadlift e1RM (Analytics.exerciseHistory ids: trap_bar_deadlift) / latest
+  // bodyweightKg — both converted lb-free (ratio)
+Protocols.readiness(user, {workouts, bodyMetrics}) -> {
+  rows: [{protocolId, name, current, min, competitive, pct,   // pct 0-1 toward
+          direction, lastTested}],                            // competitive
+  overallPct, weakest: protocolId|null }                      // weakest = lowest pct
+  // pct clamps 0..1; time protocols: pct = clamp((min-current)/(min-competitive));
+  // untested rows: current null, pct 0, sorted last but weakest ignores untested
+  // unless EVERYTHING is untested
+Protocols.phaseFor(selectionDateStr, todayStr) -> { weeksOut, phase:
+  'base'(>16w)|'build'(8-16w)|'peak'(3-8w)|'taper'(<3w), heatBlock: weeksOut<=3 }
+Protocols.fmtValue(protocolId, value, units?) // '13:42', '15 reps', '512 pts', '2.1×BW'
+```
+
+`workout.entries[].type:'test'` results shapes (P2 canonical): single-metric
+protocols {value:number} (seconds for time/hold, reps for reps); acft
+{mdl,spt,hrp,sdc,plk,tmr} raw values + computed {score} cached on the entry at
+save. P1's simple {value} entries remain readable as-is.
+
+## Views (performance mode only)
+
+- New registered view 'standards' (title 'Standards', nav:true order 55) in a NEW
+  file js/views-standards.js (script tag after views-insights.js). App nav gains
+  per-view `visible()` predicate support (App.registerView accepts visible: fn;
+  sidebar/tabbar re-evaluate on render; view itself redirects to dashboard when
+  not visible). Content: readiness scorecard (rows: name, current fmt, bar to
+  competitive with min tick, last tested), weakest-link callout card ('Attack
+  this: Pull-ups — 9 of 15'), phase/countdown card (weeksOut, phase name, phase
+  guidance line, heat-block flag), test history list (all test workouts, tap ->
+  detail), 'Record a test' button -> wizard.
+- Test wizard (in views-standards.js, App.sheet): protocol picker -> per-protocol
+  form (acft: 6 event inputs w/ live per-event points + running total; time
+  protocols mm:ss masked input; reps numeric) -> saves workout {kind:'test'} with
+  typed test entry (+cached score for acft) -> toast w/ result vs tiers.
+- Dashboard (views-insights.js): readiness snapshot card (performance mode):
+  overallPct ring + weakest link line + 'Standards' link; phase line added to
+  countdown chip ('35 weeks out · Build').
+- History detail for test workouts renders scored results (acft event table).
+
+## Store touch (minimal)
+
+Nothing new — test entries already flow through P1's normalizer; P2 may extend
+the 'test' normalizer to preserve acft fields + cached score.
