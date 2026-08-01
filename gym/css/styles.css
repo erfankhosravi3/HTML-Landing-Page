@@ -456,7 +456,8 @@ input[type='number']::-webkit-inner-spin-button {
   text-decoration: none;
 }
 
-.sidebar .nav-item.active {
+.sidebar .nav-item.active,
+.sidebar .nav-item[aria-current='page'] {
   background: var(--accent-tint);
   color: var(--accent);
   font-weight: 600;
@@ -529,7 +530,8 @@ input[type='number']::-webkit-inner-spin-button {
   text-decoration: none;
 }
 
-.tab.active {
+.tab.active,
+.tab[aria-current='page'] {
   color: var(--accent);
 }
 
@@ -1084,7 +1086,9 @@ textarea.input {
   transform: scale(.97);
 }
 
-.chip.active {
+.chip.active,
+.chip[aria-pressed='true'],
+.chip[aria-selected='true'] {
   background: var(--accent-tint);
   border-color: rgba(48, 209, 88, .45);
   color: var(--accent);
@@ -1133,7 +1137,9 @@ textarea.input {
 }
 
 .segmented > button.active,
-.segmented .seg.active {
+.segmented .seg.active,
+.segmented > button[aria-pressed='true'],
+.segmented > button[aria-selected='true'] {
   background: var(--card-2);
   color: var(--text);
   font-weight: 600;
@@ -1175,9 +1181,9 @@ textarea.input {
 .badge.red { background: var(--red-tint); color: #ff6961; }
 
 /* avatar — emoji on user-color tinted circle with user-color ring.
-   Set inline: style="--user-color: #0a84ff" */
+   Set inline: style="--user-color: #0a84ff" (or the shorthand --c) */
 .avatar {
-  --user-color: var(--accent);
+  --user-color: var(--c, var(--accent));
   width: 36px;
   height: 36px;
   border-radius: 50%;
@@ -1455,7 +1461,9 @@ button.list-row:active,
 }
 
 .modal-head,
-.sheet-head {
+.sheet-head,
+.modal > header,
+.sheet > header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1466,6 +1474,8 @@ button.list-row:active,
 
 .modal-head h3,
 .sheet-head h3,
+.modal > header h3,
+.sheet > header h3,
 .modal-head .modal-title,
 .sheet-head .modal-title {
   font-size: 17px;
@@ -1487,7 +1497,9 @@ button.list-row:active,
 }
 
 .modal-foot,
-.sheet-foot {
+.sheet-foot,
+.modal-actions,
+.sheet-actions {
   display: flex;
   gap: 10px;
   justify-content: flex-end;
@@ -1497,13 +1509,17 @@ button.list-row:active,
 }
 
 .modal-foot .btn,
-.sheet-foot .btn {
+.sheet-foot .btn,
+.modal-actions .btn,
+.sheet-actions .btn {
   flex: 1;
 }
 
 @media (min-width: 768px) {
   .modal-foot .btn,
-  .sheet-foot .btn {
+  .sheet-foot .btn,
+  .modal-actions .btn,
+  .sheet-actions .btn {
     flex: 0 1 auto;
     min-width: 96px;
   }
@@ -1618,6 +1634,8 @@ button.list-row:active,
 .toast.ok .toast-icon { color: var(--accent); }
 .toast.err svg,
 .toast.err .toast-icon { color: var(--red); }
+.toast.info svg,
+.toast.info .toast-icon { color: var(--blue); }
 
 .toast span {
   overflow: hidden;
@@ -1656,7 +1674,8 @@ button.list-row:active,
 }
 
 /* header row for set columns */
-.set-row.set-head {
+.set-row.set-head,
+.set-row.head {
   padding: 0 0 4px;
   font-size: 11px;
   font-weight: 600;
@@ -1665,7 +1684,8 @@ button.list-row:active,
   text-align: center;
 }
 
-.set-row.set-head > :first-child {
+.set-row.set-head > :first-child,
+.set-row.head > :first-child {
   text-align: center;
 }
 
@@ -1734,22 +1754,26 @@ button.list-row:active,
 }
 
 /* completed state */
-.set-row.done {
+.set-row.done,
+.set-row.completed {
   background: var(--accent-tint);
 }
 
-.set-row.done .input {
+.set-row.done .input,
+.set-row.completed .input {
   background: transparent;
   border-color: transparent;
   color: var(--text);
 }
 
-.set-row.done .set-check {
+.set-row.done .set-check,
+.set-row.completed .set-check {
   background: var(--accent);
   color: var(--accent-ink);
 }
 
-.set-row.done .set-num {
+.set-row.done .set-num,
+.set-row.completed .set-num {
   color: var(--accent);
 }
 
@@ -1768,7 +1792,8 @@ button.list-row:active,
   vertical-align: super;
 }
 
-.set-row.warmup.done {
+.set-row.warmup.done,
+.set-row.warmup.completed {
   opacity: .85;
 }
 
@@ -1808,7 +1833,8 @@ button.list-row:active,
   text-align: center;
 }
 
-.rest-timer .track {
+.rest-timer .track,
+.rest-timer .progress-bar {
   width: 72px;
   height: 4px;
   border-radius: 2px;
@@ -1817,7 +1843,10 @@ button.list-row:active,
   flex: none;
 }
 
-.rest-timer .track .fill {
+.rest-timer .track .fill,
+.rest-timer .progress-bar .fill,
+.rest-timer .progress-bar > span,
+.rest-timer .progress-bar > div {
   height: 100%;
   border-radius: 2px;
   background: var(--accent);
@@ -1853,19 +1882,22 @@ button.list-row:active,
    12. CHARTS CHROME
    ========================================================================== */
 
-.chart {
+.chart,
+.chart-wrap {
   width: 100%;
-  min-height: 0;
+  min-width: 0;
 }
 
-.chart svg {
+.chart svg,
+.chart-wrap svg {
   width: 100%;
   height: auto;
   display: block;
   overflow: visible;
 }
 
-.chart svg text {
+.chart svg text,
+.chart-wrap svg text {
   font-family: inherit;
   fill: var(--text-muted);
   font-size: 11px;
@@ -1927,10 +1959,13 @@ button.list-row:active,
   margin-top: 10px;
 }
 
-.chart-legend .legend-item {
+.chart-legend .legend-item,
+.chart-legend > span,
+.chart-legend > li {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  white-space: nowrap;
 }
 
 /* muscle map heat legend: gradient bar + low/high labels */
@@ -2256,7 +2291,8 @@ button.list-row:active,
   .fab-log,
   .rest-timer,
   .toast-wrap,
-  .modal-backdrop {
+  .modal-backdrop,
+  .chart-tip {
     display: none !important;
   }
 
