@@ -371,3 +371,153 @@ tabbar. Focus-visible rings on all interactive elements. Subtle transitions
 - Fully usable at 375px wide and at 1440px.
 - Analytics functions are pure and unit-testable in Node with a `window` stub.
 - Everything keyboard-reachable; escape closes modals; labels on inputs.
+
+---
+
+# V2 CONTRACT ADDENDUM — "Capability" (P1)
+
+Everything above still binds. This addendum extends it; where it conflicts, the
+addendum wins. schemaVersion becomes 2 (a marker only — reading is governed by
+permanent read-time invariants, never a one-shot migration).
+
+## Read-time invariants (permanent, applied in load, mergeRemote-normalize, importJSON)
+
+- `entry.type` absent ⇒ `'lift'` (existing entries untouched, byte-for-byte).
+- `set.type` absent ⇒ `'work'`.
+- Unknown entry types pass through VERBATIM (never stripped/flattened).
+- normalizeEntry becomes a discriminated union dispatch on `entry.type` with a
+  per-type normalizer table; the 'lift' normalizer is the existing code.
+
+## Typed workout entries (inside workout.entries, alongside 'lift')
+
+```js
+// cardio — modes: run | ruck | swim | bike | row | stairs | circuit
+{ id, type:'cardio', mode, distanceKm?, durationMin, avgHR?, maxHR?,
+  effort?: 'easy'|'moderate'|'hard',      // easy/hard classification fallback when no HR
+  surface?: 'road'|'trail'|'track'|'treadmill'|'sand',
+  tempC?: number, fluidMl?: number,        // fluid prompted only when durationMin >= 90
+  // ruck-only:
+  loadKgDry?, loadKgTotal?, footwear?: 'boots'|'trainers', footNote?: string,
+  notes?: string }
+
+// mobility / durability session work
+{ id, type:'mobility', modality:'static'|'dynamic'|'yoga'|'foam_roll',
+  durationMin, targetMuscles:[muscleId], notes? }
+{ id, type:'durability', items:[exerciseId], durationMin?, notes? }
+  // durability items come from the DURABILITY_CHECKLIST exercise set
+
+// test entry (unified history — tests are workouts containing one test entry)
+{ id, type:'test', protocol: string,      // e.g. 'acft','run2mi','run5mi','ruck12mi',
+                                          // 'pushups2min','situps2min','pullups_max',
+                                          // 'plank','swim500m','slcalf_l','slcalf_r','deadhang'
+  results: object,                        // per-protocol shape, defined in P2 protocols.js;
+                                          // P1 stores {value} for simple timed/rep tests
+  score?: number, notes? }
+```
+
+Workout-level additions (all optional, old clients round-trip them):
+`workout.rpe` (session RPE 1-10, prompted at finish for every session type),
+`workout.feel` ('easy'|'normal'|'hard'|'hurt'), `workout.checkin` (string — the
+post-session check-in answer), `workout.kind` (convenience: 'lift'|'run'|'ruck'|
+'swim'|'bike'|'row'|'circuit'|'mobility'|'durability'|'test'|'mixed', derived at
+save from entries; display only, never load-bearing).
+
+## New top-level collections (shim-protected; standard tombstones in deleted.*)
+
+```js
+painLog: [{ id, userId, date, muscleId,            // canonical 18 ids; 'shin_l','shin_r',
+                                                    // 'foot_l','foot_r','knee_l','knee_r',
+                                                    // 'ankle_l','ankle_r' also allowed (region ids)
+  severity: 0-10, worseDuring: bool, boneLine: bool, morning: bool,
+  note?, createdAt, updatedAt }]
+coachJournal: [{ id, userId, date, entry, source:'user'|'checkin'|'coach',
+  createdAt, updatedAt }]
+```
+Store API: `Store.addPainEntry(p)`, `Store.painFor(userId)` (date desc),
+`Store.addJournalEntry(j)`, `Store.journalFor(userId)` (date desc), plus
+update/delete with tombstones. Red-flag evaluation lives in guardrails, not Store.
+
+## New per-user top-level fields (NOT under settings — mergeSettings whitelist trap)
+
+```js
+user.goals   = { preset: null|'sfas'|'general', selectionDate: null|'YYYY-MM-DD',
+                 targets: { [protocol]: {min, competitive} }, updatedAt }
+user.profile = { sex: null|'male'|'female', birthYear: null|number, updatedAt }
+```
+`user.settings.trainingProfile: 'simple'|'performance'` (add to defaultSettings;
+default 'simple'). Performance mode is entered via goal setup ("Training for
+something specific?") which also sets goals.preset.
+
+## New module: js/guardrails.js — namespace Guardrails (pure, node-testable)
+
+```js
+Guardrails.checkSession(draftWorkout, priorWorkouts, user) -> [{level:'warn'|'stop',
+  code, message}]   // evaluated at save: ruck load+distance double-increase vs
+                    // last week, >2 rucks this week, dry load > 22.7kg (50 lb),
+                    // longest-run jump > 25%, run mileage this week already
+                    // > 110% of trailing 4-wk avg
+Guardrails.weeklyStatus(workouts, user, weekStartStr) -> {
+  runMileageKm, runRampPct, easySharePct, ruckCount, ruckLoadMiles,
+  restDayTaken, warnings: [{code, message}] }   // >10% ramp, easy share < 75%,
+                                                 // no rest day
+Guardrails.painFlags(painLog) -> [{level:'warn'|'red', code, message, entryIds}]
+  // red: boneLine, morning pain, severity>=7, same region rising 3+ entries,
+  // worseDuring on consecutive sessions -> message includes "get it assessed"
+Guardrails.MESSAGES  // plain-language, non-preachy copy for every code
+```
+Warnings are surfaced, never blocking — the user can always save ('stop' level
+renders as a strong confirm, not a wall). All plain arithmetic, zero AI.
+
+## ExerciseDB v2
+
+- CATEGORIES gains `{id:'durability', label:'Durability'}` and
+  `{id:'mobility', label:'Mobility'}`.
+- ~40 new entries: unilateral lower (split squats, step-downs, SL RDL, SL calf
+  raises, lateral lunges), calf/tibialis (bent+straight knee raises, tib raises,
+  wall tib holds), grip (dead hangs, farmer/suitcase carries, plate pinch), core
+  anti-rotation (Pallof, side plank, suitcase hold, bird dog), Copenhagen planks,
+  hip airplanes, ankle/calf mobility, hip flexor + T-spine work. Same shape,
+  canonical muscle ids only.
+- `ExerciseDB.DURABILITY_CHECKLIST` = ordered [{id: exerciseId, slot:
+  'unilateral'|'calf_tib'|'grip'|'core'}] used by the weekly compliance UI.
+
+## Cross-type semantics (P1 acceptance criteria — binding)
+
+- Streaks, rings ("workouts"), calendar presence: ANY session with >=1 entry counts.
+- Calendar heat: volumeKg when > 0, else durationMin-scaled (charts unchanged;
+  caller passes blended values).
+- muscleWeeklySets / muscleVolume28d / muscleRecovery / recommendFocus / PRs /
+  e1RM: LIFT ENTRIES ONLY (existing Analytics functions keep exact semantics;
+  they silently skip non-lift entries — verify, don't rewrite).
+- 'Repeat last workout' = most recent workout containing lift entries.
+- History rows and workout detail get a kind glyph + kind-appropriate summary
+  line (cardio: distance · pace · load; mobility: duration · areas).
+- Leaderboard volume stays lift-volume in P1 (P3 adds badges/toggle).
+- Templates remain lift-only in P1.
+
+## Mode gate (binding)
+
+Simple mode (default): UI identical to v1 plus at most 'Cardio' and 'Stretch'
+chips on the log start screen; no guardrail banners, no pain log UI, no test
+type, no goals/countdown. Performance mode unlocks: full chip row (Run/Ruck/
+Swim/Bike/Row/Circuit/Durability/Test), guardrail surfacing, pain quick-log
+(dashboard card + body view section), check-in prompts, goals editor.
+Mode switch: Settings > Training, and via onboarding/goal question. Per-user.
+
+## Logging UX (binding)
+
+- Start screen: primary button unchanged ('Start empty workout'); chip row under
+  it ordered by that user's recency; chips unused 4+ weeks collapse into 'More…'.
+- Cardio logger: single screen, mode segmented control, big numeric fields
+  (distance, duration), pace auto-computed live, ruck reveals load/footwear/
+  foot-check fields, temp+fluid revealed for long sessions. After-the-fact entry
+  in <=20 seconds. Saves a complete typed workout directly via Store (no draft).
+- Finish flow (all types): RPE chip row 1-10 + feel chips + check-in question
+  (P1: canned per-kind questions; free-text answer -> workout.checkin + a
+  coachJournal entry with source 'checkin'). Skippable in one tap.
+- Guardrails run on save: warnings render as a pre-save summary line + toast;
+  'stop' level requires confirm. Weekly status line renders on dashboard
+  (performance mode only).
+- Pain quick-log: dashboard card 'Log a niggle' -> muscle-map tap + severity
+  slider + 3 toggles + note. Red flags -> full-screen advisory (professional
+  assessment message). History listed in Body view.
