@@ -3,8 +3,8 @@
   'use strict';
 
   const KEY = 'ironlog/v1';
-  const COLLECTIONS = ['users', 'workouts', 'templates', 'bodyMetrics', 'healthSamples', 'customExercises'];
-  const DELETED_KEYS = ['workouts', 'templates', 'bodyMetrics', 'healthSamples', 'customExercises', 'users'];
+  const COLLECTIONS = ['users', 'workouts', 'templates', 'bodyMetrics', 'healthSamples', 'customExercises', 'painLog', 'coachJournal'];
+  const DELETED_KEYS = ['workouts', 'templates', 'bodyMetrics', 'healthSamples', 'customExercises', 'users', 'painLog', 'coachJournal'];
   const SERIES = ['#2ca350', '#0a84ff', '#cf7c00', '#bf5af2', '#ff375f', '#3399cc'];
 
   const Store = {};
@@ -27,7 +27,8 @@
       weeklyWorkoutGoal: 4,
       weeklySetGoal: 15,
       barWeightKg: 20.4,
-      plateWeightsKg: [20.4, 15.9, 11.3, 4.5, 2.3, 1.1]
+      plateWeightsKg: [20.4, 15.9, 11.3, 4.5, 2.3, 1.1],
+      trainingProfile: 'simple'
     };
   }
 
@@ -55,7 +56,7 @@
 
   function defaultState() {
     return {
-      schemaVersion: 1,
+      schemaVersion: 2, // marker only — reading is governed by permanent read-time invariants
       currentUserId: null,
       users: [],
       workouts: [],
@@ -63,6 +64,8 @@
       bodyMetrics: [],
       healthSamples: [],
       customExercises: [],
+      painLog: [],
+      coachJournal: [],
       deleted: emptyDeleted(),
       sync: { url: '', secret: '', enabled: false, lastSyncAt: null, deviceId: U.uid('dev') }
     };
@@ -95,7 +98,19 @@
       if (typeof s.lastSyncAt === 'number') st.sync.lastSyncAt = s.lastSyncAt;
       if (typeof s.deviceId === 'string' && s.deviceId) st.sync.deviceId = s.deviceId;
     }
-    st.users.forEach(function (u) { u.settings = mergeSettings(u.settings, null); });
+    // Users are shallow-copied (like workouts below) so normalizeState never
+    // mutates the caller's objects — mergeRemote feeds caller-owned data here.
+    st.users = st.users.map(function (u) {
+      const copy = shallowCopy(u);
+      copy.settings = mergeSettings(u.settings, null);
+      return copy;
+    });
+    // Read-time invariant (permanent, never a one-shot migration): every workout
+    // entry is normalized by its type on every read — entry.type absent => the
+    // existing lift normalizer (byte-for-byte for already-normal entries),
+    // set.type absent => 'work', unknown entry types pass through verbatim.
+    // Workouts are shallow-copied so caller-owned objects are never mutated.
+    st.workouts = st.workouts.map(normalizeWorkoutRead);
     if (typeof raw.currentUserId === 'string' &&
         st.users.some(function (u) { return u.id === raw.currentUserId; })) {
       st.currentUserId = raw.currentUserId;
@@ -223,7 +238,9 @@
       ['workouts', 'workouts'],
       ['templates', 'templates'],
       ['bodyMetrics', 'bodyMetrics'],
-      ['healthSamples', 'healthSamples']
+      ['healthSamples', 'healthSamples'],
+      ['painLog', 'painLog'],
+      ['coachJournal', 'coachJournal']
     ];
     for (const pair of cascade) {
       const coll = pair[0];
@@ -238,6 +255,43 @@
     }
     Store.save();
     return true;
+  };
+
+  // v2 conveniences — user.goals / user.profile live at the TOP LEVEL of the
+  // user (not under settings, which is whitelist-merged). updateUser's generic
+  // patch loop already passes them through; these normalize the shape too.
+  Store.setGoals = function (userId, goals) {
+    ensureLoaded();
+    const u = state.users.find(function (x) { return x.id === userId; });
+    if (!u) return null;
+    goals = goals && typeof goals === 'object' ? goals : {};
+    const now = Date.now();
+    u.goals = {
+      preset: goals.preset === 'sfas' || goals.preset === 'general' ? goals.preset : null,
+      selectionDate: typeof goals.selectionDate === 'string' && goals.selectionDate ? goals.selectionDate : null,
+      targets: goals.targets && typeof goals.targets === 'object' && !Array.isArray(goals.targets) ? goals.targets : {},
+      updatedAt: now
+    };
+    u.updatedAt = now;
+    Store.save();
+    return u;
+  };
+
+  Store.setProfile = function (userId, profile) {
+    ensureLoaded();
+    const u = state.users.find(function (x) { return x.id === userId; });
+    if (!u) return null;
+    profile = profile && typeof profile === 'object' ? profile : {};
+    const now = Date.now();
+    const by = Number(profile.birthYear);
+    u.profile = {
+      sex: profile.sex === 'male' || profile.sex === 'female' ? profile.sex : null,
+      birthYear: isFinite(by) && by > 1900 && by < 2100 ? Math.round(by) : null,
+      updatedAt: now
+    };
+    u.updatedAt = now;
+    Store.save();
+    return u;
   };
 
   Store.setCurrentUser = function (id) {
@@ -266,8 +320,9 @@
     };
   }
 
-  function normalizeEntry(e) {
-    e = e && typeof e === 'object' ? e : {};
+  // 'lift' normalizer — the pre-v2 normalizeEntry, unchanged. Entries without a
+  // type go through this exact code so existing data round-trips byte-for-byte.
+  function normalizeLiftEntry(e) {
     return {
       id: e.id || U.uid('en'),
       exerciseId: e.exerciseId || '',
@@ -275,6 +330,148 @@
       sets: (Array.isArray(e.sets) ? e.sets : []).map(normalizeSet)
     };
   }
+
+  /* ---- typed-entry normalizers (v2). Each preserves its addendum fields with
+     sane coercion and passes any other keys through untouched, so data written
+     by newer app versions survives a round trip through this one. ---- */
+
+  const CARDIO_MODES = ['run', 'ruck', 'swim', 'bike', 'row', 'stairs', 'circuit'];
+  const CARDIO_EFFORTS = ['easy', 'moderate', 'hard'];
+  const CARDIO_SURFACES = ['road', 'trail', 'track', 'treadmill', 'sand'];
+  const CARDIO_FOOTWEAR = ['boots', 'trainers'];
+  const MOBILITY_MODALITIES = ['static', 'dynamic', 'yoga', 'foam_roll'];
+
+  function shallowCopy(o) {
+    const out = {};
+    for (const k in o) out[k] = o[k];
+    return out;
+  }
+
+  function coerceNum(out, key) {
+    if (!(key in out)) return;
+    const n = Number(out[key]);
+    if (out[key] === null || out[key] === undefined || out[key] === '' || !isFinite(n)) delete out[key];
+    else out[key] = n;
+  }
+
+  function coerceEnum(out, key, allowed) {
+    if (!(key in out)) return;
+    if (allowed.indexOf(out[key]) < 0) delete out[key];
+  }
+
+  function coerceStr(out, key) {
+    if (!(key in out)) return;
+    if (out[key] === null || out[key] === undefined) delete out[key];
+    else out[key] = String(out[key]);
+  }
+
+  function normalizeCardioEntry(e) {
+    const out = shallowCopy(e);
+    out.id = e.id || U.uid('en');
+    out.type = 'cardio';
+    out.mode = CARDIO_MODES.indexOf(e.mode) >= 0 ? e.mode : 'run';
+    out.durationMin = Number(e.durationMin) || 0;
+    coerceNum(out, 'distanceKm');
+    coerceNum(out, 'avgHR');
+    coerceNum(out, 'maxHR');
+    coerceEnum(out, 'effort', CARDIO_EFFORTS);
+    coerceEnum(out, 'surface', CARDIO_SURFACES);
+    coerceNum(out, 'tempC');
+    coerceNum(out, 'fluidMl');
+    coerceNum(out, 'loadKgDry');
+    coerceNum(out, 'loadKgTotal');
+    coerceEnum(out, 'footwear', CARDIO_FOOTWEAR);
+    coerceStr(out, 'footNote');
+    coerceStr(out, 'notes');
+    return out;
+  }
+
+  function normalizeMobilityEntry(e) {
+    const out = shallowCopy(e);
+    out.id = e.id || U.uid('en');
+    out.type = 'mobility';
+    out.modality = MOBILITY_MODALITIES.indexOf(e.modality) >= 0 ? e.modality : 'static';
+    out.durationMin = Number(e.durationMin) || 0;
+    out.targetMuscles = (Array.isArray(e.targetMuscles) ? e.targetMuscles : [])
+      .filter(function (m) { return typeof m === 'string' && m; });
+    coerceStr(out, 'notes');
+    return out;
+  }
+
+  function normalizeDurabilityEntry(e) {
+    const out = shallowCopy(e);
+    out.id = e.id || U.uid('en');
+    out.type = 'durability';
+    out.items = (Array.isArray(e.items) ? e.items : [])
+      .filter(function (x) { return typeof x === 'string' && x; });
+    coerceNum(out, 'durationMin');
+    coerceStr(out, 'notes');
+    return out;
+  }
+
+  function normalizeTestEntry(e) {
+    const out = shallowCopy(e);
+    out.id = e.id || U.uid('en');
+    out.type = 'test';
+    out.protocol = typeof e.protocol === 'string' ? e.protocol : String(e.protocol || '');
+    out.results = e.results && typeof e.results === 'object' && !Array.isArray(e.results) ? e.results : {};
+    coerceNum(out, 'score');
+    coerceStr(out, 'notes');
+    return out;
+  }
+
+  const ENTRY_NORMALIZERS = {
+    cardio: normalizeCardioEntry,
+    mobility: normalizeMobilityEntry,
+    durability: normalizeDurabilityEntry,
+    test: normalizeTestEntry
+  };
+
+  // Discriminated-union dispatch on entry.type. Absent type => 'lift' via the
+  // pre-v2 code (no type field added). Unknown types pass through VERBATIM —
+  // never stripped or flattened.
+  function normalizeEntry(e) {
+    e = e && typeof e === 'object' ? e : {};
+    const t = e.type;
+    if (t === undefined || t === null) return normalizeLiftEntry(e);
+    if (t === 'lift') {
+      const out = normalizeLiftEntry(e);
+      out.type = 'lift';
+      return out;
+    }
+    const fn = ENTRY_NORMALIZERS[t];
+    return fn ? fn(e) : e;
+  }
+
+  // Read-time workout normalization: shallow copy with entries mapped through
+  // normalizeEntry. Everything else on the workout passes through untouched.
+  function normalizeWorkoutRead(w) {
+    if (!w || typeof w !== 'object' || !Array.isArray(w.entries)) return w;
+    const copy = shallowCopy(w);
+    copy.entries = w.entries.map(normalizeEntry);
+    return copy;
+  }
+
+  // workout.kind is display-only convenience, derived at save from entries.
+  function entryKind(e) {
+    if (!e || typeof e !== 'object') return 'lift';
+    const t = e.type;
+    if (t === undefined || t === null || t === 'lift') return 'lift';
+    if (t === 'cardio') return typeof e.mode === 'string' && e.mode ? e.mode : 'cardio';
+    return typeof t === 'string' ? t : 'lift';
+  }
+
+  function deriveKind(entries) {
+    if (!Array.isArray(entries) || !entries.length) return null;
+    const kinds = [];
+    for (const e of entries) {
+      const k = entryKind(e);
+      if (kinds.indexOf(k) < 0) kinds.push(k);
+    }
+    return kinds.length === 1 ? kinds[0] : 'mixed';
+  }
+
+  const WORKOUT_FEELS = ['easy', 'normal', 'hard', 'hurt'];
 
   Store.addWorkout = function (w) {
     ensureLoaded();
@@ -300,6 +497,14 @@
       updatedAt: now,
       entries: (Array.isArray(w.entries) ? w.entries : []).map(normalizeEntry)
     };
+    // Optional v2 session fields — only present when provided (old workouts stay
+    // byte-for-byte identical).
+    if (w.rpe !== undefined && w.rpe !== null && isFinite(Number(w.rpe))) workout.rpe = Number(w.rpe);
+    if (WORKOUT_FEELS.indexOf(w.feel) >= 0) workout.feel = w.feel;
+    if (typeof w.checkin === 'string' && w.checkin) workout.checkin = w.checkin;
+    const kind = deriveKind(workout.entries);
+    if (kind) workout.kind = kind;
+    else if (typeof w.kind === 'string' && w.kind) workout.kind = w.kind;
     state.workouts.push(workout);
     Store.save();
     return workout;
@@ -318,6 +523,8 @@
     if (w.durationMin == null && w.startedAt != null && w.endedAt != null && w.endedAt > w.startedAt) {
       w.durationMin = Math.round((w.endedAt - w.startedAt) / 60000);
     }
+    const kind = deriveKind(w.entries);
+    if (kind) w.kind = kind;
     w.updatedAt = Date.now();
     Store.save();
     return w;
@@ -570,6 +777,122 @@
     return state.customExercises;
   };
 
+  /* ---------- pain log (v2) ---------- */
+
+  Store.addPainEntry = function (p) {
+    ensureLoaded();
+    p = p || {};
+    const now = Date.now();
+    const row = {
+      id: p.id || U.uid('pn'),
+      userId: p.userId || state.currentUserId,
+      date: p.date || U.todayStr(),
+      muscleId: String(p.muscleId || ''),
+      severity: U.clamp(Number(p.severity) || 0, 0, 10),
+      worseDuring: !!p.worseDuring,
+      boneLine: !!p.boneLine,
+      morning: !!p.morning,
+      createdAt: typeof p.createdAt === 'number' ? p.createdAt : now,
+      updatedAt: now
+    };
+    if (p.note !== undefined && p.note !== null && String(p.note)) row.note = String(p.note);
+    state.painLog.push(row);
+    Store.save();
+    return row;
+  };
+
+  Store.updatePainEntry = function (id, patch) {
+    ensureLoaded();
+    const row = state.painLog.find(function (x) { return x.id === id; });
+    if (!row) return null;
+    patch = patch || {};
+    for (const k in patch) {
+      if (k === 'id' || k === 'createdAt') continue;
+      row[k] = patch[k];
+    }
+    if (patch.severity !== undefined) row.severity = U.clamp(Number(patch.severity) || 0, 0, 10);
+    row.updatedAt = Date.now();
+    Store.save();
+    return row;
+  };
+
+  Store.deletePainEntry = function (id) {
+    ensureLoaded();
+    const i = state.painLog.findIndex(function (x) { return x.id === id; });
+    if (i < 0) return false;
+    state.painLog.splice(i, 1);
+    state.deleted.painLog[id] = Date.now();
+    Store.save();
+    return true;
+  };
+
+  Store.painFor = function (userId) {
+    ensureLoaded();
+    return state.painLog
+      .filter(function (p) { return p.userId === userId; })
+      .sort(function (a, b) {
+        if (a.date !== b.date) return a.date < b.date ? 1 : -1;
+        return (b.createdAt || 0) - (a.createdAt || 0);
+      });
+  };
+
+  /* ---------- coach journal (v2) ---------- */
+
+  const JOURNAL_SOURCES = ['user', 'checkin', 'coach'];
+
+  Store.addJournalEntry = function (j) {
+    ensureLoaded();
+    j = j || {};
+    const now = Date.now();
+    const row = {
+      id: j.id || U.uid('jr'),
+      userId: j.userId || state.currentUserId,
+      date: j.date || U.todayStr(),
+      entry: String(j.entry || ''),
+      source: JOURNAL_SOURCES.indexOf(j.source) >= 0 ? j.source : 'user',
+      createdAt: typeof j.createdAt === 'number' ? j.createdAt : now,
+      updatedAt: now
+    };
+    state.coachJournal.push(row);
+    Store.save();
+    return row;
+  };
+
+  Store.updateJournalEntry = function (id, patch) {
+    ensureLoaded();
+    const row = state.coachJournal.find(function (x) { return x.id === id; });
+    if (!row) return null;
+    patch = patch || {};
+    for (const k in patch) {
+      if (k === 'id' || k === 'createdAt') continue;
+      row[k] = patch[k];
+    }
+    if (patch.source !== undefined && JOURNAL_SOURCES.indexOf(row.source) < 0) row.source = 'user';
+    row.updatedAt = Date.now();
+    Store.save();
+    return row;
+  };
+
+  Store.deleteJournalEntry = function (id) {
+    ensureLoaded();
+    const i = state.coachJournal.findIndex(function (x) { return x.id === id; });
+    if (i < 0) return false;
+    state.coachJournal.splice(i, 1);
+    state.deleted.coachJournal[id] = Date.now();
+    Store.save();
+    return true;
+  };
+
+  Store.journalFor = function (userId) {
+    ensureLoaded();
+    return state.coachJournal
+      .filter(function (j) { return j.userId === userId; })
+      .sort(function (a, b) {
+        if (a.date !== b.date) return a.date < b.date ? 1 : -1;
+        return (b.createdAt || 0) - (a.createdAt || 0);
+      });
+  };
+
   /* ---------- backup: export / import ---------- */
 
   Store.exportJSON = function () {
@@ -596,7 +919,9 @@
       return { ok: false, error: 'Not an IronLog backup — no recognizable data found.' };
     }
     if (merge) {
-      mergeEntities(raw);
+      // Same read-time invariants as load(): the imported state is normalized
+      // (typed entries by type, unknown types verbatim) before entity merge.
+      mergeEntities(normalizeState(raw));
       if (!state.currentUserId && state.users.length) state.currentUserId = state.users[0].id;
       persist(true);
     } else {
@@ -685,7 +1010,10 @@
     }
     const before = mergeFingerprint();
     try {
-      mergeEntities(remoteState);
+      // Read-time invariants apply to pulled data too: normalize the remote
+      // state before entity-level merge (also shields mergeEntities from
+      // malformed remote shapes and never mutates the caller's object).
+      mergeEntities(normalizeState(remoteState));
     } catch (e) {
       return { changed: false };
     }
@@ -858,9 +1186,14 @@
     function buildWorkout(user, date, dayKey, program, prog) {
       const day = program.days[dayKey];
       const entries = [];
+      // Accessories are occasionally skipped, but never below 3 entries per
+      // workout: the RNG stream shifts with the run date, so without this cap
+      // an unlucky date could roll enough skips to gut a workout.
+      const maxSkips = Math.max(0, day.plan.length - 3);
+      let skips = 0;
       for (let pi = 0; pi < day.plan.length; pi++) {
         const p = day.plan[pi];
-        if (pi > 0 && chance(0.07)) continue; // occasionally skip an accessory
+        if (pi > 0 && chance(0.07) && skips < maxSkips) { skips++; continue; } // occasionally skip an accessory
         let topLb = 0;
         if (!p.bw) {
           let wobble = 0;
@@ -934,6 +1267,135 @@
         buildWorkout(user, yesterday, program.rotation[rotIdx], program, 1);
       }
     }
+
+    /* ---- v2: Erfan trains for SFAS (performance mode). Other users stay
+       lift-only so the simple experience is represented too. ---- */
+    (function seedErfanPerformance() {
+      const erfan = users[0];
+      const nowMs = U.strToDate(yesterday).getTime() + 20 * 3600000;
+      erfan.settings.trainingProfile = 'performance';
+      erfan.goals = {
+        preset: 'sfas',
+        selectionDate: U.addDays(today, 243), // ~8 months out
+        targets: {
+          run2mi: { min: 930, competitive: 810 },          // seconds
+          ruck12mi: { min: 10800, competitive: 9900 },     // seconds
+          pullups_max: { min: 12, competitive: 20 },
+          pushups2min: { min: 60, competitive: 80 }
+        },
+        updatedAt: nowMs
+      };
+      erfan.profile = { sex: 'male', birthYear: 2001, updatedAt: nowMs };
+      erfan.updatedAt = nowMs;
+
+      function pushTyped(date, name, entry, extra) {
+        const startedAt = U.strToDate(date).getTime() + (6 * 60 + 30 + ri(0, 90)) * 60000;
+        const durationMin = Number(entry.durationMin) || 30;
+        const w = {
+          id: U.uid('w'),
+          userId: erfan.id,
+          date: date,
+          name: name,
+          notes: '',
+          startedAt: startedAt,
+          endedAt: startedAt + durationMin * 60000,
+          durationMin: durationMin,
+          source: 'manual',
+          createdAt: startedAt,
+          updatedAt: startedAt + durationMin * 60000,
+          entries: [normalizeEntry(entry)],
+          kind: deriveKind([entry])
+        };
+        if (extra) {
+          for (const k in extra) {
+            if (extra[k] !== undefined) w[k] = extra[k];
+          }
+        }
+        state.workouts.push(w);
+        return w;
+      }
+
+      // Last 4 weeks: 2 runs/wk (easy + hard, with HR), 1 ruck/wk (progressing
+      // load), 1 durability session/wk. i = 0 oldest .. 3 newest.
+      const ruckDryLb = [30, 35, 40, 40]; // progressing dry load, capped under 50 lb
+      const footNotes = ['', 'Hot spot left heel — taped early, no blister', '', 'New insoles — feet fine at 40 lb'];
+      const durabilityMenu = [
+        ['split_squat', 'single_leg_calf_raise', 'dead_hang', 'pallof_press'],
+        ['step_up', 'single_leg_rdl', 'farmer_carry', 'side_plank'],
+        ['lateral_lunge', 'single_leg_calf_raise', 'suitcase_carry', 'bird_dog'],
+        ['split_squat', 'single_leg_rdl', 'dead_hang', 'copenhagen_plank']
+      ];
+      for (let i = 0; i < 4; i++) {
+        const back = 7 * (3 - i); // days: 21, 14, 7, 0 before "yesterday - offset"
+        const easyDist = Math.round((5 + i * 0.5) * 10) / 10;
+        const easyDur = Math.round(easyDist * (6.35 - i * 0.06)) + ri(-1, 1);
+        pushTyped(U.addDays(yesterday, -(back + 1)), 'Easy Run', {
+          type: 'cardio', mode: 'run', distanceKm: easyDist, durationMin: easyDur,
+          avgHR: 143 + ri(0, 7), maxHR: 158 + ri(0, 8), effort: 'easy',
+          surface: i % 2 ? 'trail' : 'road'
+        }, { rpe: 3 + ri(0, 1), feel: 'easy' });
+
+        const hardDist = Math.round((4.8 + i * 0.4) * 10) / 10;
+        const hardDur = Math.round(hardDist * (5.45 - i * 0.07)) + ri(-1, 1);
+        pushTyped(U.addDays(yesterday, -(back + 4)), i % 2 ? 'Interval Run' : 'Tempo Run', {
+          type: 'cardio', mode: 'run', distanceKm: hardDist, durationMin: hardDur,
+          avgHR: 167 + ri(0, 7), maxHR: 182 + ri(0, 6), effort: 'hard', surface: 'road'
+        }, { rpe: 7 + ri(0, 2), feel: i === 1 ? 'hard' : 'normal', checkin: i === 3 ? 'Legs felt springy, splits even. Calves a bit tight after.' : undefined });
+
+        const ruckDist = Math.round((6.5 + i) * 10) / 10;
+        const ruckDur = Math.round(ruckDist * (9.6 - i * 0.15));
+        const dryKg = lbToKg(ruckDryLb[i]);
+        pushTyped(U.addDays(yesterday, -(back + 6)), 'Ruck', {
+          type: 'cardio', mode: 'ruck', distanceKm: ruckDist, durationMin: ruckDur,
+          avgHR: 132 + ri(0, 8), effort: 'moderate', surface: i % 2 ? 'trail' : 'road',
+          loadKgDry: dryKg, loadKgTotal: Math.round((dryKg + 2.7) * 100) / 100,
+          footwear: 'boots', footNote: footNotes[i]
+        }, { rpe: 5 + ri(0, 1), feel: 'normal' });
+
+        pushTyped(U.addDays(yesterday, -(back + 2)), 'Durability', {
+          type: 'durability', items: durabilityMenu[i], durationMin: 25 + ri(0, 10)
+        }, { rpe: 3, feel: 'easy' });
+      }
+
+      // Two simple test sessions (unified history: a workout with one test entry).
+      pushTyped(U.addDays(yesterday, -5), 'Pull-up Test', {
+        type: 'test', protocol: 'pullups_max', results: { value: 14 }, score: 14,
+        notes: 'Dead hang, strict'
+      }, { rpe: 9, feel: 'hard' });
+      pushTyped(U.addDays(yesterday, -19), 'Plank Test', {
+        type: 'test', protocol: 'plank', results: { value: 165 }, score: 165
+      }, { rpe: 8, feel: 'normal' });
+
+      // Pain log: one resolved episode, one current mild niggle.
+      function painMs(date) { return U.strToDate(date).getTime() + 19 * 3600000; }
+      const resolvedDate = U.addDays(yesterday, -20);
+      const mildDate = U.addDays(yesterday, -3);
+      state.painLog.push({
+        id: U.uid('pn'), userId: erfan.id, date: resolvedDate, muscleId: 'foot_r',
+        severity: 4, worseDuring: true, boneLine: false, morning: false,
+        note: 'Right arch ache after the 30 lb ruck — resolved after two rest days',
+        createdAt: painMs(resolvedDate), updatedAt: painMs(resolvedDate)
+      }, {
+        id: U.uid('pn'), userId: erfan.id, date: mildDate, muscleId: 'shin_l',
+        severity: 2, worseDuring: false, boneLine: false, morning: false,
+        note: 'Mild left shin tightness after intervals — eased with calf work',
+        createdAt: painMs(mildDate), updatedAt: painMs(mildDate)
+      });
+
+      // Coach journal.
+      const journalRows = [
+        { back: 16, entry: 'Ruck load moves to 40 lb next week if the feet stay quiet.', source: 'coach' },
+        { back: 8, entry: 'Slept badly before the tempo run but splits held. Fueling earlier helped.', source: 'user' },
+        { back: 1, entry: 'Legs felt springy, splits even. Calves a bit tight after.', source: 'checkin' }
+      ];
+      for (const jr of journalRows) {
+        const jd = U.addDays(yesterday, -jr.back);
+        state.coachJournal.push({
+          id: U.uid('jr'), userId: erfan.id, date: jd, entry: jr.entry, source: jr.source,
+          createdAt: painMs(jd), updatedAt: painMs(jd)
+        });
+      }
+    })();
 
     // Body weight every ~3 days (slight trend + noise) and a few body-fat rows.
     const bodyDefs = [

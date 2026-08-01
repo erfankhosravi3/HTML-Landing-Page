@@ -51,7 +51,9 @@
     { id: 'core', label: 'Core' },
     { id: 'cardio', label: 'Cardio' },
     { id: 'full_body', label: 'Full Body' },
-    { id: 'olympic', label: 'Olympic' }
+    { id: 'olympic', label: 'Olympic' },
+    { id: 'durability', label: 'Durability' },
+    { id: 'mobility', label: 'Mobility' }
   ];
 
   /* ---------- builder ---------- */
@@ -2763,6 +2765,430 @@
       ], [
         'Sprinting cold is the classic hamstring tear — the warm-up is non-negotiable.',
         'Think 90 percent smooth, not 100 percent frantic; relaxed sprinting is faster and safer.'
+      ]),
+
+    /* ===== UNILATERAL LOWER (V2) ===== */
+
+    E('lateral_step_down', 'Lateral Step-Down', ['step down', 'lateral step down', 'knee stability step down'],
+      ['quads'], ['glutes', 'calves'], 'bodyweight', 'legs', 'compound', 'beginner', [
+        'Stand sideways on a low step or plate stack with one foot planted and the other hanging off the edge.',
+        'Sit your hips back slightly and bend the standing knee, lowering the free heel toward the floor, inhaling.',
+        'Keep the standing knee tracking over the middle toes and the hips level — no collapsing inward.',
+        'Tap the heel lightly (do not stand on it) and drive back up through the standing leg, exhaling.'
+      ], [
+        'Slow three-second descents build the knee control that protects you on runs and rucks — speed is nothing here.',
+        'Raise the step height to progress; hold a light dumbbell at your chest only after the height maxes out.'
+      ]),
+
+    E('skater_squat', 'Skater Squat', ['single leg bench squat', 'skater pistol'],
+      ['glutes', 'quads'], ['hamstrings', 'abs'], 'bodyweight', 'legs', 'compound', 'advanced', [
+        'Stand on one leg with the other knee bent behind you, shin roughly parallel to the floor, arms reaching forward.',
+        'Hinge and bend the standing leg to lower your rear knee toward a pad on the floor behind you, inhaling.',
+        'Lean your torso forward for balance and keep the standing heel planted throughout.',
+        'Lightly touch the pad with the rear knee, then drive back up to standing, exhaling; switch legs after the set.'
+      ], [
+        'Stack pads and shrink the stack over weeks — a shorter drop today beats a collapsed rep.',
+        'Light counterweights held at arms length actually make balancing easier.'
+      ]),
+
+    E('deficit_reverse_lunge', 'Deficit Reverse Lunge', ['reverse lunge from deficit', 'deficit lunge'],
+      ['quads', 'glutes'], ['hamstrings', 'adductors'], 'dumbbell', 'legs', 'compound', 'intermediate', [
+        'Stand on a low platform or plate stack holding dumbbells at your sides.',
+        'Step one foot back off the platform into a long lunge, lowering the rear knee toward the floor, inhaling.',
+        'Let the front knee travel forward over the toes — the extra depth from the deficit is the point.',
+        'Drive through the front whole foot to step back up onto the platform, exhaling; alternate or finish one side.'
+      ], [
+        'The deficit adds range, not load — go lighter than your normal reverse lunge and own the deep position.'
+      ]),
+
+    E('single_leg_squat_to_box', 'Single-Leg Box Squat', ['box pistol', 'single leg sit to stand'],
+      ['quads', 'glutes'], ['hamstrings', 'abs'], 'bodyweight', 'legs', 'compound', 'intermediate', [
+        'Stand on one leg in front of a bench or box, the free leg extended forward, arms reaching out as a counterbalance.',
+        'Sit back and down slowly onto the box, keeping the standing heel planted, inhaling.',
+        'Touch down under control — no plopping — and pause for a one-count without rocking backward.',
+        'Drive through the standing leg to return to full standing, exhaling; finish the set, then switch legs.'
+      ], [
+        'Lower the box over weeks — this is the honest road to a full pistol squat.',
+        'If you fall onto the box, the box is too low or the descent too fast.'
+      ]),
+
+    E('kickstand_rdl', 'Kickstand RDL', ['b-stance rdl', 'staggered stance rdl'],
+      ['hamstrings', 'glutes'], ['lower_back', 'abs'], 'dumbbell', 'legs', 'compound', 'beginner', [
+        'Stand holding dumbbells with one foot flat and the other slid back so only its toes touch, heel up — like a kickstand.',
+        'Hinge at the hips, pushing them straight back while the front leg takes almost all the load, inhaling.',
+        'Lower the bells along the front thigh until you feel a strong hamstring stretch, back staying flat.',
+        'Drive the front hip through to stand tall, exhaling; complete the set, then switch sides.'
+      ], [
+        'The rear toes are for balance only — think 90 percent of your weight through the front foot.',
+        'Master this before the full single-leg RDL; it trains the same hinge without the balance circus.'
+      ]),
+
+    E('single_leg_hip_thrust', 'Single-Leg Hip Thrust', ['one leg hip thrust', 'sl hip thrust'],
+      ['glutes'], ['hamstrings', 'abs'], 'bodyweight', 'legs', 'compound', 'intermediate', [
+        'Set your upper back on a bench, feet planted, then extend one leg straight or hold that knee to your chest.',
+        'Drive through the planted heel and lift your hips until the working thigh and torso form a straight line, exhaling.',
+        'Squeeze the working glute hard at the top for a one-count, hips staying dead level.',
+        'Lower under control without touching down fully between reps; switch legs after the set.'
+      ], [
+        'A tilting pelvis means the glute has quit — end the set when the hips stop staying square.',
+        'Add a dumbbell over the working hip only once 12 strict reps feel easy.'
+      ]),
+
+    E('bent_knee_calf_raise', 'Bent-Knee Calf Raise', ['soleus raise', 'bent knee heel raise'],
+      ['calves'], [], 'bodyweight', 'legs', 'isolation', 'beginner', [
+        'Stand with the balls of your feet on a step, fingertips on a wall, and bend both knees about 30 degrees.',
+        'Hold that knee bend constant — it shifts the work to the soleus, the deep calf muscle under the gastrocnemius.',
+        'Lower your heels below the step to a full stretch with a one-second pause, inhaling.',
+        'Press up onto your toes while keeping the knees bent, exhaling, and squeeze at the top.'
+      ], [
+        'The soleus does most of the work in running and rucking — bent-knee volume is tendon insurance, not vanity.',
+        'If the knees straighten as you tire, the set is over.'
+      ]),
+
+    /* ===== DURABILITY (V2) — checklist accessory work ===== */
+
+    E('tibialis_raise', 'Tibialis Raise', ['tib raise', 'shin raise', 'toe lift'],
+      ['calves'], [], 'bodyweight', 'durability', 'isolation', 'beginner', [
+        'Lean your back against a wall with your heels a foot or so out in front of you, legs straight.',
+        'Keeping the heels planted, lift the toes and balls of both feet as high toward your shins as possible, exhaling.',
+        'This trains the tibialis anterior on the front of the shin — the muscle opposite the calf (tracked under calves here).',
+        'Lower the toes under control until they nearly touch the floor and repeat without resting at the bottom.'
+      ], [
+        'Shin durability is run insurance — 2-3 sets of 15-25 slow reps keeps shin splints away.',
+        'Walk your heels further from the wall to make it harder.'
+      ]),
+
+    E('wall_tibialis_hold', 'Wall Tibialis Hold', ['tib hold', 'wall shin hold'],
+      ['calves'], [], 'bodyweight', 'durability', 'isolation', 'beginner', [
+        'Lean your back against a wall with your heels out in front and legs straight.',
+        'Pull the toes of both feet up toward your shins as high as they will go and hold, breathing steadily.',
+        'The burn lands on the front of the shin (tibialis anterior) — logged under calves, but it works the opposite side.',
+        'Hold for 20-45 seconds, lower slowly, and rest before the next hold.'
+      ], [
+        'Pair holds with rucking blocks — the tibialis absorbs every downhill step your boots take.'
+      ]),
+
+    E('heel_walk', 'Heel Walk', ['heel walking', 'shin walk'],
+      ['calves'], [], 'bodyweight', 'durability', 'isolation', 'beginner', [
+        'Stand tall and lift the toes of both feet so only your heels touch the floor.',
+        'Walk forward with short steps, toes pulled up hard toward the shins the entire time.',
+        'Keep your posture upright — no leaning back or looking down at your feet.',
+        'Walk 15-25 meters, rest, and repeat; the front of the shins should burn, not the calves.'
+      ], [
+        'A zero-equipment shin-splint vaccine — sneak it into warm-ups before every run.'
+      ]),
+
+    E('toe_walk', 'Toe Walk', ['toe walking', 'calf walk'],
+      ['calves'], [], 'bodyweight', 'durability', 'isolation', 'beginner', [
+        'Rise as high as possible onto the balls of both feet, heels well clear of the floor.',
+        'Walk forward with short, controlled steps, staying at full height on every step.',
+        'Keep the ankles stacked and strong — do not let them wobble outward.',
+        'Walk 15-25 meters, rest, and repeat; hold light dumbbells to progress.'
+      ], [
+        'Height is the rep standard: the moment the heels sink halfway, stop and rest.'
+      ]),
+
+    E('banded_terminal_knee_extension', 'Terminal Knee Extension', ['TKE', 'banded tke', 'terminal knee extension band'],
+      ['quads'], [], 'band', 'durability', 'isolation', 'beginner', [
+        'Anchor a band at knee height and loop it behind one knee, then step back until the band is taut.',
+        'Stand with that foot flat and the knee slightly bent, the band pulling the knee forward.',
+        'Squeeze the quad to straighten the knee fully against the band, exhaling, and hold the lockout for a one-count.',
+        'Let the knee bend softly again under control and repeat; switch legs after the set.'
+      ], [
+        'Tiny range, big payoff — it wakes the inner quad that keeps the kneecap tracking on runs and rucks.'
+      ]),
+
+    E('hip_airplane', 'Hip Airplane', ['standing hip rotation', 'hip airplanes'],
+      ['glutes'], ['hamstrings', 'abs', 'obliques'], 'bodyweight', 'durability', 'compound', 'intermediate', [
+        'Stand on one leg, hinge forward until your torso and rear leg are near parallel with the floor, arms out like wings.',
+        'From that arrow position, slowly rotate your whole torso and hips open toward the ceiling on the standing-leg side.',
+        'Reverse and rotate closed, turning your belly button toward the standing foot, moving only as far as you can control.',
+        'Keep the standing knee soft and the foot gripping the floor; do 4-6 slow rotations each way, then switch legs.'
+      ], [
+        'This is single-leg hip control, not a stretch — smaller controlled arcs beat big wobbly ones.',
+        'Fingertips on a wall or rig make it a beginner drill; hands-free makes it humbling.'
+      ]),
+
+    E('clamshell', 'Clamshell', ['banded clamshell', 'clam'],
+      ['glutes'], [], 'band', 'durability', 'isolation', 'beginner', [
+        'Lie on your side with knees bent about 90 degrees, feet together, a mini-band looped just above the knees.',
+        'Stack your hips vertically and keep your feet touching throughout.',
+        'Open the top knee against the band as far as you can without the pelvis rolling backward, exhaling.',
+        'Pause at the top for a one-count, then close slowly under control; switch sides after the set.'
+      ], [
+        'The rolling pelvis is the classic cheat — pin your top hip forward and the side glute has nowhere to hide.'
+      ]),
+
+    E('towel_hang', 'Towel Grip Hang', ['towel dead hang', 'towel hang'],
+      ['forearms'], ['lats', 'biceps'], 'bodyweight', 'durability', 'isolation', 'intermediate', [
+        'Drape one or two towels over a pull-up bar and grip a towel end tightly in each hand.',
+        'Hang with straight arms and feet off the floor, shoulders lightly packed.',
+        'Crush the towels the entire hold — the thick, soft grip is what makes it brutal.',
+        'Hold for 10-30 seconds and step off before your grip fails completely.'
+      ], [
+        'Closest thing in a gym to rope, rock, and rucksack grip — build to 30 seconds before adding a weight vest.'
+      ]),
+
+    E('bottoms_up_carry', 'Bottoms-Up Kettlebell Carry', ['bottoms up walk', 'upside down kettlebell carry'],
+      ['forearms'], ['front_delts', 'abs', 'obliques'], 'kettlebell', 'durability', 'compound', 'intermediate', [
+        'Clean a light kettlebell to shoulder height upside down, holding the handle with the bell balanced above your fist.',
+        'Keep the elbow under the wrist and the wrist dead straight — crush the handle to keep the bell from tipping.',
+        'Walk slowly with short steps, eyes forward, core braced against the offset load.',
+        'Walk a set distance, park the bell safely, and switch hands.'
+      ], [
+        'Go far lighter than pride suggests — a falling bell teaches humility fast, so keep the free hand ready to catch.'
+      ]),
+
+    /* ===== ANTI-ROTATION CORE (V2) ===== */
+
+    E('suitcase_hold', 'Suitcase Hold', ['single arm static hold', 'unilateral farmer hold'],
+      ['obliques'], ['forearms', 'abs', 'traps'], 'dumbbell', 'core', 'isolation', 'beginner', [
+        'Deadlift one heavy dumbbell or kettlebell to your side with a flat back and stand tall.',
+        'Lock your posture perfectly level — shoulders square, free side neither leaning nor hiking.',
+        'Hold for 20-40 seconds, breathing steadily behind a braced core while the side opposite the weight fights the tilt.',
+        'Set the weight down with a flat back, rest, and switch hands.'
+      ], [
+        'It is the standing-still version of the suitcase carry — if a mirror shows any lean, drop weight, not standards.'
+      ]),
+
+    E('half_kneeling_pallof_press', 'Half-Kneeling Pallof Press', ['kneeling pallof', 'half kneeling anti-rotation press'],
+      ['obliques'], ['abs', 'glutes'], 'band', 'core', 'isolation', 'beginner', [
+        'Anchor a band at chest height, kneel side-on to it with the inside knee down and outside foot planted forward.',
+        'Hold the band with both hands at your sternum, far enough away that it pulls firmly toward the anchor.',
+        'Press your hands straight out from your chest and hold for a two-count, resisting the pull to twist, exhaling.',
+        'Return to the sternum under control; finish the set, then turn to face the other way.'
+      ], [
+        'The narrow kneeling base steals the help of the legs — squeezing the down-knee glute keeps you honest and level.'
+      ]),
+
+    E('plank_shoulder_tap', 'Plank Shoulder Tap', ['shoulder taps', 'plank taps'],
+      ['abs'], ['obliques', 'front_delts'], 'bodyweight', 'core', 'isolation', 'beginner', [
+        'Set up in a high plank with hands under shoulders and feet slightly wider than hip width.',
+        'Brace, then lift one hand and tap the opposite shoulder without letting your hips sway or rotate.',
+        'Place the hand back down quietly and tap with the other hand, alternating in a slow rhythm.',
+        'Imagine a full cup of water on your lower back — nothing above the hips should tip it.'
+      ], [
+        'Wider feet make it easier, feet together makes it savage — adjust the stance, not the standard.'
+      ]),
+
+    E('side_plank_leg_lift', 'Side Plank with Leg Lift', ['side plank abduction', 'star plank progression'],
+      ['obliques'], ['glutes', 'abs'], 'bodyweight', 'core', 'isolation', 'intermediate', [
+        'Set up a strong side plank with your elbow under your shoulder and body in a straight line.',
+        'Keeping the hips tall, raise the top leg to hip height or slightly above, exhaling.',
+        'Hold the leg up for a one-count without letting the hips sag or roll.',
+        'Lower the leg under control and repeat; switch sides after the set.'
+      ], [
+        'The bottom-side obliques and the top-side glute work together here — both matter for one-leg landings on trail runs.'
+      ]),
+
+    E('stir_the_pot', 'Stir the Pot', ['swiss ball plank circles', 'stability ball stir the pot'],
+      ['abs'], ['obliques', 'front_delts'], 'other', 'core', 'isolation', 'intermediate', [
+        'Set your forearms on a swiss ball in a plank position, feet on the floor slightly wider than hips.',
+        'Brace hard and slowly draw small circles with your forearms, rolling the ball beneath them.',
+        'Keep the hips and shoulders dead still — only the forearms travel.',
+        'Do 5-8 circles one way, then reverse; widen the circles to progress.'
+      ], [
+        'A favorite of spine researchers: all the plank benefits plus movement, none of the back-bending.'
+      ]),
+
+    E('copenhagen_plank_short', 'Short-Lever Copenhagen Plank', ['bent knee copenhagen plank', 'copenhagen plank from knee'],
+      ['adductors'], ['obliques', 'abs'], 'bodyweight', 'core', 'isolation', 'intermediate', [
+        'Lie on your side below a bench and rest the top leg on it bent, with the inside of the knee on the pad.',
+        'Place your forearm under your shoulder and lift your hips and bottom leg off the floor, exhaling.',
+        'Form a straight line from knee to head, squeezing the top inner thigh down into the bench.',
+        'Hold 10-20 seconds breathing steadily, lower with control, and switch sides.'
+      ], [
+        'The short lever (knee on the bench) is the right starting dose — earn the full straight-leg version over weeks.',
+        'Mild inner-thigh burn is the goal; sharp groin pain means stop.'
+      ]),
+
+    /* ===== MOBILITY (V2) ===== */
+
+    E('ankle_dorsiflexion_rock', 'Knee-to-Wall Ankle Rock', ['knee to wall', 'ankle dorsiflexion drill', 'ankle rocks'],
+      ['calves'], [], 'bodyweight', 'mobility', 'isolation', 'beginner', [
+        'Kneel facing a wall with the front foot a hand-width away and its toes pointing at the wall.',
+        'Keeping the front heel glued down, drive the knee forward over the toes to touch the wall.',
+        'Rock back slightly, then drive forward again in a slow rhythm — 8-12 reps per side.',
+        'When touching is easy, slide the foot back a thumb-width and repeat.'
+      ], [
+        'The heel lifting is the only way to fail this drill — less distance with a planted heel wins.',
+        'Ankle range is squat depth and downhill-running insurance; measure your wall distance monthly.'
+      ]),
+
+    E('wall_calf_stretch', 'Wall Calf Stretch', ['gastroc stretch', 'straight knee calf stretch'],
+      ['calves'], [], 'bodyweight', 'mobility', 'isolation', 'beginner', [
+        'Stand facing a wall with hands on it, one leg back with the knee straight and heel pressed into the floor.',
+        'Point the back toes straight at the wall and lean your hips forward until the upper calf stretches.',
+        'Hold 30-45 seconds, breathing slowly, keeping the back heel welded down.',
+        'Switch legs; repeat 2-3 rounds per side.'
+      ], [
+        'Straight knee stretches the gastrocnemius — pair it with the bent-knee version so the soleus gets its share.'
+      ]),
+
+    E('bent_knee_calf_stretch', 'Bent-Knee Calf Stretch', ['soleus stretch', 'low calf stretch'],
+      ['calves'], [], 'bodyweight', 'mobility', 'isolation', 'beginner', [
+        'Stand facing a wall in a short stagger stance, hands on the wall.',
+        'Keep the back heel down and bend the back knee, sinking it toward the wall until the lower calf and ankle stretch.',
+        'Hold 30-45 seconds breathing slowly, then switch legs.',
+        'The stretch sits deeper and lower than the straight-knee version — near the Achilles.'
+      ], [
+        'Tight soleus steals ankle range first — rucking and hill running live in this stretch.'
+      ]),
+
+    E('downward_dog_pedal', 'Downward Dog Calf Pedal', ['down dog pedals', 'walking the dog'],
+      ['calves'], ['hamstrings', 'lats'], 'bodyweight', 'mobility', 'compound', 'beginner', [
+        'From a push-up position, push your hips high into an inverted V, hands pressing the floor away.',
+        'Keeping the legs long, press one heel toward the floor while the other knee bends — feel the calf stretch.',
+        'Alternate sides in a slow pedaling rhythm, breathing with each press.',
+        'Pedal 8-12 times per side, keeping the back long and head relaxed.'
+      ], [
+        'A whole posterior chain in one drill — a perfect first move of any warm-up or cooldown.'
+      ]),
+
+    E('couch_stretch', 'Couch Stretch', ['wall quad stretch', 'rear foot elevated hip flexor stretch'],
+      ['quads'], [], 'bodyweight', 'mobility', 'isolation', 'intermediate', [
+        'Kneel with one shin vertical up a wall or couch back, that knee in the corner, and the other foot planted in front.',
+        'Squeeze the rear-side glute and tuck your pelvis — this protects the lower back and aims the stretch.',
+        'Raise your torso as upright as tolerable, feeling the stretch down the rear thigh and hip flexor.',
+        'Breathe slowly for 30-60 seconds, then switch sides; ease up rather than arching the back.'
+      ], [
+        'The glute squeeze is non-negotiable — without it the lower back arches and eats the stretch.',
+        'Brutal after long sitting or heavy squat days; a little daily beats a lot occasionally.'
+      ]),
+
+    E('half_kneeling_hip_flexor_stretch', 'Half-Kneeling Hip Flexor Stretch', ['kneeling lunge stretch', 'hip flexor stretch'],
+      ['quads'], ['glutes'], 'bodyweight', 'mobility', 'isolation', 'beginner', [
+        'Kneel on one knee with the other foot planted forward, both knees near 90 degrees, torso tall.',
+        'Squeeze the glute of the kneeling side and tuck the pelvis slightly under.',
+        'Shift your whole body a few centimeters forward until the front of the kneeling hip stretches, not the lower back.',
+        'Hold 30-45 seconds breathing slowly, then switch sides; raise the same-side arm overhead to deepen it.'
+      ], [
+        'Small shift, big stretch — lunging far forward just arches the spine and fakes it.'
+      ]),
+
+    E('worlds_greatest_stretch', 'World\'s Greatest Stretch', ['spiderman lunge with rotation', 'lunge with rotation'],
+      ['adductors'], ['quads', 'glutes', 'upper_back'], 'bodyweight', 'mobility', 'compound', 'beginner', [
+        'From a push-up position, step one foot outside the same-side hand into a deep lunge.',
+        'Drop the opposite hand to the floor and sink the hips, feeling the groin and hip open.',
+        'Rotate the lunge-side arm toward the ceiling, following the hand with your eyes, exhaling.',
+        'Return the hand down, step back, and repeat on the other side; 4-6 slow reps per side.'
+      ], [
+        'Hips, groin, hamstrings, and T-spine in one move — the name is only half joking.',
+        'Move between positions slowly; it is a mobility drill, not a burpee.'
+      ]),
+
+    E('pigeon_stretch', 'Pigeon Stretch', ['pigeon pose', 'figure four stretch'],
+      ['glutes'], [], 'bodyweight', 'mobility', 'isolation', 'beginner', [
+        'From all fours, bring one knee forward behind your wrist and lay that shin across the floor beneath you.',
+        'Extend the other leg straight behind you, hips square and level to the floor.',
+        'Fold your torso forward over the front shin as far as comfortable, breathing into the outer hip.',
+        'Hold 45-60 seconds per side; do the lying figure-four version if the knee complains.'
+      ], [
+        'The hips must stay square — collapsing onto the front hip stretches nothing but patience.'
+      ]),
+
+    E('ninety_ninety_hip_switch', '90/90 Hip Switch', ['90 90 hip rotation', 'seated hip switch'],
+      ['glutes'], ['adductors'], 'bodyweight', 'mobility', 'compound', 'beginner', [
+        'Sit with one leg bent 90 degrees in front of you and the other bent 90 degrees to the side behind you.',
+        'Sit tall and lean your chest over the front shin, breathing into the outer hip, for a few slow breaths.',
+        'Lift both knees and rotate them together to the other side without using your hands, exhaling.',
+        'Settle into the mirror position and lean again; switch slowly side to side 6-10 times.'
+      ], [
+        'The knees-floating switch is the strength part — hands-free transitions are the goal, not just the sit.'
+      ]),
+
+    E('frog_stretch', 'Frog Stretch', ['frog pose', 'groin stretch'],
+      ['adductors'], [], 'bodyweight', 'mobility', 'isolation', 'beginner', [
+        'Start on all fours and slide both knees out wide, shins parallel and feet in line with the knees.',
+        'Lower to your forearms with a flat back, hips pushed slightly back toward your heels.',
+        'Sink until the inner thighs stretch, then breathe slowly for 30-60 seconds.',
+        'Rock gently back and forth a few centimeters to explore the range — never bounce hard.'
+      ], [
+        'Pad the knees and go by feel — the groin rewards patience and punishes enthusiasm.'
+      ]),
+
+    E('deep_squat_hold', 'Deep Squat Hold', ['third world squat', 'squat prying'],
+      ['adductors'], ['glutes', 'quads', 'calves'], 'bodyweight', 'mobility', 'compound', 'beginner', [
+        'Stand with feet shoulder width, toes slightly out, and sink into the deepest squat you can with heels down.',
+        'Rest your elbows inside your knees and press them gently outward, chest staying tall.',
+        'Breathe slowly and shift weight side to side, letting the hips and ankles open.',
+        'Accumulate 1-3 minutes total; hold a rack or door frame if the heels lift.'
+      ], [
+        'A counterweight held at the chest instantly fixes most balance problems and lets you sit deeper.',
+        'A daily minute in the bottom does more for squat depth than any warm-up gadget.'
+      ]),
+
+    E('foam_roll_t_spine_extension', 'Foam Roller T-Spine Extension', ['thoracic extension on roller', 't-spine extension'],
+      ['upper_back'], [], 'other', 'mobility', 'isolation', 'beginner', [
+        'Lie on your back with a foam roller across your mid-back, knees bent, hands supporting your head.',
+        'Keep the ribs down and extend your upper back over the roller, exhaling as you arch gently.',
+        'Return to neutral, roll the roller one segment up or down, and repeat along the mid-back only.',
+        'Spend 6-10 slow extensions across the region — never bridge over the lower back.'
+      ], [
+        'The bend must come from the stiff mid-back, not the already-bendy lower back — keep the ribs stacked.'
+      ]),
+
+    E('open_book_stretch', 'Open Book', ['side-lying thoracic rotation', 't-spine open book'],
+      ['upper_back'], ['chest', 'obliques'], 'bodyweight', 'mobility', 'isolation', 'beginner', [
+        'Lie on your side with knees stacked and bent 90 degrees, both arms extended together on the floor in front of you.',
+        'Keeping the knees glued down, sweep the top arm up and across to the other side like opening a book.',
+        'Follow the hand with your eyes and let the chest rotate open, exhaling into the stretch.',
+        'Pause for a breath, then close the book slowly; 6-10 reps per side.'
+      ], [
+        'The knees staying pinned is what forces the rotation into the T-spine instead of the lower back.'
+      ]),
+
+    E('thread_the_needle', 'Thread the Needle', ['quadruped thoracic rotation', 'needle threads'],
+      ['upper_back'], ['obliques'], 'bodyweight', 'mobility', 'isolation', 'beginner', [
+        'Start on hands and knees with a flat back, wrists under shoulders.',
+        'Slide one arm palm-up underneath your chest and across the floor, letting the shoulder and ear lower toward the mat.',
+        'Follow the hand with your eyes as the upper back rotates, exhaling.',
+        'Unthread and reach that same arm up toward the ceiling, opening the chest; 6-10 slow reps per side.'
+      ], [
+        'Sit the hips back toward the heels to lock the lower back out of the movement.'
+      ]),
+
+    E('cat_cow', 'Cat-Cow', ['cat camel', 'spinal flexion extension'],
+      ['lower_back'], ['abs', 'upper_back'], 'bodyweight', 'mobility', 'isolation', 'beginner', [
+        'Start on hands and knees, wrists under shoulders, knees under hips.',
+        'Exhale and round your whole spine toward the ceiling, tucking the tailbone and dropping the head — the cat.',
+        'Inhale and reverse, letting the belly sink as the chest and tailbone lift — the cow.',
+        'Flow slowly between the two for 8-12 breaths, moving segment by segment rather than all at once.'
+      ], [
+        'Gentle range, zero force — this is spinal lubrication for the morning and between heavy sets, not a stretch contest.'
+      ]),
+
+    E('wall_slide', 'Wall Slide', ['wall angel', 'shoulder wall slide'],
+      ['upper_back'], ['side_delts', 'traps', 'front_delts'], 'bodyweight', 'mobility', 'isolation', 'beginner', [
+        'Stand with your back, head, and hips against a wall, feet a step away, and press your forearms and wrists to the wall in a goalpost shape.',
+        'Keeping ribs down and lower back close to the wall, slide the arms slowly overhead as far as contact allows.',
+        'Pause where the wrists start to peel off, then drag the elbows back down toward your ribs, squeezing the shoulder blades.',
+        'Do 8-12 slow reps — quality of contact beats height reached.'
+      ], [
+        'The moment the ribs flare or the wrists leave the wall, you have found your current range — work there, not past it.'
+      ]),
+
+    /* ===== SHOULDER/SCAP DURABILITY (V2) ===== */
+
+    E('scapular_pull_up', 'Scapular Pull-Up', ['scap pull', 'scapular shrug'],
+      ['traps'], ['lats', 'forearms'], 'bodyweight', 'pull', 'isolation', 'beginner', [
+        'Hang from a pull-up bar with straight arms, hands shoulder width, feet off the floor.',
+        'Without bending the elbows, pull your shoulder blades down and together so your chest rises a few centimeters.',
+        'Hold the proud-chest top position for a one-count, exhaling.',
+        'Release slowly back to a full passive hang and repeat for 6-12 controlled reps.'
+      ], [
+        'The first inch of every pull-up lives here — it is also the shoulder-saving antidote to dead-hang-only training.'
+      ]),
+
+    E('overhead_carry', 'Overhead Carry', ['waiter carry', 'overhead walk'],
+      ['front_delts'], ['side_delts', 'traps', 'abs', 'forearms'], 'kettlebell', 'full_body', 'compound', 'intermediate', [
+        'Press a kettlebell or dumbbell overhead and lock the elbow, knuckles toward the ceiling.',
+        'Pull the ribs down and brace so the lower back does not arch under the load.',
+        'Walk with short, controlled steps, keeping the weight stacked over shoulder and hip.',
+        'Walk a set distance, lower the bell to the rack position with control, and switch arms.'
+      ], [
+        'The arm holds the weight, the core holds the arch — when the ribs flare, the set is over.',
+        'Half the weight of your farmer carry is plenty to start.'
       ])
   ];
 
@@ -2770,6 +3196,21 @@
 
   const BY_ID = {};
   EXERCISES.forEach(function (x) { BY_ID[x.id] = x; });
+
+  // V2: curated weekly durability checklist. Ordered; every id resolves via byId().
+  // Slots: unilateral | calf_tib | grip | core (weekly compliance UI groups by slot).
+  ExerciseDB.DURABILITY_CHECKLIST = [
+    { id: 'split_squat', slot: 'unilateral' },
+    { id: 'lateral_step_down', slot: 'unilateral' },
+    { id: 'single_leg_rdl', slot: 'unilateral' },
+    { id: 'single_leg_calf_raise', slot: 'calf_tib' },
+    { id: 'tibialis_raise', slot: 'calf_tib' },
+    { id: 'dead_hang', slot: 'grip' },
+    { id: 'farmer_carry', slot: 'grip' },
+    { id: 'pallof_press', slot: 'core' },
+    { id: 'side_plank', slot: 'core' },
+    { id: 'copenhagen_plank', slot: 'core' }
+  ];
 
   function customList() {
     // Lazy read: Store loads after this file, so only touch it inside calls.
