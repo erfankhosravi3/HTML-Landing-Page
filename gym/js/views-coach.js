@@ -244,6 +244,12 @@
      ====================================================================== */
 
   let pending = false;
+  /* What the coach has said SO FAR, plus when the request started. A long
+     silence reads as broken, so the wait shows real progress: the reply as it
+     streams, and the seconds elapsed when there is nothing to show yet. */
+  let streamText = '';
+  let streamStartedAt = 0;
+  let streamTick = null;
 
   function messageHtml(m) {
     if (m.role === 'user') {
@@ -305,8 +311,18 @@
     }
     for (let i = 0; i < thread.length; i++) html += messageHtml(thread[i]);
     if (pending) {
-      html += '<div class="coach-msg coach"><div class="cm-bubble thinking">' +
-        '<span></span><span></span><span></span></div></div>';
+      const secs = streamStartedAt ? Math.round((Date.now() - streamStartedAt) / 1000) : 0;
+      html += '<div class="coach-msg coach" id="coach-live">';
+      if (streamText) {
+        html += '<div class="cm-bubble">' + U.esc(streamText).replace(/\n/g, '<br>') +
+          '<span class="cm-caret"></span></div>';
+      } else {
+        html += '<div class="cm-bubble thinking">' +
+          '<span></span><span></span><span></span>' +
+          (secs >= 3 ? '<em class="cm-elapsed">reading your log · ' + secs + 's</em>' : '') +
+          '</div>';
+      }
+      html += '</div>';
     }
     html += '</div>';
 
@@ -498,6 +514,15 @@
 
     Store.addChatMessage({ userId: u.id, role: 'user', text: text });
     pending = true;
+    streamText = '';
+    streamStartedAt = Date.now();
+    // Repaint the waiting state each second so the elapsed count moves. A
+    // frozen indicator is indistinguishable from a hung request.
+    if (streamTick) clearInterval(streamTick);
+    streamTick = setInterval(function () {
+      if (!pending) { clearInterval(streamTick); streamTick = null; return; }
+      if (!streamText) App.rerender();
+    }, 1000);
     App.rerender();
 
     const t = today();
@@ -516,9 +541,18 @@
       dossier: dossier.text,
       thread: thread,
       message: text,
-      liveDraft: liveDraftSummary()
+      liveDraft: liveDraftSummary(),
+      // Called as the reply arrives. Repaint only when the text actually
+      // grew, so a burst of deltas does not thrash the DOM.
+      onDelta: function (soFar) {
+        if (typeof soFar !== 'string' || soFar === streamText) return;
+        streamText = soFar;
+        App.rerender();
+      }
     }).then(function (res) {
       pending = false;
+      streamText = '';
+      if (streamTick) { clearInterval(streamTick); streamTick = null; }
       if (!res.ok) {
         Store.addChatMessage({ userId: u.id, role: 'assistant', text: '', error: res.error });
         App.rerender();
@@ -537,6 +571,8 @@
       App.rerender();
     }).catch(function (e) {
       pending = false;
+      streamText = '';
+      if (streamTick) { clearInterval(streamTick); streamTick = null; }
       Store.addChatMessage({ userId: u.id, role: 'assistant', text: '',
         error: 'Something went wrong sending that. ' + String((e && e.message) || e) });
       App.rerender();

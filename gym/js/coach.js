@@ -738,11 +738,63 @@
       thinking: { type: 'adaptive' },
       system: system,
       messages: turns,
+      /* STREAM ALWAYS.
+
+         Without this the user watches three dots for the whole generation —
+         a full-log dossier plus adaptive thinking plus up to 8k output tokens
+         is a long silence, and a long silence reads as broken. Streaming also
+         keeps a long reply from hitting the request timeout.
+
+         EFFORT IS SET EXPLICITLY. It defaults to high, which is the wrong
+         default for a conversation: it buys thoroughness nobody asked for at a
+         latency the user notices on every single message. medium is the
+         balance for chat. The dossier — the thing that actually makes the
+         coach smart — is untouched. */
+      stream: true,
       output_config: {
+        effort: ctx.effort || 'medium',
         format: { type: 'json_schema', schema: Coach.PROPOSAL_SCHEMA }
       }
     };
     return body;
+  };
+
+  /* Pulls the `reply` string out of INCOMPLETE JSON so prose can render while
+     it is still arriving. Searches for the key rather than assuming it comes
+     first: schema property order is what models usually emit, not what they
+     promise. Returns '' until the key appears. */
+  Coach.partialReply = function (buf) {
+    if (!buf) return '';
+    const key = '"reply"';
+    const at = buf.indexOf(key);
+    if (at < 0) return '';
+    let i = buf.indexOf('"', at + key.length);   // opening quote of the value
+    if (i < 0) return '';
+    i++;
+    let out = '';
+    while (i < buf.length) {
+      const c = buf.charAt(i);
+      if (c === '\\') {
+        const n = buf.charAt(i + 1);
+        if (n === '') break;                      // truncated escape
+        if (n === 'n') out += '\n';
+        else if (n === 't') out += '\t';
+        else if (n === 'r') { /* drop */ }
+        else if (n === 'u') {
+          const hex = buf.substr(i + 2, 4);
+          if (hex.length < 4) break;              // truncated \uXXXX
+          out += String.fromCharCode(parseInt(hex, 16));
+          i += 6;
+          continue;
+        } else out += n;
+        i += 2;
+        continue;
+      }
+      if (c === '"') break;                        // end of the value
+      out += c;
+      i++;
+    }
+    return out;
   };
 
   /* ======================================================================
@@ -970,14 +1022,22 @@
       },
       body: JSON.stringify(body)
     }).then(function (res) {
-      return res.text().then(function (text) {
-        let json = null;
-        try { json = JSON.parse(text); } catch (e) { json = null; }
-        if (!res.ok) {
+      if (!res.ok) {
+        // Errors are plain JSON even on a streaming request.
+        return res.text().then(function (text) {
+          let json = null;
+          try { json = JSON.parse(text); } catch (e) { json = null; }
           return { ok: false, status: res.status, error: apiError(res.status, json) };
-        }
-        return readMessage(json);
-      });
+        });
+      }
+      if (!res.body || typeof res.body.getReader !== 'function') {
+        // No streams here (very old browser, or a test double). Fall back to
+        // reading the whole body — correctness first, liveness second.
+        return res.text().then(function (text) {
+          return readStream(text, ctx.onDelta);
+        });
+      }
+      return consume(res.body, ctx.onDelta);
     }).catch(function (e) {
       // A CORS failure and an offline device both land here as a bare
       // TypeError, so say what the user can actually do about either.
@@ -995,6 +1055,121 @@
     if (status === 529) return 'The API is overloaded right now. Try again shortly.';
     if (status >= 500) return 'The API had a server error (' + status + '). Try again.';
     return (t ? t + ': ' : '') + (m || ('HTTP ' + status));
+  }
+
+  /* ---------- SSE ----------
+     Events are separated by a blank line; the payload lines start "data: ".
+     Everything the app needs is folded into one accumulator so the streaming
+     and non-streaming paths produce the SAME result object. */
+
+  function newAcc() {
+    return { text: '', thinking: false, stopReason: null,
+      usage: { input_tokens: 0, output_tokens: 0,
+        cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+      apiError: null };
+  }
+
+  function applyEvent(acc, ev, onDelta) {
+    if (!ev || typeof ev !== 'object') return;
+    const t = ev.type;
+    if (t === 'error') {
+      acc.apiError = (ev.error && ev.error.message) || 'stream error';
+      return;
+    }
+    if (t === 'message_start' && ev.message && ev.message.usage) {
+      const u = ev.message.usage;
+      // Input-side counts arrive here; output accrues in message_delta.
+      acc.usage.input_tokens = Number(u.input_tokens) || 0;
+      acc.usage.cache_creation_input_tokens = Number(u.cache_creation_input_tokens) || 0;
+      acc.usage.cache_read_input_tokens = Number(u.cache_read_input_tokens) || 0;
+      return;
+    }
+    if (t === 'content_block_delta' && ev.delta) {
+      if (ev.delta.type === 'text_delta' && typeof ev.delta.text === 'string') {
+        acc.text += ev.delta.text;
+        if (onDelta) {
+          try { onDelta(Coach.partialReply(acc.text), false); } catch (e) { /* UI must not break the stream */ }
+        }
+      } else if (ev.delta.type === 'thinking_delta') {
+        // The model is reasoning: nothing to show yet, but the UI can say so
+        // instead of implying the request is stuck.
+        if (!acc.thinking && onDelta) {
+          acc.thinking = true;
+          try { onDelta('', true); } catch (e) { /* ignore */ }
+        }
+      }
+      return;
+    }
+    if (t === 'message_delta') {
+      if (ev.delta && ev.delta.stop_reason) acc.stopReason = ev.delta.stop_reason;
+      if (ev.usage && typeof ev.usage.output_tokens === 'number') {
+        acc.usage.output_tokens = ev.usage.output_tokens;
+      }
+    }
+  }
+
+  function finish(acc) {
+    if (acc.apiError) return { ok: false, error: acc.apiError };
+    // Checked BEFORE the text is read, exactly as in the non-streaming path.
+    if (acc.stopReason === 'refusal') {
+      return { ok: false, refusal: true, usage: acc.usage,
+        error: 'The model declined to answer that one. Try rephrasing.' };
+    }
+    return readMessage({
+      stop_reason: acc.stopReason,
+      usage: acc.usage,
+      content: [{ type: 'text', text: acc.text }]
+    });
+  }
+
+  function feed(acc, chunk, carry, onDelta) {
+    const buf = carry + chunk;
+    const parts = buf.split('\n\n');
+    const rest = parts.pop();                       // possibly a partial event
+    for (let i = 0; i < parts.length; i++) {
+      const lines = parts[i].split('\n');
+      for (let j = 0; j < lines.length; j++) {
+        const line = lines[j];
+        if (line.indexOf('data:') !== 0) continue;
+        const payload = line.slice(5).trim();
+        if (!payload || payload === '[DONE]') continue;
+        let ev = null;
+        try { ev = JSON.parse(payload); } catch (e) { ev = null; }
+        applyEvent(acc, ev, onDelta);
+      }
+    }
+    return rest;
+  }
+
+  function consume(body, onDelta) {
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    const acc = newAcc();
+    let carry = '';
+    function pump() {
+      return reader.read().then(function (r) {
+        if (r.done) {
+          if (carry) feed(acc, '\n\n', carry, onDelta);
+          return finish(acc);
+        }
+        carry = feed(acc, decoder.decode(r.value, { stream: true }), carry, onDelta);
+        return pump();
+      });
+    }
+    return pump();
+  }
+
+  // Whole-body fallback: same parser, one pass.
+  function readStream(text, onDelta) {
+    const acc = newAcc();
+    feed(acc, text.indexOf('data:') === 0 || text.indexOf('\ndata:') >= 0 ? text + '\n\n' : '', '', onDelta);
+    if (!acc.text && !acc.stopReason && !acc.apiError) {
+      // Not SSE at all — a plain JSON message body.
+      let json = null;
+      try { json = JSON.parse(text); } catch (e) { json = null; }
+      if (json) return readMessage(json);
+    }
+    return finish(acc);
   }
 
   function readMessage(json) {

@@ -3,11 +3,9 @@
    or installed PWAs keep serving the old cache forever. */
 'use strict';
 
-/* This release changes how updates themselves reach people: the worker no
-   longer skips waiting, and the page offers the handover instead of taking it
-   silently. It is also the LAST release the old auto-skipping worker installs
-   for you — from here on, an update announces itself. */
-const CACHE_NAME = 'ironlog-v2p11';
+/* Coach replies now stream, so js/coach.js, js/views-coach.js and
+   css/styles.css all changed. */
+const CACHE_NAME = 'ironlog-v2p12';
 
 const SHELL = [
   './',

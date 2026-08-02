@@ -4348,6 +4348,25 @@ button.std-row:hover .std-name {
   animation: coach-blink 1.2s infinite ease-in-out;
 }
 .cm-bubble.thinking span:nth-child(2) { animation-delay: .18s; }
+.cm-elapsed {
+  font-style: normal;
+  font-family: var(--font-num);
+  font-size: var(--fs-nano);
+  color: var(--text-muted);
+  margin-left: 6px;
+}
+/* Blinking caret while the reply streams — it is moving, not stuck. */
+.cm-caret {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  vertical-align: -2px;
+  margin-left: 2px;
+  background: var(--accent);
+  animation: coach-caret 1s steps(2, start) infinite;
+}
+@keyframes coach-caret { 0%, 50% { opacity: 1; } 50.01%, 100% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .cm-caret { animation: none; } }
 .cm-bubble.thinking span:nth-child(3) { animation-delay: .36s; }
 @keyframes coach-blink {
   0%, 60%, 100% { opacity: .28; }
