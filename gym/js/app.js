@@ -79,6 +79,9 @@
     alert: svg('<path d="M12 4.2 21.2 20H2.8L12 4.2Z"/><path d="M12 10.4v4.2M12 17.2v.2"/>'),
     // notebook
     journal: svg('<rect x="4.8" y="3.6" width="14.4" height="16.8" rx="2.4"/><path d="M8.8 3.6v16.8M12.4 8.4h3.6M12.4 12h3.6"/>'),
+    // three dots — the More tab, which is the only door to every view the
+    // five-slot tab bar cannot hold
+    more: svg('<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>'),
     // painter's palette — the Appearance card (P5 theme picker)
     palette: svg('<path d="M12 3.4c-4.9 0-8.6 3.6-8.6 8.4 0 4.8 3.7 8.8 8.6 8.8 1.4 0 2.3-.9 2.3-2 0-.6-.2-1-.6-1.4-.3-.4-.5-.8-.5-1.3 0-1.1.9-2 2-2h1.6c2.1 0 3.8-1.7 3.8-3.8 0-3.7-3.7-6.7-8.6-6.7Z"/><path d="M7.6 10.6v.2M11 8v.2M15 9.2v.2"/>')
   };
@@ -491,7 +494,16 @@
      Chrome — topbar / sidebar / tabbar
      ====================================================================== */
 
+  /* The four corners of the tab bar, plus the centre fab. Everything else a
+     profile can see reaches the phone through MORE.
+
+     This list used to be the ONLY way into a view on a phone, and it is a
+     fixed four — so Standards, Body, Leaderboard and the Coach were rendered,
+     registered, working, and completely unreachable below 768px. They lived
+     in the sidebar, which is display:none on a phone. The app shipped a coach
+     that could not be opened on the device it was built for. */
   const TABS = ['dashboard', 'history', 'analytics', 'library']; // + center fab
+  const MORE_ID = '__more';
 
   function wordmarkHTML() {
     return '<span class="wordmark">Iron<span class="accent">Log</span></span>';
@@ -531,6 +543,9 @@
     // Items are (re)painted by refreshNav, so the fab click is delegated —
     // repaints never lose the handler.
     U.on(U.$('#tabbar'), 'click', '#fab-log', function () { App.navigate('log'); });
+    // Delegated like the fab: refreshNav repaints the bar, so a bound handler
+    // would be lost on the first repaint.
+    U.on(U.$('#tabbar'), 'click', '#tab-more', function () { openMoreSheet(); });
 
     navSig = null;
     refreshNav();
@@ -553,6 +568,44 @@
     return TABS.filter(function (id) {
       const v = views[id];
       return !(v && v.visible) || viewVisible(id);
+    });
+  }
+
+  /* Everything a phone cannot reach from the bar. Derived from the same
+     registry the sidebar uses, so a view added by a future phase appears here
+     automatically instead of being invisible until someone notices. */
+  function moreIds() {
+    const inBar = {};
+    tabbarIds().slice(0, 3).forEach(function (id) { inBar[id] = true; });
+    return sidebarNavIds().filter(function (id) { return !inBar[id]; });
+  }
+
+  function openMoreSheet() {
+    const ids = moreIds();
+    const rows = ids.map(function (id) {
+      return '<button type="button" class="list-row" data-go="' + U.esc(id) + '">' +
+        '<span class="leading plain" style="color:var(--text-2)">' + views[id].icon + '</span>' +
+        '<span class="body"><span class="title">' + U.esc(views[id].title) + '</span></span>' +
+        '</button>';
+    }).join('');
+    const extra =
+      '<div class="divider" style="margin:4px 0"></div>' +
+      '<button type="button" class="list-row" data-go="settings">' +
+        '<span class="leading plain" style="color:var(--text-2)">' + icons.settings + '</span>' +
+        '<span class="body"><span class="title">Settings</span></span>' +
+      '</button>' +
+      '<button type="button" class="list-row" data-go="profiles">' +
+        '<span class="leading plain" style="color:var(--text-2)">' + icons.users + '</span>' +
+        '<span class="body"><span class="title">Profiles</span></span>' +
+      '</button>';
+    const sheet = App.sheet({
+      title: 'More',
+      content: '<div style="display:flex;flex-direction:column">' + rows + extra + '</div>'
+    });
+    U.on(sheet.el, 'click', '[data-go]', function (e, b) {
+      const id = b.getAttribute('data-go');
+      sheet.close();
+      App.navigate(id);
     });
   }
 
@@ -580,14 +633,21 @@
         return '<a class="tab" data-view="' + U.esc(id) + '" href="#/' + U.esc(id) + '">' +
           icon + '<span>' + U.esc(title) + '</span></a>';
       }
+      /* Five columns, symmetric around the fab: two tabs, fab, one tab, More.
+         The bar keeps its shape; MORE absorbs the growth instead of the bar
+         getting narrower every time a phase adds a view. */
+      const bar = tabs.slice(0, 3);
       tabbar.innerHTML =
-        tabs.slice(0, 2).map(tabHTML).join('') +
+        bar.slice(0, 2).map(tabHTML).join('') +
         '<button type="button" class="fab-log" id="fab-log" aria-label="Log a workout" style="position:relative">' +
           icons.log +
           '<span id="fab-draft-dot" style="display:none;position:absolute;top:6px;right:6px;width:9px;height:9px;' +
             'border-radius:50%;background:var(--orange);border:2px solid var(--bg)"></span>' +
         '</button>' +
-        tabs.slice(2).map(tabHTML).join('');
+        bar.slice(2).map(tabHTML).join('') +
+        '<button type="button" class="tab" id="tab-more" aria-haspopup="menu">' +
+          icons.more + '<span>More</span>' +
+        '</button>';
     }
   }
 
