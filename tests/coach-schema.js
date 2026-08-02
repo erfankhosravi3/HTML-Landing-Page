@@ -1,5 +1,5 @@
 'use strict';
-/* Does the API actually ACCEPT the structured-output schema we send?
+/* Would the API actually ACCEPT the request we send?
 
    This suite exists because the answer was no, in production, for every single
    message. The schema omitted `additionalProperties: false` and the API
@@ -13,7 +13,13 @@
    authentication_error before the schema is ever inspected — so there is no
    way to validate this against the live endpoint without spending the user's
    money. The rules are documented and stable, so they are asserted here
-   directly, on the exact object the app ships. */
+   directly, on the exact object the app ships.
+
+   The schema was one instance of a general gap: anything about the REQUEST
+   that only the live API can judge was untested. So this suite covers the
+   whole envelope — parameters that 400 on Opus 5, cache-control shape and
+   placement, and the byte-stability invariant that makes caching work at
+   all. */
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
@@ -105,6 +111,73 @@ ok(JSON.stringify(body.output_config.format.schema) === asText,
   'the request sends THIS schema, not a divergent copy');
 ok(body.output_config.format.schema.additionalProperties === false,
   'the schema on the wire is strict at the root');
+
+/* ==================================================================
+   The envelope: every documented constraint checkable without a key
+   ================================================================== */
+
+const TODAY = '2026-08-02';
+const req = Coach.buildRequest({
+  user: { name: 'E' }, today: TODAY, dossier: 'DOSSIER-BODY',
+  message: 'what should I train?',
+  thread: [{ role: 'user', text: 'earlier question' },
+           { role: 'assistant', text: 'earlier answer' }]
+});
+
+/* --- parameters that are a 400 on Opus 5, not a warning --- */
+ok(req.model === 'claude-opus-5', 'model is claude-opus-5');
+ok(!('temperature' in req), 'no temperature');
+ok(!('top_p' in req), 'no top_p');
+ok(!('top_k' in req), 'no top_k');
+ok(req.thinking && req.thinking.type === 'adaptive', 'adaptive thinking');
+ok(!('budget_tokens' in (req.thinking || {})), 'no budget_tokens (rejected on Opus 5)');
+ok(req.stream === true, 'streams (long input, long output, high max_tokens)');
+ok(['low', 'medium', 'high', 'xhigh', 'max'].indexOf(req.output_config.effort) >= 0,
+  'effort is one of the documented levels (got ' + req.output_config.effort + ')');
+
+/* --- no assistant prefill: it is a 400 here --- */
+const last = req.messages[req.messages.length - 1];
+ok(last.role === 'user', 'the final turn is the user, never an assistant prefill');
+
+/* --- cache control: shape, count, and placement --- */
+const marks = [];
+function findMarks(node, where) {
+  if (!node || typeof node !== 'object') return;
+  if (node.cache_control) marks.push({ where: where, cc: node.cache_control });
+  if (Array.isArray(node)) node.forEach(function (n, i) { findMarks(n, where + '[' + i + ']'); });
+  else for (const k in node) if (k !== 'cache_control') findMarks(node[k], where + '.' + k);
+}
+findMarks(req.system, 'system');
+findMarks(req.messages, 'messages');
+
+ok(marks.length > 0, 'the request declares cache breakpoints at all');
+ok(marks.length <= 4, 'at most 4 breakpoints (got ' + marks.length + ')');
+marks.forEach(function (m) {
+  ok(m.cc.type === 'ephemeral', m.where + ': breakpoint type is ephemeral');
+  ok(m.cc.ttl === undefined || m.cc.ttl === '5m' || m.cc.ttl === '1h',
+    m.where + ': ttl is 5m or 1h if present (got ' + m.cc.ttl + ')');
+});
+// Render order is tools -> system -> messages; a mark on the LAST system block
+// caches everything before it.
+ok(!!req.system[req.system.length - 1].cache_control,
+  'the last system block carries a breakpoint (caches charter + dossier together)');
+
+/* --- the invariant that makes caching actually pay ---
+   Anything volatile inside a cached block changes its bytes and invalidates
+   every breakpoint at or after it. Today's date is the obvious offender. */
+const cachedPrefix = JSON.stringify(req.system);
+ok(cachedPrefix.indexOf(TODAY) === -1,
+  'today\'s date does NOT appear in the cached system blocks');
+ok(cachedPrefix.indexOf('DOSSIER-BODY') !== -1, 'the dossier IS inside the cached prefix');
+ok(last.content.indexOf(TODAY) !== -1, 'today rides the volatile final turn instead');
+ok(last.content.indexOf('what should I train?') !== -1, 'so does the new message');
+
+/* --- the transport constant that CORS requires --- */
+const src = fs.readFileSync(path.join(P.JS, 'coach.js'), 'utf8');
+ok(src.indexOf('anthropic-dangerous-direct-browser-access') !== -1,
+  'the browser-access header is still sent (without it Chromium blocks the call)');
+ok(src.indexOf('https://api.anthropic.com/v1/messages') !== -1,
+  'the API origin is hardcoded, not configurable');
 
 console.log('passed:', pass);
 if (fails.length) { fails.forEach(function (f) { console.log('FAIL:', f); }); process.exit(1); }
