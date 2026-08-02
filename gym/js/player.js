@@ -489,10 +489,18 @@
       entryIdx: ei
     };
     if (s && (s.side === 'L' || s.side === 'R')) step.side = s.side;
-    if (num(s && s.holdSec) > 0) step.targetSec = Math.round(num(s.holdSec));
-    if (num(s && s.reps) > 0) step.targetReps = Math.round(num(s.reps));
-    if (num(s && s.distanceM) > 0) step.targetM = Math.round(num(s.distanceM));
-    if (num(s && s.weightKg) > 0) step.targetKg = num(s.weightKg);
+    // What actually happened wins; the routine's PRESCRIPTION (draft-local
+    // '_t' keys) is the fallback. The projection is exactly the 'what's next /
+    // time left' surface, so it must still know the plan now that the plan no
+    // longer squats in the observation fields.
+    const tgt = function (k) {
+      const own = num(s && s[k]);
+      return own > 0 ? own : num(s && s['_t' + k.charAt(0).toUpperCase() + k.slice(1)]);
+    };
+    if (tgt('holdSec') > 0) step.targetSec = Math.round(tgt('holdSec'));
+    if (tgt('reps') > 0) step.targetReps = Math.round(tgt('reps'));
+    if (tgt('distanceM') > 0) step.targetM = Math.round(tgt('distanceM'));
+    if (tgt('weightKg') > 0) step.targetKg = tgt('weightKg');
     return step;
   }
 
@@ -528,22 +536,23 @@
      ====================================================================== */
 
   function blankLiftSet(item) {
-    const s = { weightKg: num(item && item.targetWeightKg) > 0 ? num(item.targetWeightKg) : 0,
-      reps: num(item && item.targetReps) > 0 ? Math.round(num(item.targetReps)) : 0,
-      type: 'work', rpe: null, done: false };
+    // PRESCRIPTION never lands in an observation field: blank set + '_t' targets
+    const s = { weightKg: 0, reps: 0, type: 'work', rpe: null, done: false };
+    if (num(item && item.targetWeightKg) > 0) s._tWeightKg = num(item.targetWeightKg);
+    if (num(item && item.targetReps) > 0) s._tReps = Math.round(num(item.targetReps));
     return s;
   }
 
   function blankSetworkSet(item, shape, side) {
     const s = { done: false };
     if (side) s.side = side;
-    if (shape === 'hold' && num(item.targetHoldSec) > 0) s.holdSec = Math.round(num(item.targetHoldSec));
-    if (shape === 'reps' && num(item.targetReps) > 0) s.reps = Math.round(num(item.targetReps));
+    if (shape === 'hold' && num(item.targetHoldSec) > 0) s._tHoldSec = Math.round(num(item.targetHoldSec));
+    if (shape === 'reps' && num(item.targetReps) > 0) s._tReps = Math.round(num(item.targetReps));
     if (shape === 'carry') {
-      if (num(item.targetDistanceM) > 0) s.distanceM = Math.round(num(item.targetDistanceM));
-      if (num(item.targetWeightKg) > 0) s.weightKg = num(item.targetWeightKg);
+      if (num(item.targetDistanceM) > 0) s._tDistanceM = Math.round(num(item.targetDistanceM));
+      if (num(item.targetWeightKg) > 0) s._tWeightKg = num(item.targetWeightKg);
     } else if (shape !== 'reps' && num(item.targetWeightKg) > 0) {
-      s.weightKg = num(item.targetWeightKg);
+      s._tWeightKg = num(item.targetWeightKg);
     }
     return s;
   }
@@ -1177,9 +1186,11 @@
   // filled value in the same entry, else 30s (P3 builder rule).
   Session.targetSecOf = function (en, set) {
     if (num(set && set.holdSec) > 0) return Math.round(num(set.holdSec));
+    if (num(set && set._tHoldSec) > 0) return Math.round(num(set._tHoldSec));
     const sets = (en && Array.isArray(en.sets)) ? en.sets : [];
     for (let i = 0; i < sets.length; i++) {
       if (num(sets[i] && sets[i].holdSec) > 0) return Math.round(num(sets[i].holdSec));
+      if (num(sets[i] && sets[i]._tHoldSec) > 0) return Math.round(num(sets[i]._tHoldSec));
     }
     return DEFAULT_HOLD_SEC;
   };
@@ -1198,11 +1209,14 @@
     }
     if (shape === 'carry') return { driver: 'stopwatch', targetSec: 0 };
     // 'only with a tempo': the TEMPO is what makes a reps set timeable. The
-    // rep count is only how long it runs, so an unfilled row falls back to the
-    // nearest filled one in the same entry (the P3 builder rule) and then to 8.
+    // rep count is only how long it runs, so an unfilled row falls back to its
+    // own PRESCRIBED count (_tReps — the routine target that no longer squats
+    // in the observation field), then to the nearest filled/prescribed row in
+    // the same entry (the P3 builder rule), and only then to 8.
     const perRep = Session.tempoSecPerRep(Session.tempoOf(en, d));
     if (!(perRep > 0)) return null; // no driver — ✓ advances
-    const own = num(set && set.reps) > 0 ? Math.round(num(set.reps)) : 0;
+    const own = num(set && set.reps) > 0 ? Math.round(num(set.reps))
+      : (num(set && set._tReps) > 0 ? Math.round(num(set._tReps)) : 0);
     const borrowed = own > 0 ? null : ownRepsFallback(en);
     const reps = borrowed ? borrowed.reps : own;
     // DEFAULT_TEMPO_REPS only gives the CLOCK a length. It was never
@@ -1464,13 +1478,18 @@
     return true;
   }
 
-  // -> {reps, fabricated}. 'Borrow the sibling row's reps' and 'invent 8 so the
-  // clock has a length' are two different things: only the first is a real
-  // prescription, and only the first may ever be written back to the set.
+  // -> {reps, fabricated}. 'Borrow the sibling row's reps (typed or prescribed)'
+  // and 'invent 8 so the clock has a length' are two different things: only the
+  // first is a real prescription, and only the first may ever be written back
+  // to the set. A guided routine's target now rides on _tReps rather than in
+  // `reps`, so it must be read here too — otherwise a prescribed tempo lift
+  // silently drops to DEFAULT_TEMPO_REPS.
   function ownRepsFallback(en) {
     const sets = (en && Array.isArray(en.sets)) ? en.sets : [];
     for (let i = 0; i < sets.length; i++) {
-      if (num(sets[i] && sets[i].reps) > 0) return { reps: Math.round(num(sets[i].reps)), fabricated: false };
+      const s = sets[i];
+      if (num(s && s.reps) > 0) return { reps: Math.round(num(s.reps)), fabricated: false };
+      if (num(s && s._tReps) > 0) return { reps: Math.round(num(s._tReps)), fabricated: false };
     }
     return { reps: DEFAULT_TEMPO_REPS, fabricated: true };
   }
@@ -1648,6 +1667,13 @@
       if (num(vals.reps) > 0) set.reps = Math.round(num(vals.reps));
       else if (autoReps > 0 && !(num(set.reps) > 0)) set.reps = autoReps;
       if (num(vals.weightKg) > 0) set.weightKg = num(vals.weightKg);
+      // A metronome writes the rep count itself, which makes the set
+      // 'recordable' and so skips the host's hint entirely. Its own PRESCRIBED
+      // load is the load the row was showing, so a driven tempo set is not
+      // logged at a phantom 0 kg. Nothing is invented: no _t key, no write.
+      else if (autoReps > 0 && !(num(set.weightKg) > 0) && num(set._tWeightKg) > 0) {
+        set.weightKg = num(set._tWeightKg);
+      }
     }
     // A carry is an elapsed stopwatch: the clock NEVER measures distance or
     // load. And the focus view's 'Done ✓' reaches here with vals = null on rows

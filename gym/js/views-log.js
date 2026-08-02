@@ -106,7 +106,11 @@
       let minted = false;
       d.entries.forEach(function (en) {
         if (!en.id) en.id = U.uid('en');
-        if (!Array.isArray(en.sets)) en.sets = [];
+        // Only shapes that legitimately carry sets get one grown for them.
+        // A cardio/circuit/mobility entry is a typed blob that saves verbatim,
+        // so injecting `sets: []` here put an empty array on the stored
+        // workout (cleanTypedEntry copies unknown keys through).
+        if (isSetBearingEntry(en) && !Array.isArray(en.sets)) en.sets = [];
         // Backfill set identity alongside the entry-id backfill above. Setwork
         // only: those are the rows the Session can drive, and lift draft rows
         // stay byte-for-byte what they are today.
@@ -195,7 +199,7 @@
           // 'the ✓ would have filled this in' — the engine asks before it
           // records a carry it stopped with nothing typed. It never measures
           // distance or load itself.
-          prefill: swFillFromPrev
+          prefill: fillFromPrev
         });
         S.subscribe(onSessionState);
       } catch (e) { /* an unbindable player just stays a no-op */ }
@@ -392,6 +396,13 @@
     return !!en && en.type === 'setwork';
   }
 
+  // Shapes that legitimately carry a `sets` array (the same test player.js
+  // uses). Everything else — cardio/circuit, mobility, test blobs — is a typed
+  // entry that saves verbatim, and must never grow a `sets` key.
+  function isSetBearingEntry(en) {
+    return isLiftEntry(en) || isSetworkEntry(en);
+  }
+
   function setShapeOf(ex) {
     return (ex && ex.setShape) || 'weight_reps';
   }
@@ -516,6 +527,32 @@
     if ((src.weightKg || 0) > 0 && !((s.weightKg || 0) > 0)) s.weightKg = src.weightKg;
     if ((src.reps || 0) > 0 && !((s.reps || 0) > 0)) s.reps = src.reps;
     if ((src.holdSec || 0) > 0 && !((s.holdSec || 0) > 0)) s.holdSec = src.holdSec;
+  }
+
+  /* P4.5 — the SAME hint for lift entries. swFillFromPrev looks history up by
+     en.exerciseRef, which a lift entry does not have, so it bailed on every
+     lift row: a set driven to completion (focus 'Done ✓', or a metronome that
+     wrote only its rep count) with nothing typed recorded nothing at all, or
+     recorded reps at 0 kg. This mirrors onCheck() exactly — the row's own
+     prescribed target, then the nearest earlier filled row, then last time —
+     and delegates setwork rows to the cleaner that already handles them. */
+  function fillFromPrev(en, s) {
+    if (!en || !s) return;
+    if (isSetworkEntry(en)) { swFillFromPrev(en, s); return; }
+    if (!isLiftEntry(en) || !en.exerciseId || !draft) return;
+    if ((s.weightKg || 0) > 0 && (s.reps || 0) > 0) return;
+    const i = (en.sets || []).indexOf(s);
+    let src = targetSetOf(s);
+    if (!src) {
+      for (let j = i - 1; j >= 0; j--) {
+        const p = en.sets[j];
+        if ((p.weightKg || 0) > 0 || (p.reps || 0) > 0) { src = p; break; }
+      }
+      if (!src) src = hintSetOf(prevSetsFor(draft.userId, en.exerciseId), Math.max(0, i));
+    }
+    if (!src) return;
+    if (!((s.weightKg || 0) > 0)) s.weightKg = src.weightKg || 0;
+    if (!((s.reps || 0) > 0)) s.reps = src.reps || 0;
   }
 
   function swHintText(hs, rowShape) {
@@ -1255,8 +1292,23 @@
     if (st.kind === 'work') {
       const inp = row.querySelector('input[data-act="sw-hold"]');
       if (inp && st.mode === 'countdown') {
-        inp.value = fmtClock(st.boundary ? st.targetSec : st.remainSec);
-        inp.setAttribute('readonly', 'readonly');
+        // A pending boundary is a QUESTION ('record it or discard'), not a
+        // running clock: the addendum promises the user can adjust before
+        // confirming, so the row must stay typeable. Writing the formatted
+        // target into a locked field made the plan the only answer. Hand the
+        // field back to the SET (blank when nothing is recorded yet) instead
+        // of leaving the hijacked countdown text sitting in it as a fake
+        // answer — but never while the user has the caret in it.
+        if (st.boundary) {
+          inp.removeAttribute('readonly');
+          if (document.activeElement !== inp) {
+            const bs = sessSet(sessEntry(st.entryId), st.sid);
+            inp.value = bs && (bs.holdSec || 0) > 0 ? fmtClock(bs.holdSec) : '';
+          }
+        } else {
+          inp.value = fmtClock(st.remainSec);
+          inp.setAttribute('readonly', 'readonly');
+        }
       }
     }
   }
@@ -5429,6 +5481,11 @@
       out[k] = en[k];
     }
     out.id = en.id || U.uid('en');
+    // THE write boundary: a typed entry never carries sets. An empty array
+    // injected while the draft was live (by any past or future backfill, and
+    // by drafts already polluted on disk) is dropped here rather than copied
+    // verbatim into the stored workout.
+    if (Array.isArray(out.sets) && out.sets.length === 0) delete out.sets;
     if (out.type === 'cardio' && out.mode === 'circuit' && !((Number(out.rounds) || 0) > 0)) return null;
     return out;
   }
