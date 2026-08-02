@@ -159,11 +159,12 @@
     if (!draft) return;
     draftRev++;
     try { localStorage.setItem(DRAFT_KEY, JSON.stringify(draft)); } catch (e) { /* storage full */ }
-    if (reconciling) return;      // a reconcile that writes must not re-enter
+    // A reconcile that expires a timer WRITES, and that write must not
+    // re-enter this function — the localStorage line above still runs for it.
+    if (reconciling) return;
     reconciling = true;
     try {
-      Session.reconcile();        // retarget / orphan-check the running timer
-      const PS = playerSession(); // keep the focus view's projection in step
+      const PS = playerSession();  // retarget / orphan-check the running timer
       if (PS) { try { PS.reconcile(); } catch (e) { /* never break a save */ } }
     } finally {
       reconciling = false;
@@ -171,10 +172,12 @@
     notifySubscribers(draftRev);  // focus view repaints; the builder opts out
   }
 
-  /* js/player.js (loaded AFTER this file) hosts the focus presentation and a
-     mirror of this substrate. It delegates every driving verb to the engine
-     below whenever we expose it, so there is exactly one clock. Reference it
-     lazily and never require it. */
+  /* js/player.js (loaded AFTER this file) owns the ONE timing engine
+     (Player.Session) and the focus presentation. This file owns draft storage,
+     the builder DOM and the finish flow, and binds itself as the engine's
+     host: the engine reads and writes the session record only through these
+     accessors, which is what keeps it I/O-free and unit-testable in Node.
+     Reference it lazily and never require it. */
   let playerBound = false;
   function playerSession() {
     const P = window.Player;
@@ -188,18 +191,27 @@
           saveDraft: saveDraft,
           setDraft: function (d) { draft = d; },
           clearDraft: clearDraft,
-          rerender: function () { App.rerender(); }
+          rerender: function () { App.rerender(); },
+          // 'the ✓ would have filled this in' — the engine asks before it
+          // records a carry it stopped with nothing typed. It never measures
+          // distance or load itself.
+          prefill: swFillFromPrev
         });
+        S.subscribe(onSessionState);
       } catch (e) { /* an unbindable player just stays a no-op */ }
     }
     return S;
   }
 
   function clearDraft() {
+    const S = playerSession();
+    if (S) { try { S.cancel(); } catch (e) { /* nothing on the clock */ } }
     draft = null;
-    Session.cancel();
     stopRest();
     stopHold();
+    dismissPill();
+    clearRunningRow();
+    lastSessSig = 'idle';
     draftRev++;
     try { localStorage.removeItem(DRAFT_KEY); } catch (e) { /* ignore */ }
     notifySubscribers(draftRev);
@@ -438,6 +450,25 @@
       }
     }
     return prev[Math.min(i, prev.length - 1)];
+  }
+
+  /* P4.5 — the host's prefill hint, handed to Player.Session.bind(). Mirrors
+     the ✓ behavior: an untouched set accepts the values it would have been
+     prefilled with, so a carry stopped on the stopwatch still saves. The
+     engine never invents these — it asks, exactly once, at record time. */
+  function swFillFromPrev(en, s) {
+    if (!en || !s || swValidSet(s) || !draft) return;
+    const i = (en.sets || []).indexOf(s);
+    let src = null;
+    for (let j = i - 1; j >= 0; j--) {
+      if (swValidSet(en.sets[j])) { src = en.sets[j]; break; }
+    }
+    if (!src) src = swHintSetOf(en, prevSetworkFor(draft.userId, en.exerciseRef), i);
+    if (!src) return;
+    if ((src.distanceM || 0) > 0 && !((s.distanceM || 0) > 0)) s.distanceM = src.distanceM;
+    if ((src.weightKg || 0) > 0 && !((s.weightKg || 0) > 0)) s.weightKg = src.weightKg;
+    if ((src.reps || 0) > 0 && !((s.reps || 0) > 0)) s.reps = src.reps;
+    if ((src.holdSec || 0) > 0 && !((s.holdSec || 0) > 0)) s.holdSec = src.holdSec;
   }
 
   function swHintText(hs, rowShape) {
@@ -753,130 +784,82 @@
     d = d || draft;
     if (!d) return 'lift';
     if (PACE_KIND_DEFAULT[d._kind]) return d._kind;
+    const S = playerSession();
+    if (S) return S.kindOfDraft(d);
     const sw = (d.entries || []).filter(isSetworkEntry);
     if (!sw.length) return 'lift';
     return sw.every(swIsStretch) ? 'stretch' : 'durability';
   }
 
-  /* ---------- precedence (lowest -> highest) ----------
-     user.settings.pace[kind] -> routine.pace -> item.pace -> draft._pace
-       -> entry._pace -> the button just tapped (the caller passes opts.scope) */
-  function resolvePace(en, d) {
-    d = d || draft;
-    let p = paceSettingsOf(user())[draftKind(d)] || 'off';
-    const rt = d && d._routine;
-    if (rt && paceVal(rt.pace)) p = paceVal(rt.pace);
-    const it = routineItemFor(en, d);
-    if (it && paceVal(it.pace)) p = paceVal(it.pace);
-    if (d && paceVal(d._pace)) p = paceVal(d._pace);
-    if (en && paceVal(en._pace)) p = paceVal(en._pace);
-    return p;
-  }
+  /* ---------- pace / driver resolution: ONE authority ----------
+     Player.Session (js/player.js) owns the precedence chain
+       user.settings.pace[kind] -> routine.pace -> item.pace -> draft._pace
+         -> entry._pace -> the button just tapped,
+     the rest chain that mirrors it, the per-shape driver table and the tempo
+     prescription. The wrappers below keep the names the builder DOM and the
+     window.ViewsLog consumers already use and add NOTHING of their own. With
+     no player.js loaded (the Node smoke harness) they answer inert defaults,
+     so the builder still renders — it just cannot drive anything. */
 
-  function routineItemFor(en, d) {
-    const rt = d && d._routine;
-    if (!en || !rt || !rt.items || typeof rt.items !== 'object') return null;
-    const ref = en.exerciseRef || en.exerciseId;
-    return ref && rt.items[ref] && typeof rt.items[ref] === 'object' ? rt.items[ref] : null;
+  function resolvePace(en, d) {
+    const S = playerSession();
+    return S ? S.resolvePace(en || null, null, d || draft || undefined) : 'off';
   }
 
   function resolveCadence(d) {
-    d = d || draft;
-    if (d && typeof d._cadence === 'boolean') return d._cadence;
-    const rt = d && d._routine;
-    if (rt && typeof rt.cadence === 'boolean') return rt.cadence;
-    return cadenceSettingOf(user());
+    const S = playerSession();
+    return S ? !!S.resolveCadence(null, d || draft || undefined) : false;
   }
 
-  // Same precedence order as pace: settings -> routine -> item -> session
-  // sheet -> card override (highest).
   function resolveRestSec(en, d) {
-    d = d || draft;
-    if (en && Number(en._restSec) > 0) return Math.round(Number(en._restSec));
-    if (d && Number(d._restSec) > 0) return Math.round(Number(d._restSec));
-    const it = routineItemFor(en, d);
-    if (it && Number(it.restSec) > 0) return Math.round(Number(it.restSec));
-    const rt = d && d._routine;
-    if (rt && Number(rt.restSec) > 0) return Math.round(Number(rt.restSec));
-    return restSecSettingOf(user());
+    const S = playerSession();
+    return S ? S.restSecFor(en || null, d || draft || undefined) : restSecSettingOf(user());
   }
 
   /* Tempo is a PRESCRIPTION, never an observation: normalizeSet rebuilds every
      lift set to exactly {weightKg, reps, type, rpe} on this and every older
-     client, so a tempo can physically never be recorded on a set. It lives on
-     the routine item; the UI must never imply it was measured. */
+     client, so a tempo can physically never be recorded on a set. */
   function resolveTempo(en, d) {
-    d = d || draft;
-    if (en && typeof en._tempo === 'string' && en._tempo) return en._tempo;
-    const it = routineItemFor(en, d);
-    if (it && typeof it.tempo === 'string' && it.tempo) return it.tempo;
-    const rt = d && d._routine;
-    return rt && typeof rt.tempo === 'string' && rt.tempo ? rt.tempo : null;
-  }
-
-  function tempoSecPerRep(tempo) {
-    if (!tempo) return 0;
-    const parts = String(tempo).split(/[^0-9.]+/).filter(Boolean);
-    if (!parts.length) return 0;
-    let sum = 0;
-    for (let i = 0; i < parts.length; i++) {
-      const n = parseFloat(parts[i]);
-      if (isNaN(n) || n < 0) return 0;
-      sum += n;
-    }
-    return sum > 0 ? sum : 0;
+    const S = playerSession();
+    return S ? S.tempoOf(en || null, d || draft || undefined) : null;
   }
 
   /* ---------- per-shape set drivers ----------
      Governing rule: the app drives every step it can time deterministically;
-     the user triggers every step it cannot.
-       hold + static/pnf/loaded stretch -> countdown(target)
-       carry                            -> elapsed stopwatch (never auto-writes
-                                           distanceM/weightKg)
-       dynamic stretch (reps)           -> only with a tempo
-       weight_reps (lift)               -> never — nothing timeable, ✓ advances */
+     the user triggers every step it cannot. The table lives in Player.Session;
+     this maps its {driver,...} answer onto the 'countdown'|'stopwatch'|'tempo'
+     string the builder rows and the ViewsLog consumers read. */
   function driverFor(en, s, d) {
-    if (!isSetworkEntry(en) || !s) return null;
-    const shape = swRowShapeOf(en);
-    if (shape === 'hold') return 'countdown';
-    if (shape === 'carry') return 'stopwatch';
-    if (shape === 'reps' && tempoSecPerRep(resolveTempo(en, d)) > 0) return 'tempo';
-    return null;
+    const S = playerSession();
+    if (!S || !en || !s) return null;
+    const drv = S.driverFor(en, s, d || draft || undefined);
+    if (!drv) return null;
+    if (drv.driver === 'stopwatch') return 'stopwatch';
+    return drv.driver === 'metronome' ? 'tempo' : 'countdown';
   }
 
   function entryHasDriver(en) {
-    return (en.sets || []).some(function (s) { return !!driverFor(en, s); });
+    return ((en && en.sets) || []).some(function (s) { return !!driverFor(en, s); });
   }
 
-  function targetSecFor(en, s, i) {
-    const shape = swRowShapeOf(en);
-    const uid = draft ? draft.userId : null;
-    if (shape === 'hold') {
-      if ((s.holdSec || 0) > 0) return Math.round(s.holdSec);
-      const hs = uid ? swHintSetOf(en, prevSetworkFor(uid, en.exerciseRef), i) : null;
-      if (hs && (hs.holdSec || 0) > 0) return Math.round(hs.holdSec);
-      return DEFAULT_HOLD_SEC;
-    }
-    if (shape === 'reps') {
-      const per = tempoSecPerRep(resolveTempo(en));
-      let reps = Number(s.reps) || 0;
-      if (!reps) {
-        const hs = uid ? swHintSetOf(en, prevSetworkFor(uid, en.exerciseRef), i) : null;
-        reps = hs && hs.reps > 0 ? hs.reps : 8;
-      }
-      return Math.max(1, Math.round(reps * per));
-    }
-    return 0; // carry — open-ended stopwatch
+  function targetSecFor(en, s) {
+    const S = playerSession();
+    return S && en && s ? S.targetSecOf(en, s) : 0;
   }
 
   /* ======================================================================
-     Session — the single timer slot. Binds to (entryId, _sid) and writes
-     straight into the draft. Starting a second timer cancels the first.
+     Session — a FAÇADE over Player.Session (js/player.js), which owns the
+     app's one and only timer slot.
+
+     Nothing here holds session state: every verb forwards, and every read is a
+     projection of Player.Session.state(). The projection keeps the
+     {kind, mode, scope} snapshot shape the builder rows, the pill and the
+     P4.5 probes already read, and answers null when nothing is on the clock.
      ====================================================================== */
 
   const Session = {};
-  let T = null;             // running step, or null
   let liveRepaint = null;   // builder repaint hook (set by renderActiveDraft)
+  let lastSessSig = 'idle'; // what the builder last painted a session for
 
   function sessEntry(id) {
     if (!draft) return null;
@@ -895,214 +878,47 @@
     return -1;
   }
 
-  function elapsedSecOf() {
-    if (!T) return 0;
-    if (T.frozenMs !== null) return Math.max(0, T.frozenMs / 1000);
-    // a pause in progress freezes the clock where it stands
-    const end = T.pausedAt || Date.now();
-    return Math.max(0, (end - T.startedAt - T.pausedMs) / 1000);
-  }
-
-  function remainSecOf() {
-    if (!T || T.mode !== 'countdown') return 0;
-    return Math.max(0, T.targetSec - elapsedSecOf());
-  }
-
-  function firstPendingAnywhere() {
-    if (!draft) return null;
-    const es = draft.entries || [];
-    for (let j = 0; j < es.length; j++) {
-      const en = es[j];
-      const s = (en.sets || []).find(function (x) { return x && !x.done; });
-      if (s) return { en: en, s: s };
-    }
-    return null;
-  }
-
-  function nextPendingInEntry(en, sid) {
-    const list = (en && en.sets) || [];
-    const at = sessIndex(en, sid);
-    for (let i = at + 1; i < list.length; i++) if (list[i] && !list[i].done) return list[i];
-    return null;
-  }
-
-  function nextEntryWithWork(fromEntryId) {
-    if (!draft) return null;
-    const es = draft.entries || [];
-    const at = es.findIndex(function (x) { return x && x.id === fromEntryId; });
-    for (let j = at + 1; j < es.length; j++) {
-      const en = es[j];
-      const s = (en.sets || []).find(function (x) { return x && !x.done && driverFor(en, x); });
-      if (s) return { en: en, s: s };
-    }
-    return null;
-  }
-
-  // The cursor is ADVISORY, never modal: editing any other row never moves it.
-  function setCursor(entryId, sid) {
-    if (!draft) return;
-    draft._active = { entryId: entryId, sid: sid };
-  }
-
-  function clearTimerSlot() {
-    if (T && T.iv) clearInterval(T.iv);
-    T = null;
-    clearRunningRow();
-    dismissPill();
-  }
-
-  function startStep(spec) {
-    stopRest();
-    stopHold();
-    if (T && T.iv) clearInterval(T.iv);
-    T = {
-      kind: spec.kind,                 // 'work' | 'rest'
-      entryId: spec.entryId,
-      sid: spec.sid,
-      mode: spec.mode,                 // 'countdown' | 'stopwatch'
-      targetSec: spec.targetSec || 0,
-      seenHold: spec.seenHold || 0,    // last target we read off the set
-      scope: spec.scope || 'set',
-      startedAt: Date.now(),
-      pausedMs: 0,
-      pausedAt: 0,
-      frozenMs: null,
-      boundary: false,
-      iv: null
+  // The running step, or null when the slot is free.
+  function sessionStep() {
+    const S = playerSession();
+    if (!S || !S.timer()) return null;
+    const st = S.state();
+    if (!st || (!st.running && !st.boundary)) return null;
+    return {
+      kind: st.phase === 'rest' ? 'rest' : 'work',
+      entryId: st.entryId,
+      sid: st.sid,
+      mode: st.driver === 'stopwatch' ? 'stopwatch' : 'countdown',
+      scope: st.chain || 'set',
+      targetSec: st.targetSec,
+      boundary: !!st.boundary,
+      paused: !!st.paused,
+      elapsedSec: st.elapsedSec,
+      remainSec: st.remainSec
     };
-    T.iv = setInterval(tickStep, 250);
-    buildPill();
-    tickStep();
   }
 
-  function tickStep() {
-    if (!T) return;
-    if (T.pausedAt) { paintStep(); return; }
-    if (T.mode === 'countdown' && remainSecOf() <= 0) {
-      if (T.boundary) { paintStep(); return; }
-      if (document.hidden) {
-        // Backgrounded/expired while hidden: mark a boundary, record nothing
-        // silently — on return the pill shows what expired for confirmation.
-        T.boundary = true;
-        T.frozenMs = T.targetSec * 1000;
-        paintStep();
-        return;
-      }
-      if (T.kind === 'rest') { advanceFromRest(); return; }
-      completeStep();
-      return;
-    }
-    paintStep();
-  }
+  Session.state = sessionStep;
+  Session.isRunning = function () { return !!sessionStep(); };
 
-  // BINDING (P4.5): holdSec is ALWAYS the seconds actually held — an early
-  // stop records the short time, overtime records the long one. This is the
-  // one rule, in every path (builder, focus, sheet-level hold pill).
-  function recordWork(en, s, elapsedSec) {
-    const shape = swRowShapeOf(en);
-    if (shape === 'hold') {
-      s.holdSec = Math.max(1, Math.round(elapsedSec));
-    } else if (shape === 'reps') {
-      const per = tempoSecPerRep(resolveTempo(en));
-      if (per > 0) s.reps = Math.max(1, Math.round(elapsedSec / per));
-    } else if (shape === 'carry') {
-      swFillFromPrev(en, s);   // carries never auto-write distance/load
-    }
-    s.done = true;
-  }
-
-  // Mirrors the ✓ behavior: an untouched set accepts the values it would have
-  // been prefilled with, so a timed carry still saves.
-  function swFillFromPrev(en, s) {
-    if (swValidSet(s) || !draft) return;
-    const i = en.sets.indexOf(s);
-    let src = null;
-    for (let j = i - 1; j >= 0; j--) {
-      if (swValidSet(en.sets[j])) { src = en.sets[j]; break; }
-    }
-    if (!src) src = swHintSetOf(en, prevSetworkFor(draft.userId, en.exerciseRef), i);
-    if (!src) return;
-    if ((src.distanceM || 0) > 0 && !((s.distanceM || 0) > 0)) s.distanceM = src.distanceM;
-    if ((src.weightKg || 0) > 0 && !((s.weightKg || 0) > 0)) s.weightKg = src.weightKg;
-    if ((src.reps || 0) > 0 && !((s.reps || 0) > 0)) s.reps = src.reps;
-    if ((src.holdSec || 0) > 0 && !((s.holdSec || 0) > 0)) s.holdSec = src.holdSec;
-  }
-
-  function completeStep() {
-    if (!T || T.kind !== 'work') return;
-    const entryId = T.entryId;
-    const sid = T.sid;
-    const scope = T.scope;
-    const elapsed = elapsedSecOf();
-    const en = sessEntry(entryId);
-    const s = en ? sessSet(en, sid) : null;
-    clearTimerSlot();
-    if (!en || !s) { if (draft) saveDraft(); return; }
-    recordWork(en, s, elapsed);
-    setCursor(entryId, sid);
-    if (navigator.vibrate) { try { navigator.vibrate([180, 90, 180]); } catch (e) { /* ignore */ } }
-    saveDraft();
-    if (liveRepaint) liveRepaint();
-    if (scope === 'set') return;
-    const nxt = nextPendingInEntry(en, sid);
-    if (nxt) { beginRest(entryId, sidOf(nxt), scope); return; }
-    if (scope === 'session') {
-      const n2 = nextEntryWithWork(entryId);
-      if (n2) { beginRest(n2.en.id, sidOf(n2.s), scope); return; }
-    }
-    // no trailing rest after the last set of an entry
-    if (scope === 'exercise') App.toast('Exercise done', 'ok');
-  }
-
-  function beginRest(entryId, sid, scope) {
-    const en = sessEntry(entryId);
-    const sec = resolveRestSec(en);
-    setCursor(entryId, sid);
-    saveDraft();
-    if (liveRepaint) liveRepaint();
-    if (!(sec > 0)) { beginWork(entryId, sid, scope); return; }
-    startStep({ kind: 'rest', entryId: entryId, sid: sid, mode: 'countdown', targetSec: sec, scope: scope });
-  }
-
-  function advanceFromRest() {
-    if (!T || T.kind !== 'rest') return;
-    const entryId = T.entryId;
-    const sid = T.sid;
-    const scope = T.scope;
-    clearTimerSlot();
-    if (navigator.vibrate) { try { navigator.vibrate([120]); } catch (e) { /* ignore */ } }
-    beginWork(entryId, sid, scope);
-  }
-
-  function beginWork(entryId, sid, scope) {
-    const en = sessEntry(entryId);
-    const s = en ? sessSet(en, sid) : null;
-    if (!en || !s) { if (liveRepaint) liveRepaint(); return; }
-    const drv = driverFor(en, s);
-    setCursor(entryId, sid);
-    if (!drv) {
-      // nothing timeable here — hand back, the user taps ✓
-      saveDraft();
-      if (liveRepaint) liveRepaint();
-      return;
-    }
-    startStep({
-      kind: 'work', entryId: entryId, sid: sid,
-      mode: drv === 'stopwatch' ? 'stopwatch' : 'countdown',
-      targetSec: drv === 'stopwatch' ? 0 : targetSecFor(en, s, sessIndex(en, sid)),
-      seenHold: Number(s.holdSec) || 0,
-      scope: scope
-    });
-    saveDraft();
-    if (liveRepaint) liveRepaint();
-  }
-
-  /* ---------- public API (also consumed by the focus view) ---------- */
+  // Row-level state for renderers (builder rows, focus rows).
+  Session.rowState = function (entryId, sid) {
+    const st = sessionStep();
+    if (!st || st.entryId !== entryId || st.sid !== sid) return null;
+    const pct = st.mode === 'countdown' && st.targetSec > 0
+      ? U.clamp((st.elapsedSec / st.targetSec) * 100, 0, 100)
+      : 0;
+    return {
+      kind: st.kind, mode: st.mode, boundary: st.boundary, paused: st.paused,
+      remainSec: st.remainSec, elapsedSec: st.elapsedSec, pct: pct
+    };
+  };
 
   // Direct manipulation: tapping a set's NUMBER runs exactly that set, whatever
   // the resolved pace — the button just tapped wins for that one action.
   Session.runSet = function (entryId, sid, opts) {
-    if (!draft) return false;
+    const S = playerSession();
+    if (!S || !draft) return false;
     const en = sessEntry(entryId);
     const s = en ? sessSet(en, sid) : null;
     if (!en || !s) return false;
@@ -1111,109 +927,71 @@
       return false;
     }
     opts = opts || {};
-    let scope = paceVal(opts.scope) || resolvePace(en);
-    if (scope === 'off') scope = 'set';   // an explicit tap always drives that set
-    beginWork(entryId, sid, scope);
-    return true;
+    stopRest();
+    stopHold();
+    return S.runSet(entryId, sid, { pace: paceVal(opts.scope) || undefined }) !== false;
   };
 
   // Tapping a card's stopwatch runs that exercise (its sets + rests), then stops.
   Session.runEntry = function (entryId) {
-    if (!draft) return false;
+    const S = playerSession();
+    if (!S || !draft) return false;
     const en = sessEntry(entryId);
     if (!en) return false;
     const s = (en.sets || []).find(function (x) { return x && !x.done && driverFor(en, x); });
     if (!s) { App.toast('All sets are done', 'info'); return false; }
-    return Session.runSet(entryId, sidOf(s), { scope: 'exercise' });
+    stopRest();
+    stopHold();
+    return S.runExercise(entryId) !== false;
   };
 
   Session.runSession = function () {
-    if (!draft) return false;
-    const nx = (function () {
-      const es = draft.entries || [];
-      for (let j = 0; j < es.length; j++) {
-        const s = (es[j].sets || []).find(function (x) { return x && !x.done && driverFor(es[j], x); });
-        if (s) return { en: es[j], s: s };
-      }
-      return null;
-    })();
-    if (!nx) { App.toast('Nothing left to run', 'info'); return false; }
-    return Session.runSet(nx.en.id, sidOf(nx.s), { scope: 'session' });
+    const S = playerSession();
+    if (!S || !draft) return false;
+    const es = draft.entries || [];
+    let found = null;
+    for (let j = 0; j < es.length && !found; j++) {
+      found = (es[j].sets || []).find(function (x) { return x && !x.done && driverFor(es[j], x); }) || null;
+    }
+    if (!found) { App.toast('Nothing left to run', 'info'); return false; }
+    stopRest();
+    stopHold();
+    return S.runSession() !== false;
   };
 
   // Cancel cleanly: keep the session, record nothing for the running step.
   Session.cancel = function () {
-    if (!T) return;
-    clearTimerSlot();
-    if (draft) saveDraft();
-    if (liveRepaint) liveRepaint();
+    const S = playerSession();
+    if (S) S.cancel();
   };
 
   Session.doneNow = function () {
-    if (!T) return;
-    if (T.kind === 'rest') { advanceFromRest(); return; }
-    completeStep();
+    const S = playerSession();
+    const st = sessionStep();
+    if (!S || !st) return;
+    if (st.boundary) { S.confirmBoundary(); return; }
+    if (st.kind === 'rest') { S.skipRest(); return; }
+    S.done();
   };
 
   Session.skipRest = function () {
-    if (T && T.kind === 'rest') advanceFromRest();
+    const S = playerSession();
+    const st = sessionStep();
+    if (S && st && st.kind === 'rest') S.skipRest();
   };
 
   // ±15s adjusts the CURRENT step target only — it never writes back into the
   // set, so a user-typed target is never clobbered by the remote control.
   Session.adjust = function (deltaSec) {
-    if (!T || T.mode !== 'countdown') return;
-    T.targetSec = Math.max(5, Math.round(T.targetSec + deltaSec));
-    T.boundary = false;
-    T.frozenMs = null;
-    if (elapsedSecOf() >= T.targetSec) {
-      if (T.kind === 'rest') { advanceFromRest(); return; }
-      completeStep();
-      return;
-    }
-    paintStep();
+    const S = playerSession();
+    if (S) S.adjust(deltaSec);
   };
 
-  Session.pause = function () {
-    if (!T || T.pausedAt) return;
-    T.pausedAt = Date.now();
-    paintStep();
-  };
+  Session.pause = function () { const S = playerSession(); if (S) S.pause(); };
+  Session.resume = function () { const S = playerSession(); if (S) S.resume(); };
 
-  Session.resume = function () {
-    if (!T || !T.pausedAt) return;
-    T.pausedMs += Date.now() - T.pausedAt;
-    T.pausedAt = 0;
-    paintStep();
-  };
-
-  Session.isRunning = function () { return !!T; };
-
-  Session.state = function () {
-    if (!T) return null;
-    return {
-      kind: T.kind, entryId: T.entryId, sid: T.sid, mode: T.mode,
-      scope: T.scope, targetSec: T.targetSec, boundary: T.boundary,
-      paused: !!T.pausedAt,
-      elapsedSec: Math.round(elapsedSecOf()),
-      remainSec: Math.round(remainSecOf())
-    };
-  };
-
-  // Row-level state for renderers (builder rows, focus rows).
-  Session.rowState = function (entryId, sid) {
-    if (!T || T.entryId !== entryId || T.sid !== sid) return null;
-    const pct = T.mode === 'countdown' && T.targetSec > 0
-      ? U.clamp((elapsedSecOf() / T.targetSec) * 100, 0, 100)
-      : 0;
-    return {
-      kind: T.kind, mode: T.mode, boundary: T.boundary, paused: !!T.pausedAt,
-      remainSec: Math.round(remainSecOf()), elapsedSec: Math.round(elapsedSecOf()), pct: pct
-    };
-  };
-
-  /* Authoritative timer<->edit reconciliation. Runs inside saveDraft(), so
-     every draft mutation is covered:
+  /* Authoritative timer<->edit reconciliation lives in Player.Session and runs
+     inside saveDraft(), so every draft mutation is covered:
        - editing the RUNNING set's target retargets live, preserving elapsed
          (remain = newTarget - elapsed; already past => expire immediately)
        - deleting the running SET or its ENTRY cancels cleanly, records nothing
@@ -1221,30 +999,24 @@
        - reordering follows, because the binding is by _sid
        - the cursor is advisory: editing any other row never moves it */
   Session.reconcile = function () {
-    if (!T) return;
-    if (!draft) { clearTimerSlot(); return; }
-    const en = sessEntry(T.entryId);
-    const s = en ? sessSet(en, T.sid) : null;
-    if (!en || !s) {
-      clearTimerSlot();
-      const nx = firstPendingAnywhere();
-      if (nx) draft._active = { entryId: nx.en.id, sid: sidOf(nx.s) };
-      else delete draft._active;
-      if (liveRepaint) liveRepaint();
-      return;
-    }
-    if (T.kind === 'work' && T.mode === 'countdown' && swRowShapeOf(en) === 'hold') {
-      const h = Number(s.holdSec) || 0;
-      if (h > 0 && h !== T.seenHold) {
-        T.seenHold = h;
-        T.targetSec = h;
-        T.boundary = false;
-        T.frozenMs = null;
-        if (elapsedSecOf() >= h) { completeStep(); return; }
-      }
-    }
-    paintStep();
+    const S = playerSession();
+    if (S) S.reconcile();
   };
+
+  /* The engine publishes 'change' and 'tick'. The pill repaints on both (it is
+     a handful of text nodes); the BUILDER only repaints when the session
+     actually moved — a full repaint on every keystroke would eat the caret. */
+  function onSessionState() {
+    const st = sessionStep();
+    paintPill(st);
+    const ld = draft && draft._lastDone;
+    const sig = (st
+      ? st.kind + ':' + st.entryId + ':' + st.sid + (st.boundary ? 'b' : '') + (st.paused ? 'p' : '')
+      : 'idle') + '|' + (ld ? ld.sid + ':' + ld.at : '');
+    if (sig === lastSessSig) return;
+    lastSessSig = sig;
+    if (liveRepaint) liveRepaint();
+  }
 
   /* ---------- the timer pill: a remote control for whichever row owns it,
      however far the user has scrolled ---------- */
@@ -1284,56 +1056,60 @@
     document.body.appendChild(pill.el);
   }
 
-  function stepLabels() {
-    if (!T || !draft) return { l: '', r: '' };
-    const en = sessEntry(T.entryId);
+  // A rest is bound to the set it LEADS TO, so 'next' during a rest is the
+  // step the pill is already pointing at.
+  function stepLabels(st) {
+    if (!st || !draft) return { l: '', r: '' };
+    const en = sessEntry(st.entryId);
     if (!en) return { l: '', r: '' };
-    const i = sessIndex(en, T.sid);
+    const i = sessIndex(en, st.sid);
     const total = (en.sets || []).length;
     const name = exName(en.exerciseRef || en.exerciseId);
-    const s = sessSet(en, T.sid);
+    const s = sessSet(en, st.sid);
     const side = s && (s.side === 'L' || s.side === 'R') ? ' ' + s.side : '';
     const here = name + side + ' · set ' + (i + 1) + ' of ' + total;
+    if (st.kind === 'rest') return { l: 'Rest · next ' + here, r: '' };
     let next = '';
-    if (T.scope !== 'set') {
-      const sameEntry = nextPendingInEntry(en, T.sid);
-      const nx = sameEntry ||
-        (T.scope === 'session' ? (function () { const n = nextEntryWithWork(T.entryId); return n ? n.s : null; })() : null);
-      if (nx) {
-        const nSide = nx.side === 'L' || nx.side === 'R' ? ' ' + nx.side : '';
-        if (sameEntry) {
+    if (st.scope !== 'set') {
+      const S = playerSession();
+      const nx = S ? S.next(draft) : null;
+      const sameEntry = nx && nx.entryId === en.id;
+      if (nx && (sameEntry || st.scope === 'session')) {
+        const nSide = nx.set.side === 'L' || nx.set.side === 'R' ? ' ' + nx.set.side : '';
+        next = sameEntry
           // staying on this card — name the set, not the exercise again
-          next = 'Next: set ' + (sessIndex(en, nx._sid) + 1) + nSide;
-        } else {
-          const nEn = (draft.entries || []).find(function (x) { return (x.sets || []).indexOf(nx) >= 0; });
-          next = 'Next: ' + exName(nEn ? (nEn.exerciseRef || nEn.exerciseId) : '') + nSide;
-        }
+          ? 'Next: set ' + (sessIndex(en, nx.sid) + 1) + nSide
+          : 'Next: ' + exName(nx.entry.exerciseRef || nx.entry.exerciseId) + nSide;
       }
     }
-    if (T.kind === 'rest') return { l: 'Rest · next ' + here, r: '' };
     return { l: here, r: next };
   }
 
-  function paintStep() {
-    if (!T) return;
-    if (!pill.el) buildPill();
-    const secs = T.mode === 'countdown' ? remainSecOf() : elapsedSecOf();
-    const rest = T.kind === 'rest';
-    pill.el.classList.toggle('is-rest', rest);
-    pill.el.classList.toggle('is-boundary', !!T.boundary);
-    pill.timeEl.textContent = fmtClock(T.boundary ? T.targetSec : Math.ceil(secs));
-    const pct = T.mode === 'countdown' && T.targetSec > 0
-      ? U.clamp((remainSecOf() / T.targetSec) * 100, 0, 100) : 100;
+  function paintPill(st) {
+    if (!st) {
+      if (pill.el) dismissPill();
+      clearRunningRow();
+      return;
+    }
+    // one pill at a time — the advisory rest / sheet hold pills share the slot
+    if (!pill.el) { stopRest(); stopHold(); buildPill(); }
+    const secs = st.mode === 'countdown' ? st.remainSec : st.elapsedSec;
+    const resting = st.kind === 'rest';
+    pill.el.classList.toggle('is-rest', resting);
+    pill.el.classList.toggle('is-boundary', st.boundary);
+    pill.timeEl.textContent = fmtClock(st.boundary ? st.targetSec : Math.ceil(secs));
+    const pct = st.mode === 'countdown' && st.targetSec > 0
+      ? U.clamp((st.remainSec / st.targetSec) * 100, 0, 100) : 100;
     pill.fillEl.style.width = pct + '%';
-    if (pill.doneEl) pill.doneEl.textContent = rest ? 'Skip rest' : (T.boundary ? 'Record it' : 'Done');
-    const lab = stepLabels();
-    pill.labelEl.textContent = T.boundary
+    if (pill.doneEl) pill.doneEl.textContent = resting ? 'Skip rest' : (st.boundary ? 'Record it' : 'Done');
+    const lab = stepLabels(st);
+    pill.labelEl.textContent = st.boundary
       ? 'Ended while the screen was off — record it or discard'
-      : (T.pausedAt ? 'Paused · ' + lab.l : lab.l);
+      : (st.paused ? 'Paused · ' + lab.l : lab.l);
     pill.nextEl.textContent = lab.r;
-    if (resolveCadence() && !rest && !T.boundary) pill.el.classList.add('has-cadence');
+    if (resolveCadence() && !resting && !st.boundary) pill.el.classList.add('has-cadence');
     else pill.el.classList.remove('has-cadence');
-    paintRunningRow();
+    paintRunningRow(st);
   }
 
   function clearRunningRow() {
@@ -1346,11 +1122,11 @@
     });
   }
 
-  function paintRunningRow() {
-    if (!T) return;
+  function paintRunningRow(st) {
+    if (!st) return;
     const root = document.getElementById('lg-entries');
     if (!root) return;
-    const row = root.querySelector('.set-row[data-sid="' + T.sid + '"]');
+    const row = root.querySelector('.set-row[data-sid="' + st.sid + '"]');
     U.$$('.set-row.running', root).forEach(function (r) {
       if (r !== row) {
         r.classList.remove('running', 'resting');
@@ -1360,26 +1136,26 @@
     });
     if (!row) return;
     row.classList.add('running');
-    row.classList.toggle('resting', T.kind === 'rest');
+    row.classList.toggle('resting', st.kind === 'rest');
     let prog = row.querySelector('.sess-prog');
     if (!prog) {
       prog = U.el('<span class="sess-prog" aria-hidden="true"><i></i></span>');
       row.appendChild(prog);
     }
-    const pct = T.mode === 'countdown' && T.targetSec > 0
-      ? U.clamp((elapsedSecOf() / T.targetSec) * 100, 0, 100) : 0;
+    const pct = st.mode === 'countdown' && st.targetSec > 0
+      ? U.clamp((st.elapsedSec / st.targetSec) * 100, 0, 100) : 0;
     prog.firstChild.style.width = pct + '%';
-    if (T.kind === 'work') {
+    if (st.kind === 'work') {
       const inp = row.querySelector('input[data-act="sw-hold"]');
-      if (inp && T.mode === 'countdown') {
-        inp.value = fmtClock(T.boundary ? T.targetSec : Math.ceil(remainSecOf()));
+      if (inp && st.mode === 'countdown') {
+        inp.value = fmtClock(st.boundary ? st.targetSec : st.remainSec);
         inp.setAttribute('readonly', 'readonly');
       }
     }
   }
 
   document.addEventListener('visibilitychange', function () {
-    if (!document.hidden && T) paintStep();
+    if (!document.hidden) onSessionState();
   });
 
   /* ======================================================================
@@ -1529,6 +1305,10 @@
     try { localStorage.removeItem('ironlog/activeSession'); } catch (e) { /* ignore */ }
   }
 
+  // The renderer's PORT: what Player.renderFocus(container, live) is handed.
+  // Storage and DOM verbs are this file's; every timing member below is a
+  // delegate to Player.Session, so the focus view and the builder drive the
+  // same clock through the same choke point.
   function liveSessionApi() {
     return {
       draft: draft,
@@ -5417,6 +5197,7 @@
     startElapsedTicker();
     // the draft object was re-read by renderLog — re-bind the pill/row paint
     if (Session.isRunning()) Session.reconcile();
+    onSessionState();
   }
 
   /* ---------- state C: finish flow ---------- */
@@ -6276,10 +6057,11 @@
   window.ViewsLog = {
     openExercisePicker: openExercisePicker,
     openSessionCheckin: openSessionCheckin,
-    // P4.5 — the live-session substrate. ONE session record: the draft. The
-    // focus view (js/player.js) renders and mutates through this API, so every
-    // change lands in the same saveDraft() reconcile choke point the builder
-    // uses. There is no second copy of the session anywhere.
+    // P4.5 — the live-session substrate. ONE session record: the draft, and
+    // ONE timing engine: Player.Session. The focus view renders and mutates
+    // through this API, so every change lands in the same saveDraft()
+    // reconcile choke point the builder uses. `Session` below is the façade
+    // over Player.Session, kept for the snapshot shape older callers read.
     live: liveSessionApi,
     getDraft: function () { return draft; },
     saveDraft: saveDraft,
@@ -6307,7 +6089,4 @@
     PACE_KIND_DEFAULT: PACE_KIND_DEFAULT
   };
 
-  // Convenient global alias so the contract's `Session.reconcile()` reads
-  // literally; views-log.js loads first, so this is always the live engine.
-  if (!window.Session) window.Session = Session;
 })();

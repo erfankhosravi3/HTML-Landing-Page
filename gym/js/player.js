@@ -8,6 +8,13 @@
    private save path) is DELETED — a stale key left by a shipped P3.5 client is
    discarded on boot (Player.discardLegacySession, called from resumePending).
 
+   ONE ENGINE: Player.Session is the only timing engine in the app. views-log.js
+   owns draft STORAGE, the builder DOM and the finish flow, and binds itself as
+   this engine's host (bind({getDraft, saveDraft, setDraft, clearDraft,
+   rerender, prefill})); it holds no timer slot of its own. Because every piece
+   of I/O is injected, the engine is exercised end to end in Node
+   (scratchpad/test-session-core.js) with no browser at all.
+
    Player.compile survives ONLY as a derived projection, recomputed on demand
    for 'what's next' and time-left (Player.projectDraft). It is never stored.
 
@@ -35,6 +42,7 @@
   const DRAFT_KEY = 'ironlog/activeWorkout';
   const LEGACY_SESSION_KEY = 'ironlog/activeSession'; // P3.5 shadow state — DELETED
   const DEFAULT_HOLD_SEC = 30;
+  const DEFAULT_TEMPO_REPS = 8;   // a metronome row with nothing typed yet
   const DEFAULT_REST_SEC = 90;
   const METHODS = ['static', 'dynamic', 'pnf', 'loaded'];
   const KIND_DEFS = [
@@ -731,7 +739,7 @@
   const Session = {};
   Player.Session = Session;
 
-  const host = { getDraft: null, saveDraft: null, setDraft: null, clearDraft: null, rerender: null };
+  const host = { getDraft: null, saveDraft: null, setDraft: null, clearDraft: null, rerender: null, prefill: null };
   const subs = [];
   let cacheRaw = null;
   let cacheDraft = null;
@@ -751,46 +759,28 @@
     host.setDraft = typeof h.setDraft === 'function' ? h.setDraft : null;
     host.clearDraft = typeof h.clearDraft === 'function' ? h.clearDraft : null;
     host.rerender = typeof h.rerender === 'function' ? h.rerender : null;
+    // Optional: the host's "accept the values this row would have been
+    // prefilled with" hint, applied when a stopwatch-shaped set (a carry) is
+    // stopped with nothing typed. The engine never MEASURES distance or load —
+    // it only asks the host for what the builder's ✓ would have filled in.
+    host.prefill = typeof h.prefill === 'function' ? h.prefill : null;
     Player.discardLegacySession();
     return Session;
   };
 
   Session.unbind = function () {
     host.getDraft = host.saveDraft = host.setDraft = host.clearDraft = host.rerender = null;
+    host.prefill = null;
     cacheRaw = null;
     cacheDraft = null;
   };
 
-  /* ---------- external engine interop (single clock, always) ----------
-     views-log.js ships the same live-session engine as window.ViewsLog.Session
-     and renders this file's focus view through Player.renderFocus(container,
-     live). When that engine is present it OWNS the single timer slot — two
-     clocks driving one draft would be exactly the P3.5 bug again — so every
-     driving verb below delegates to it and the renderer reads its state
-     through the same normalized snapshot. With no host (Node tests, or a
-     views-log without the engine) the local engine runs instead. */
+  /* ---------- the host's other exports (never an engine) ----------
+     views-log.js owns draft STORAGE, the builder DOM and the finish flow; it
+     drives this engine and renders its state. There is exactly one timer slot
+     and it lives here. */
 
   function VLAPI() { return window.ViewsLog || null; }
-
-  function EXT() {
-    const VL = VLAPI();
-    const X = VL && VL.Session;
-    if (X && typeof X.runSet === 'function' && typeof X.state === 'function' &&
-        typeof X.reconcile === 'function') return X;
-    return null;
-  }
-
-  Session.external = function () { return !!EXT(); };
-
-  // Only pass a scope when the caller actually named one — otherwise the
-  // external engine resolves the pace chain itself (the tapped button wins
-  // for that one action, nothing else does).
-  function extScope(opts) {
-    opts = opts || {};
-    if (isPace(opts.scope)) return opts.scope;
-    if (isPace(opts.pace)) return opts.pace;
-    return undefined;
-  }
 
   /* ---------- draft IO ---------- */
 
@@ -857,9 +847,6 @@
     notify();
   };
 
-  // Persist a mutation. When views-log is bound its saveDraft() is the choke
-  // point and calls Session.reconcile() itself; the reentrancy guard keeps
-  // that from looping.
   // Persist a mutation. When the host owns the live object its saveDraft() is
   // THE choke point (it writes, reconciles and notifies). When it does not —
   // the log view has not rendered yet, so the host's own draft variable is
@@ -970,15 +957,23 @@
     return 'mixed';
   };
 
+  // Pace kind of the WHOLE draft (what the session chip and the defaults table
+  // key off). An explicit `_kind`, stamped by the entry sheets at seed time,
+  // wins over what the entries happen to look like.
   Session.kindOfDraft = function (d) {
     d = d || Session.draft();
+    if (d && PACE_DEFAULTS[d._kind] !== undefined) return d._kind;
     const kinds = [];
     ((d && d.entries) || []).forEach(function (en) {
       const k = Session.kindOfEntry(en);
       if (kinds.indexOf(k) < 0) kinds.push(k);
     });
     if (!kinds.length) return 'lift';
-    return kinds.length === 1 ? kinds[0] : 'mixed';
+    if (kinds.length === 1) return kinds[0];
+    // A routine that mixes lifts with one drivable kind is that kind: lifts
+    // have no driver, so they never contest the session default.
+    const driven = kinds.filter(function (k) { return k !== 'lift'; });
+    return driven.length === 1 ? driven[0] : 'mixed';
   };
 
   function paceSettings(u) {
@@ -1000,20 +995,30 @@
     return PACE_DEFAULTS[kind] || 'off';
   };
 
+  // The routine ITEM layer of the precedence chain. Both spellings are read:
+  // draftFromRoutine mirrors an item onto the entry ('_itemPace',
+  // '_itemRestSec', '_tempo'), and a draft seeded elsewhere may instead carry
+  // the routine's own item map at draft._routine.items[exerciseRef].
+  function routineItemOf(en, d) {
+    const rt = d && d._routine;
+    const items = rt && rt.items;
+    if (!en || !items || typeof items !== 'object' || Array.isArray(items)) return null;
+    const ref = en.exerciseRef || en.exerciseId;
+    const it = ref ? items[ref] : null;
+    return it && typeof it === 'object' ? it : null;
+  }
+
   // Precedence (lowest -> highest), binding:
   //   user.settings.pace[kind] -> routine.pace -> item.pace -> draft._pace
   //   -> entry._pace -> the button just tapped
   Session.resolvePace = function (entryOrId, action, d) {
     d = d || Session.draft();
     const en = typeof entryOrId === 'string' ? Session.entryOf(entryOrId, d) : entryOrId;
-    const VL = VLAPI();
-    if (EXT() && VL && typeof VL.resolvePace === 'function') {
-      const p0 = VL.resolvePace(en, d);
-      return isPace(action) ? action : (isPace(p0) ? p0 : 'off');
-    }
     const kind = en ? Session.kindOfEntry(en) : Session.kindOfDraft(d);
     let p = Session.defaultPaceFor(kind);
     if (d && d._routine && isPace(d._routine.pace)) p = d._routine.pace;
+    const item = routineItemOf(en, d);
+    if (item && isPace(item.pace)) p = item.pace;
     if (en && isPace(en._itemPace)) p = en._itemPace;
     if (d && isPace(d._pace)) p = d._pace;
     if (en && isPace(en._pace)) p = en._pace;
@@ -1024,11 +1029,10 @@
   // cadence — the tempo metronome INSIDE a timed set; orthogonal to pace.
   Session.resolveCadence = function (entryOrId, d) {
     d = d || Session.draft();
-    const VL0 = VLAPI();
-    if (EXT() && VL0 && typeof VL0.resolveCadence === 'function') return !!VL0.resolveCadence(d);
     const en = typeof entryOrId === 'string' ? Session.entryOf(entryOrId, d) : entryOrId;
     const u = user();
     let c = !!(u && u.settings && u.settings.cadence);
+    if (d && d._routine && typeof d._routine.cadence === 'boolean') c = d._routine.cadence;
     if (d && typeof d._cadence === 'boolean') c = d._cadence;
     if (en && typeof en._cadence === 'boolean') c = en._cadence;
     return c;
@@ -1040,7 +1044,9 @@
   Session.tempoOf = function (entryOrId, d) {
     d = d || Session.draft();
     const en = typeof entryOrId === 'string' ? Session.entryOf(entryOrId, d) : entryOrId;
-    const raw = (en && en._tempo) || (d && d._routine && d._routine.tempo) || null;
+    const item = routineItemOf(en, d);
+    const raw = (en && en._tempo) || (item && item.tempo) ||
+      (d && d._routine && d._routine.tempo) || null;
     return raw ? String(raw) : null;
   };
 
@@ -1060,16 +1066,14 @@
   Session.restSecFor = function (entryOrId, d) {
     d = d || Session.draft();
     const en = typeof entryOrId === 'string' ? Session.entryOf(entryOrId, d) : entryOrId;
-    const VL = VLAPI();
-    if (EXT() && VL && typeof VL.resolveRestSec === 'function') {
-      return Math.max(0, Math.round(num(VL.resolveRestSec(en, d))));
-    }
     const s = (user() || {}).settings || {};
     let sec = num(s.restSec) > 0 ? Math.round(num(s.restSec))
       : (num(s.restTimerSec) > 0 ? Math.round(num(s.restTimerSec)) : DEFAULT_REST_SEC);
     if (d && d._routine && d._routine.restSec !== undefined && d._routine.restSec !== null) {
       sec = Math.max(0, Math.round(num(d._routine.restSec)));
     }
+    const restItem = routineItemOf(en, d);
+    if (restItem && num(restItem.restSec) > 0) sec = Math.round(num(restItem.restSec));
     if (en && en._itemRestSec !== undefined && en._itemRestSec !== null) {
       sec = Math.max(0, Math.round(num(en._itemRestSec)));
     }
@@ -1149,12 +1153,6 @@
   // Target seconds for a hold-shaped set: its own value, else the nearest
   // filled value in the same entry, else 30s (P3 builder rule).
   Session.targetSecOf = function (en, set) {
-    const VL = VLAPI();
-    if (EXT() && VL && typeof VL.targetSecFor === 'function' && en && set) {
-      const i = (en.sets || []).indexOf(set);
-      const v = num(VL.targetSecFor(en, set, i < 0 ? 0 : i));
-      if (v > 0) return Math.round(v);
-    }
     if (num(set && set.holdSec) > 0) return Math.round(num(set.holdSec));
     const sets = (en && Array.isArray(en.sets)) ? en.sets : [];
     for (let i = 0; i < sets.length; i++) {
@@ -1172,27 +1170,17 @@
   Session.driverFor = function (en, set, d) {
     const shape = shapeOfEntry(en);
     if (!shape) return null;
-    const VL = VLAPI();
-    if (EXT() && VL && typeof VL.driverFor === 'function') {
-      const kind = VL.driverFor(en, set, d || Session.draft());
-      if (!kind) return null;
-      if (kind === 'stopwatch') return { driver: 'stopwatch', targetSec: 0 };
-      return {
-        driver: kind === 'tempo' ? 'metronome' : 'countdown',
-        targetSec: Session.targetSecOf(en, set),
-        autoReps: num(set && set.reps) > 0 ? Math.round(num(set.reps)) : 0
-      };
-    }
     if (shape === 'hold') {
       return { driver: 'countdown', targetSec: Session.targetSecOf(en, set) };
     }
     if (shape === 'carry') return { driver: 'stopwatch', targetSec: 0 };
+    // 'only with a tempo': the TEMPO is what makes a reps set timeable. The
+    // rep count is only how long it runs, so an unfilled row falls back to the
+    // nearest filled one in the same entry (the P3 builder rule) and then to 8.
     const perRep = Session.tempoSecPerRep(Session.tempoOf(en, d));
-    const reps = num(set && set.reps) > 0 ? Math.round(num(set.reps)) : 0;
-    if (perRep > 0 && reps > 0) {
-      return { driver: 'metronome', targetSec: Math.round(perRep * reps), autoReps: reps };
-    }
-    return null; // no driver — ✓ advances
+    if (!(perRep > 0)) return null; // no driver — ✓ advances
+    const reps = num(set && set.reps) > 0 ? Math.round(num(set.reps)) : ownRepsFallback(en);
+    return { driver: 'metronome', targetSec: Math.round(perRep * reps), autoReps: reps };
   };
 
   /* ---------- timer slot (single, bound to (entryId, _sid)) ---------- */
@@ -1202,8 +1190,6 @@
   Session.timer = function () { return timerOf(Session.draft()); };
 
   Session.isRunning = function () {
-    const X0 = EXT();
-    if (X0) { const x = X0.state(); return !!x && !x.boundary; }
     const t = timerOf(Session.draft());
     return !!t && !t.boundary;
   };
@@ -1252,7 +1238,6 @@
   }
 
   function armTimer(d, en, set, opts) {
-    if (EXT()) return null;   // the external engine owns the single timer slot
     opts = opts || {};
     const t = {
       entryId: en.id,
@@ -1344,11 +1329,6 @@
   // Tap a set's NUMBER -> run exactly that set, whatever the resolved pace.
   Session.runSet = function (entryId, sid, opts) {
     opts = opts || {};
-    const X0 = EXT();
-    if (X0) {
-      const sc = extScope(opts);
-      return X0.runSet(entryId, sid, sc ? { scope: sc } : {}) !== false;
-    }
     const d = Session.draft();
     if (!d) return false;
     Session.backfill(d);
@@ -1362,8 +1342,6 @@
   // Tap a card's STOPWATCH -> run that exercise (its sets + rests), then STOP.
   Session.runExercise = function (entryId, opts) {
     opts = opts || {};
-    const X0 = EXT();
-    if (X0 && typeof X0.runEntry === 'function') return X0.runEntry(entryId) !== false;
     const d = Session.draft();
     if (!d) return false;
     Session.backfill(d);
@@ -1374,8 +1352,6 @@
 
   Session.runSession = function (opts) {
     opts = opts || {};
-    const X0 = EXT();
-    if (X0 && typeof X0.runSession === 'function') return X0.runSession() !== false;
     const d = Session.draft();
     if (!d) return false;
     Session.backfill(d);
@@ -1424,6 +1400,14 @@
     return true;
   }
 
+  function ownRepsFallback(en) {
+    const sets = (en && Array.isArray(en.sets)) ? en.sets : [];
+    for (let i = 0; i < sets.length; i++) {
+      if (num(sets[i] && sets[i].reps) > 0) return Math.round(num(sets[i].reps));
+    }
+    return DEFAULT_TEMPO_REPS;
+  }
+
   // Only the running set's OWN typed target retargets it — editing a sibling
   // row must never move the running clock (nor the cursor).
   function ownTargetSec(set) {
@@ -1435,8 +1419,6 @@
   // −15s / +15s adjusts the CURRENT target; never below 5s total or 1s left.
   // Re-deriving from REAL elapsed keeps 'seconds actually held' honest.
   Session.adjust = function (deltaSec) {
-    const X0 = EXT();
-    if (X0) { X0.adjust(Math.round(num(deltaSec))); return true; }
     const d = Session.draft();
     const t = timerOf(d);
     if (!t || t.boundary || !(t.targetSec > 0)) return false;
@@ -1457,15 +1439,6 @@
   };
 
   function setPaused(want) {
-    const X0 = EXT();
-    if (X0) {
-      const x = X0.state();
-      if (!x) return false;
-      if (want && !x.paused) X0.pause();
-      else if (!want && x.paused) X0.resume();
-      else return false;
-      return true;
-    }
     const d = Session.draft();
     const t = timerOf(d);
     if (!t || t.boundary) return false;
@@ -1480,8 +1453,6 @@
   }
 
   Session.isPaused = function () {
-    const X0 = EXT();
-    if (X0) { const x = X0.state(); return !!(x && x.paused); }
     const t = timerOf(Session.draft());
     return !!(t && t.pausedAt);
   };
@@ -1489,8 +1460,6 @@
   // Cancel the timer cleanly: keep the session, record NOTHING for it.
   Session.cancel = function (opts) {
     opts = opts || {};
-    const X0 = EXT();
-    if (X0) { X0.cancel(); return true; }
     const d = Session.draft();
     if (!d) return false;
     const had = !!d._timer;
@@ -1505,8 +1474,6 @@
   // ONE RULE EVERYWHERE: holdSec is the seconds actually held; an early stop
   // records the short time and overtime records the long one.
   Session.done = function (vals) {
-    const X0 = EXT();
-    if (X0 && typeof X0.doneNow === 'function') { X0.doneNow(); return true; }
     const d = Session.draft();
     const t = timerOf(d);
     if (!d || !t) return false;
@@ -1519,11 +1486,6 @@
 
   // The builder's ✓ (or the focus 'Done' on an untimed set): record + chain.
   Session.completeSet = function (entryId, sid, vals) {
-    const X0 = EXT();
-    if (X0) {
-      const x = X0.state();
-      if (x && x.kind === 'work' && x.entryId === entryId && x.sid === sid) { X0.doneNow(); return true; }
-    }
     const d = Session.draft();
     if (!d) return false;
     const at = Session.findSet(entryId, sid, d);
@@ -1537,7 +1499,6 @@
   // Hook for the builder's own ✓ handler: it already wrote the values and
   // set.done — this only continues an armed chain (no-op when idle).
   Session.noteSetDone = function (entryId, sid) {
-    if (EXT()) return false;   // the external engine chains inside its own completeStep
     const d = Session.draft();
     if (!d) return false;
     const t = timerOf(d);
@@ -1572,6 +1533,12 @@
       if (num(vals.distanceM) > 0) set.distanceM = Math.round(num(vals.distanceM));
       if (num(vals.weightKg) > 0) set.weightKg = num(vals.weightKg);
       if (num(vals.intensity) > 0) set.intensity = U.clamp(Math.round(num(vals.intensity)), 1, 4);
+      // A carry is an elapsed stopwatch: the clock NEVER measures distance or
+      // load. Stopping one with nothing typed accepts exactly what the ✓ would
+      // have prefilled, via the host's hint (nothing is invented here).
+      if (shape === 'carry' && host.prefill) {
+        try { host.prefill(en, set); } catch (e) { /* a missing hint never blocks a save */ }
+      }
     } else {
       // lift set — exactly {weightKg, reps, type, rpe} survives to Store
       if (num(vals.reps) > 0) set.reps = Math.round(num(vals.reps));
@@ -1618,9 +1585,16 @@
     }
     setCursorRef(d, nx.entry.id, sidOf(nx.set));
     d._chain = { pace: chain, entryId: chain === 'exercise' ? en.id : nx.entry.id };
-    const restSec = Session.restSecFor(en, d);
+    // A rest is bound to the set it LEADS TO, not the one that just finished:
+    // the focus view reads the timer's binding as 'what is up next' (its
+    // next-up card and ring) and reads d._lastDone for 'what just finished'
+    // (the depth ask). Anchoring forward is also what makes deleting the
+    // upcoming set cancel the rest that exists only to precede it.
+    const restSec = Session.restSecFor(nx.entry, d);
     if (restSec > 0) {
-      armTimer(d, en, set, { phase: 'rest', driver: 'countdown', targetSec: restSec, armedTarget: restSec, chain: chain });
+      armTimer(d, nx.entry, nx.set, {
+        phase: 'rest', driver: 'countdown', targetSec: restSec, armedTarget: restSec, chain: chain
+      });
       cueRestStart();
       return;
     }
@@ -1682,8 +1656,6 @@
   }
 
   Session.skipRest = function () {
-    const X0 = EXT();
-    if (X0) { X0.skipRest(); return true; }
     const d = Session.draft();
     const t = timerOf(d);
     if (!t || t.phase !== 'rest') return false;
@@ -1795,17 +1767,6 @@
   }
 
   Session.boundary = function () {
-    const d0 = Session.draft();
-    const X0 = EXT();
-    if (X0) {
-      const x = X0.state();
-      if (!x || !x.boundary) return null;
-      const ref = Session.findSet(x.entryId, x.sid, d0);
-      return {
-        entryId: x.entryId, sid: x.sid, phase: x.kind, sec: x.targetSec,
-        exerciseId: ref ? entryExId(ref.entry) : null, expiredAt: 0
-      };
-    }
     const t = timerOf(Session.draft());
     if (!t || !t.boundary) return null;
     const d = Session.draft();
@@ -1823,8 +1784,6 @@
   // Confirm what expired while hidden (optionally with an adjusted actual).
   Session.confirmBoundary = function (opts) {
     opts = opts || {};
-    const X0 = EXT();
-    if (X0 && typeof X0.doneNow === 'function') { X0.doneNow(); return true; }
     const d = Session.draft();
     const t = timerOf(d);
     if (!t || !t.boundary) return false;
@@ -1836,8 +1795,6 @@
 
   // Throw away what expired while hidden — records nothing, keeps the session.
   Session.discardBoundary = function () {
-    const X0 = EXT();
-    if (X0) { X0.cancel(); return true; }
     const d = Session.draft();
     const t = timerOf(d);
     if (!t || !t.boundary) return false;
@@ -1862,8 +1819,6 @@
   */
 
   Session.reconcile = function () {
-    const X0 = EXT();
-    if (X0) { X0.reconcile(); notify(); return false; }
     if (reconciling) return false;
     const d = Session.draft();
     if (!d) { stopEngine(); return false; }
@@ -1953,24 +1908,6 @@
       cursor: (d && d._active) || null,
       lastDone: (d && d._lastDone) || null
     };
-    const X0 = EXT();
-    if (X0) {
-      const x = X0.state();
-      if (!x) return st;
-      st.running = !x.boundary;
-      st.phase = x.kind;
-      st.driver = x.mode === 'stopwatch' ? 'stopwatch' : 'countdown';
-      st.entryId = x.entryId;
-      st.sid = x.sid;
-      st.targetSec = x.targetSec;
-      st.elapsedSec = x.elapsedSec;
-      st.remainSec = x.remainSec;
-      st.paused = !!x.paused;
-      st.boundary = !!x.boundary;
-      st.chain = x.scope && x.scope !== 'set' ? x.scope : null;
-      st.frac = x.targetSec > 0 ? U.clamp(x.remainSec / x.targetSec, 0, 1) : 0;
-      return st;
-    }
     if (!t) return st;
     st.running = !t.boundary;
     st.phase = t.phase;
@@ -2392,8 +2329,8 @@
     if (paintIv) clearInterval(paintIv);
     // repaint() is signature-guarded: it only rebuilds the stage when the
     // screen actually changed and otherwise just moves the clock. Polling it
-    // keeps the focus view honest no matter which engine drives the session
-    // (some publish a draft revision before the next step is armed).
+    // keeps the overlay honest even when a repaint is triggered by a draft
+    // write that lands between two engine notifications.
     paintIv = setInterval(function () { repaint(); }, 250);
     if (!unsub) {
       const offA = Session.subscribe(function (st) {
@@ -2401,7 +2338,7 @@
         if (st.reason === 'tick') paintClock();
         else repaint();
       });
-      // the external engine publishes draft revisions instead
+      // views-log also publishes a draft revision on every write
       const VL = VLAPI();
       const offB = VL && typeof VL.subscribeDraft === 'function'
         ? VL.subscribeDraft(function () { if (root) repaint(); })
@@ -2887,10 +2824,9 @@
     paintClock();
   }
 
-  // The set a rest belongs to. The local engine anchors the rest timer on the
-  // set that just finished (d._lastDone); the views-log engine anchors it on
-  // the set the rest precedes — so fall back to the nearest done set before
-  // the cursor, which is the same row in both models.
+  // The set a rest belongs to. A rest is bound to the set it LEADS TO, so
+  // 'what just finished' comes from d._lastDone; the walk backwards from the
+  // cursor is the fallback for a rest that outlived its _lastDone record.
   function lastDoneRef(d, at) {
     if (d && d._lastDone) {
       const ref = Session.findSet(d._lastDone.entryId, d._lastDone.sid, d);
@@ -3512,9 +3448,13 @@
      Player.discardLegacySession()           removes a stale P3.5 key
      Player.resumePending() -> null          legacy shim (app.js boot)
 
-     Player.Session — the live substrate (see the section header above):
+     Player.Session — the live substrate, and the app's ONLY timing engine
+     (see the section header above):
        bind(host) / unbind()      host: {getDraft, saveDraft, setDraft?,
-                                  clearDraft?, rerender?}
+                                  clearDraft?, rerender?, prefill?}
+                                  prefill(entry, set): the host's '✓ would have
+                                  filled this in' hint, used when a carry's
+                                  stopwatch stops with nothing typed
        draft() setDraft(d) clearDraft() save()
        backfill(draft) -> bool    assign entry ids + set._sid (loadDraft hook)
        sidOf(set) entryOf(id) findSet(entryId, sid) firstPending(entryId?)
@@ -3547,16 +3487,22 @@
        tick(nowMs?) __setNow(fn)   test hooks
 
      views-log wiring (required for the two presentations to share one state):
-       1. loadDraft():  Player.Session.backfill(d)
+       1. loadDraft():  Player.Session.backfill(d), persisted straight back
        2. saveDraft():  ... localStorage.setItem(...); Player.Session.reconcile();
+                        behind a re-entrancy guard (a reconcile that expires a
+                        timer writes, and that write must not recurse)
        3. once:         Player.Session.bind({getDraft, saveDraft, setDraft,
-                                             clearDraft, rerender})
+                                             clearDraft, rerender, prefill})
        4. export:       window.ViewsLog.openFinishSheet (or .finish) — the
                         focus view's Finish hands off to the ONE finish flow
                         window.ViewsLog.startRestPill(sec) (advisory rest)
-       5. the ✓ handler calls Player.Session.noteSetDone(entryId, sid)
+       5. the builder's ✓ calls Player.Session.noteSetDone(entryId, sid);
+          a set NUMBER tap calls runSet, a card stopwatch calls runExercise,
+          and the timer pill's −15s/+15s/Done call adjust/done
        6. cleanSetworkEntry: prefer a set's OWN `intensity` over the entry aim
           so per-set depth captured live survives the save.
+       window.ViewsLog.Session is a thin façade over this object (it keeps the
+       {kind, mode, scope} snapshot shape older probes read); it owns nothing.
      ====================================================================== */
 
   window.Player = Player;
