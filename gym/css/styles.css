@@ -4215,3 +4215,370 @@ button.std-row:hover .std-name {
 .pace-defaults .v.tone-session {
   color: var(--accent);
 }
+
+/* =====================================================================
+   §12  AI COACH (P6)
+   Universal geometry, theme colour. Every colour below is a token — no
+   literal ever appears here, so the coach follows the user's palette like
+   everything else.
+   ===================================================================== */
+
+/* A chat wants its composer at the bottom of the screen, not trailing the
+   last message. The view fills the space it has and the thread takes up the
+   slack, so the bar sits low on a short conversation and sticks on a long
+   one. --tabbar-h is subtracted because .app already pads for the fixed
+   tabbar; without that the bar would pin underneath it. */
+.coach-view {
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100dvh - var(--topbar-h) - var(--tabbar-h) - env(safe-area-inset-bottom, 0px) - 24px);
+}
+@media (min-width: 768px) {
+  .coach-view {
+    min-height: calc(100dvh - var(--topbar-h) - 24px);
+  }
+}
+
+.coach-thread {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--row-gap);
+  padding-bottom: var(--sp-3);
+}
+
+.coach-empty {
+  text-align: center;
+  padding: var(--sp-5) var(--sp-3);
+  color: var(--text-2);
+}
+.coach-empty svg {
+  width: 40px;
+  height: 40px;
+  color: var(--text-muted);
+  margin-bottom: var(--sp-2);
+}
+/* The icon carries width/height attributes (app.js convention), so the empty
+   state has to override them rather than merely set a size. */
+.coach-empty svg { width: 40px !important; height: 40px !important; }
+.coach-empty p {
+  font-size: var(--fs-sm);
+  max-width: 34ch;
+  margin: 0 auto var(--sp-3);
+}
+.coach-seeds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  justify-content: center;
+}
+
+.coach-msg {
+  display: flex;
+}
+.coach-msg.me {
+  justify-content: flex-end;
+}
+.coach-msg.coach {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.cm-bubble {
+  border-radius: var(--radius);
+  padding: var(--sp-2) var(--sp-3);
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+  max-width: 88%;
+  overflow-wrap: anywhere;
+}
+.coach-msg.me .cm-bubble {
+  background: var(--accent-tint-strong);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+.coach-msg.coach .cm-bubble {
+  background: var(--card);
+  border: 1px solid var(--hairline);
+  color: var(--text);
+  max-width: 100%;
+}
+.cm-err {
+  color: var(--red);
+  display: inline-flex;
+  gap: 6px;
+  align-items: flex-start;
+}
+.cm-err svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  margin-top: 2px;
+}
+.cm-meta {
+  font-size: var(--fs-nano);
+  color: var(--text-muted);
+  font-family: var(--font-num);
+  margin-top: 4px;
+}
+
+/* the three-dot wait state */
+.cm-bubble.thinking {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  min-height: 34px;
+}
+.cm-bubble.thinking span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  animation: coach-blink 1.2s infinite ease-in-out;
+}
+.cm-bubble.thinking span:nth-child(2) { animation-delay: .18s; }
+.cm-bubble.thinking span:nth-child(3) { animation-delay: .36s; }
+@keyframes coach-blink {
+  0%, 60%, 100% { opacity: .28; }
+  30%           { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cm-bubble.thinking span { animation: none; opacity: .6; }
+}
+
+/* ---- the proposal card ---- */
+
+.coach-prop {
+  margin-top: var(--sp-2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--card-2);
+  padding: var(--card-pad);
+}
+/* Blocked by a guardrail: the whole card takes the stop colour, so there is
+   no reading of this card in which the block is subtle. */
+.coach-prop.blocked {
+  border-left-color: var(--red);
+  background: var(--red-tint);
+}
+
+.cp-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  margin-bottom: 6px;
+}
+.cp-kind {
+  font-size: var(--fs-nano);
+  letter-spacing: var(--label-track);
+  text-transform: uppercase;
+  font-weight: var(--fw-label);
+  color: var(--text-muted);
+}
+.cp-why {
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  margin: 0 0 var(--sp-3);
+}
+
+.cp-items {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cp-item {
+  display: flex;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  border: 1px solid var(--hairline);
+  opacity: .5;
+}
+.cp-item.on {
+  opacity: 1;
+  border-color: var(--border);
+}
+.cp-item.unresolved {
+  opacity: 1;
+  border-style: dashed;
+}
+.cp-body { flex: 1; min-width: 0; }
+
+.cp-tick {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  margin-top: 2px;
+  border-radius: var(--radius-xs);
+  border: 1.5px solid var(--border);
+  background: transparent;
+  color: var(--accent-ink);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+}
+.cp-item.on .cp-tick {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.cp-tick svg { width: 14px; height: 14px; }
+.cp-tick[disabled] { cursor: not-allowed; opacity: .4; }
+
+.cp-name {
+  font-weight: 600;
+  font-size: var(--fs-sm);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.cp-warn {
+  font-size: var(--fs-nano);
+  text-transform: uppercase;
+  letter-spacing: var(--label-track);
+  color: var(--orange);
+  border: 1px solid var(--orange);
+  border-radius: var(--radius-xs);
+  padding: 1px 5px;
+}
+.cp-note {
+  font-size: var(--fs-micro);
+  color: var(--text-2);
+  margin-top: 4px;
+}
+
+.cp-nums {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.cp-num {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--fs-nano);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: var(--label-track);
+}
+.cp-num input {
+  width: 58px;
+  padding: 4px 6px;
+  font-family: var(--font-num);
+  font-size: var(--fs-sm);
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+}
+.cp-num em {
+  font-style: normal;
+  color: var(--text-2);
+}
+
+.cp-flags {
+  margin-top: var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cp-flag {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  font-size: var(--fs-micro);
+  line-height: var(--lh-tight);
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+}
+.cp-flag svg { width: 15px; height: 15px; flex: none; margin-top: 1px; }
+.cp-flag.warn { background: var(--amber-tint); color: var(--orange); }
+.cp-flag.stop { background: var(--red-tint); color: var(--red); }
+
+.cp-blocked {
+  font-size: var(--fs-micro);
+  color: var(--red);
+  margin: 0 0 var(--sp-2);
+  flex-basis: 100%;
+}
+.cp-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}
+
+/* ---- a coach question ---- */
+
+.coach-q {
+  margin-top: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius);
+  background: var(--blue-tint);
+  border: 1px solid var(--border);
+}
+.cq-text {
+  font-size: var(--fs-sm);
+  color: var(--text);
+  margin-bottom: 8px;
+}
+.cq-row { display: flex; gap: 8px; }
+.cq-input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  font-size: var(--fs-sm);
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+/* ---- composer ---- */
+
+.coach-bar {
+  position: sticky;
+  /* clear of the fixed tabbar, which owns the true bottom of the viewport */
+  bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom, 0px));
+  background: var(--bg);
+  padding-top: var(--sp-2);
+  border-top: 1px solid var(--hairline);
+  margin-top: var(--sp-2);
+}
+@media (min-width: 768px) {
+  .coach-bar { bottom: 0; }
+}
+
+.coach-cost {
+  font-size: var(--fs-nano);
+  font-family: var(--font-num);
+  color: var(--text-2);
+  min-height: 14px;
+  margin-bottom: 6px;
+}
+.coach-compose {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: flex-end;
+}
+.coach-compose textarea {
+  flex: 1;
+  min-width: 0;
+  resize: none;
+  min-height: 42px;
+  max-height: 140px;
+  padding: 10px 12px;
+  font: inherit;
+  font-size: var(--fs-body);
+  color: var(--text);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}

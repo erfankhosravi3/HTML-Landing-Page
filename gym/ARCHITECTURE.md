@@ -1350,3 +1350,306 @@ markup, gating and layout stay byte-identical between themes.
 5. Markup invariance: the DOM outline of every view is byte-identical across all
    themes and unchanged from pre-P5, in both modes.
 6. A theme choice survives a sync round-trip through a P1-era client.
+
+# V2 ADDENDUM — P6: AI COACH
+
+User-approved, with two decisions taken verbatim from him:
+
+- **Context:** "Everything." The coach sees the whole log, every request.
+- **Powers:** "Propose, I approve, but it allows the optionality to use parts,
+  edit, other stuff like that." A proposal is an EDITABLE DRAFT, never a
+  yes/no.
+
+And one standing instruction from the phase that requested it: the coach may
+ask questions ("how did that feel?"), and its questions must make it smarter
+over time rather than evaporating into a chat log.
+
+## The spine of this phase (read this before writing any code)
+
+There is exactly one loop that makes the coach worth its price:
+
+    coach asks a question -> the user answers -> the answer is written to
+    coachJournal (source 'checkin') -> the next dossier contains it -> the
+    coach is permanently better informed
+
+Every other feature here is in service of that loop. A coach that only replies
+to prompts is a chatbot with a gym theme. `coachJournal` is not a nicety, it is
+the memory organ, and it already exists (P1) with the exact `source` enum this
+needs: `user` | `checkin` | `coach`.
+
+## Non-negotiable: the model has no write path
+
+**The model never writes to the Store.** It has no tools, no function calls
+that mutate, and no privileged channel. It returns a proposal object; the app
+validates it; the USER commits it. This is not a policy the prompt asks for —
+it is the shape of the code, and it is what makes every other safety claim in
+this addendum true rather than hopeful.
+
+Consequence worth stating: the dossier necessarily contains user-authored free
+text (workout notes, journal entries, custom exercise names). That text is
+DATA. Even if something in it is written to look like an instruction, there is
+nothing for it to instruct — no write path exists to subvert. The charter says
+so as well, but the architecture is what enforces it.
+
+## Guardrails are un-overridable (binding)
+
+**The model proposes. `Guardrails` disposes.**
+
+- Every proposal is run through `Guardrails.checkSession`,
+  `Guardrails.weeklyStatus`, `Guardrails.painFlags` and `LoadModel.status`
+  TWICE: once before it is rendered, and again at accept time (the log moves
+  between those two moments).
+- A proposal item that trips a red flag renders with the flag attached and
+  **cannot be accepted as-is**. It must be edited under the limit first. There
+  is no "accept anyway", no override toggle, no setting that unlocks one.
+- No system prompt, no user message, and no model output can weaken this. The
+  checks are deterministic functions run on the app side after the response
+  has already been received.
+- The coach is TOLD about the guardrails so it proposes inside them and can
+  explain them, but its compliance is never trusted — it is verified.
+
+Rationale: this app's founding promise is that a first session produces no
+scary warnings and an over-reaching session produces a real one, both by rule.
+A model that can talk its way past a rule turns every guardrail into a
+suggestion.
+
+## The key: on-device only (binding, and the repo is PUBLIC)
+
+Stored at localStorage key **`ironlog/coachKey`** — a separate key, NOT inside
+`state`. Three independent reasons, each of which is alone sufficient:
+
+1. `Store.exportJSON()` serialises `state` wholesale — a key inside `state`
+   would be written into every backup file the user shares.
+2. `Sync` pushes `state` to the family Firebase database — a key inside `state`
+   would be readable by every family member and by anyone who obtains the DB
+   URL.
+3. The repository is public, so nothing key-shaped may ever be committed.
+
+Therefore: never in `state`, never in `settings`, never in a workout, routine,
+or journal row, never in a URL, never in a log line, never in a toast, never in
+an error string, never in a screenshot, never in a commit. The only two places
+the key exists are the Settings field the user typed it into and the
+`x-api-key` header of a request to `https://api.anthropic.com`.
+
+- The API origin is **hardcoded**. There is no configurable base URL, so no
+  configuration mistake and no injected string can redirect the key elsewhere.
+- Displayed masked (`sk-ant-…` + last 4) with a Remove button. `Remove` is the
+  full path: clear the key, clear the in-memory copy, clear the thread if the
+  user asks.
+- "Erase everything" already sweeps every `ironlog*` localStorage key, so the
+  key is included in a full wipe. That is intended.
+- The key does NOT sync. Each device is keyed separately, on purpose.
+
+## New module: js/coach.js — namespace Coach
+
+Loaded after `applehealth.js`, before `app.js`. Split so the expensive part is
+testable without a browser:
+
+- **Pure (node-testable, no DOM, no network, no timers):** `Coach.dossier(...)`,
+  `Coach.charter(...)`, `Coach.validateProposal(...)`, `Coach.cost(usage)`,
+  `Coach.messagesFor(thread, delta)`.
+- **Impure:** `Coach.send(...)` (the single `fetch`), key IO, thread IO.
+
+No SDK. Plain `fetch`, consistent with the zero-dependency rule that has held
+since P0.
+
+## Wire format (binding — every item here is a 400 or a silent failure if wrong)
+
+    POST https://api.anthropic.com/v1/messages
+    x-api-key: <the user's key>
+    anthropic-version: 2023-06-01
+    content-type: application/json
+    anthropic-dangerous-direct-browser-access: true
+
+That last header is **required, not optional** — verified in Chromium against
+the live API, not assumed. Without it the preflight response carries no
+`Access-Control-Allow-Origin` and the browser blocks the request before it is
+sent; with it the request passes CORS normally. The service worker already
+ignores non-GET and cross-origin requests, so it never touches these calls, and
+`index.html` ships no CSP that would need a `connect-src` entry — but if one is
+ever added, `https://api.anthropic.com` must be in it.
+
+Body rules for `claude-opus-5`:
+
+- `model: 'claude-opus-5'`.
+- `thinking: {type: 'adaptive'}`. **`budget_tokens` is REJECTED with a 400 on
+  Opus 5** — never send it.
+- **Never send `temperature`, `top_p` or `top_k`** (400 on Opus 5).
+- **Never use an assistant prefill** (400). Constrain output with
+  `output_config: {format: {type: 'json_schema', schema}}` instead.
+- Stream whenever `max_tokens` exceeds ~16000, to avoid request timeouts.
+- **Check `stop_reason === 'refusal'` BEFORE reading `content`.** Reading
+  content first on a refusal is how you ship a crash.
+- 401 -> "that key was rejected", link to Settings. 429/529 -> exponential
+  backoff with a visible retry, never a silent hang. Any error surfaces
+  `error.type` plainly; no error message may ever interpolate the key.
+
+## Context: "Everything", and how it stays affordable
+
+The dossier is large by design. Prompt caching is what makes sending it on
+every message sane rather than ruinous, and caching is prefix-matched, so the
+cached block must be **byte-stable**.
+
+    system: [
+      { type: 'text', text: <charter> },
+      { type: 'text', text: <DOSSIER>, cache_control: {type:'ephemeral', ttl:'1h'} }
+    ]
+    messages: [ ...settled turns (2nd breakpoint on the last one)...,
+                { role:'user', content: <volatile delta + the new message> } ]
+
+Binding consequences:
+
+- The dossier is built ONCE and reused verbatim until the underlying data
+  actually changes (a workout saved, a journal entry added, a profile switch).
+  Rebuilding it per message changes bytes, misses the cache, and pays full
+  price for the whole log every single turn.
+- **Nothing volatile may appear inside a cached block.** No `Date.now()`, no
+  "3 days ago" phrasing, no floating-point that drifts, no unordered object
+  iteration. Serialise deterministically: fixed key order, rows sorted by date
+  then id, numbers rounded to fixed precision. Today's date, the live draft and
+  the just-logged set live AFTER the last breakpoint.
+- One breakpoint covers charter + dossier together. Opus 5 requires a minimum
+  512-token cacheable prefix, and the charter alone may fall under it; the
+  combined block never will. Max 4 breakpoints exist; this design uses 2.
+- **Verify, do not assume:** assert `usage.cache_read_input_tokens > 0` on the
+  second and subsequent requests of a session. A caching bug is invisible
+  except on the bill, so it must be asserted in tests and surfaced in the UI.
+
+### What the dossier contains
+
+Strictly ONE user's data (the current profile). Family rows never enter it —
+the leaderboard contributes at most a name-and-rank line, never another
+person's notes.
+
+- Profile: name, mode, units, goal preset, selection date and
+  `Protocols.phaseFor` phase, body metrics series.
+- Every workout: date, kind, duration, RPE, notes, and full set detail for
+  every entry type (`lift`, `setwork`, `cardio`, circuit, interval) using the
+  P3 field names — **`exerciseRef`, and sets that never carry a `type` key**.
+- Every pain-log row, every `coachJournal` row (all three sources), the health
+  sample summary, the user's routines and templates.
+- Derived state computed by the app's OWN deterministic engines and included
+  verbatim, so the coach reasons from the same numbers the app displays and
+  cannot arrive at a different answer: `Analytics.prs / streaks /
+  muscleWeeklySets / muscleRecovery / consistency`, `LoadModel.status / acwr /
+  greenWeek / restingHR / ruckEconomy`, `Guardrails.weeklyStatus / painFlags`,
+  `Protocols.trainingBest / currentBest / tiersFor / readiness`.
+
+**Truncation must be declared, never silent.** Full detail covers the recent
+window; older training is included as weekly rollups; PRs, pain and journal
+rows are included in full at any age because they are small and load-bearing.
+The dossier states its own boundary in-band ("full detail from <date>; earlier
+weeks are rolled up") so the coach knows what it cannot see instead of
+confabulating over the gap.
+
+## Proposals: an editable draft, never a yes/no
+
+Returned as validated structured output via `output_config.format`. The schema
+mirrors the shape the P4.5 builder already consumes — same field names, same
+units, same forbidden names.
+
+The proposal card renders as a working document:
+
+- **Per item: accept / skip.**
+- **Every number is editable inline before accepting** — sets, reps, weight,
+  hold seconds, distance, rest, intensity.
+- **Accept selected** seeds the existing `ironlog/activeWorkout` draft through
+  the same path `Player.start` uses. A coach-proposed session is structurally
+  byte-identical to a hand-built one. **P6 introduces no second session
+  concept** — P4.5's one-live-session rule holds without exception.
+- **Save as routine** writes to `routines`.
+- **Reject** writes nothing; the proposal remains in the thread as history.
+- Nothing is ever auto-applied. There is no mode in which the coach logs
+  anything on the user's behalf.
+
+Validation before render: every `exerciseRef` is resolved against
+`ExerciseDB`. An unresolvable reference becomes an editable free-text row with
+a visible "not in your library" marker — never silently dropped, never
+silently accepted.
+
+## New collection: coachChats (shim-protected)
+
+Added to `COLLECTIONS` and `DELETED_KEYS` with standard tombstones. Rows are
+`userId`-scoped like everything else, so the thread follows the user across
+devices, and P1–P5 clients preserve it untouched via the P0 forward-compat
+clause.
+
+Bounded on purpose: `state` is one localStorage blob pushed wholesale on sync,
+so an unbounded chat log would bloat every sync for every family member. Keep a
+capped recent window per user and roll older turns off. The dossier is NEVER
+stored — it is derived.
+
+## Check-ins
+
+After a session is saved the coach may hold ONE queued question. Answering it
+writes a `coachJournal` row with `source: 'checkin'`. Declining costs nothing
+and is never nagged. The structured schema carries an explicit optional
+`question` field so a question is machine-detectable rather than regex-scraped
+out of prose.
+
+## Cost is the user's money, so it is shown
+
+Every response's `usage` is recorded. The view shows the running session cost
+from the published Opus 5 rates ($5 / $25 per MTok, cache reads at 0.1x),
+labelled an estimate with an "as of" date, alongside how much caching saved.
+A user paying per token is entitled to see the meter.
+
+## Mode gate and empty states
+
+The Coach view is visible when **performance mode is on AND a key is set**, via
+a `visible()` predicate.
+
+The mode half of that is a deliberate reversal of the first draft of this
+section, which put the coach in both modes on the grounds that a family member
+might want coaching without wanting ACWR. The reasoning was fine and the
+engineering was not: the coach's central act is "propose a session, then run
+it", and the guided player it hands off to (`Player.start`) is performance-mode
+only. A simple-mode coach would be a coach that cannot do the main thing, bought
+at the price of a second accept path, a second charter, and a fresh chance to
+leak performance surfaces into simple mode — a bug this project has already
+shipped once. Performance mode is one toggle, and it is already the documented
+way every other intelligence surface unlocks.
+
+With no key, Settings explains what the coach does, what it costs, and where to
+get a key. Offline, the view renders the thread and queues the message. Neither
+state is ever a broken screen.
+
+## Acceptance tests (binding)
+
+1. The key never leaves the device except as an `x-api-key` header to the
+   hardcoded API origin: assert it is absent from `Store.exportJSON()`, from
+   the sync payload, from `state` in localStorage, and from every rendered
+   node; grep the repo for key-shaped strings in CI.
+2. `stop_reason === 'refusal'` is handled before `content` is read; a refusal
+   renders a message, not an exception.
+3. Prompt caching works: on the second request of a session,
+   `usage.cache_read_input_tokens > 0`, and the dossier bytes are identical to
+   the first request's given unchanged data.
+4. The dossier is deterministic: building it twice over the same state yields
+   byte-identical output, and it contains no timestamp, relative date or
+   unordered iteration.
+5. A guardrail-tripping proposal cannot be accepted whole through any UI path,
+   including "accept all"; editing it under the limit unblocks it.
+6. The model has no write path: with a stubbed transport returning an
+   adversarial response — including one whose text instructs the app to save
+   workouts, disable guardrails or reveal the key — the Store is unchanged and
+   the key is not read.
+7. Partial acceptance works: accepting 2 of 5 items with one edited number
+   seeds a draft containing exactly those 2 items with the edited value.
+8. An accepted proposal produces a draft structurally indistinguishable from a
+   hand-built one; no second session record is created and no `_`-prefixed key
+   is persisted.
+9. A coach question answered writes exactly one `coachJournal` row with
+   `source: 'checkin'`, and that row appears in the next dossier.
+10. No key, offline, 401, 429 and refusal each render a specific, actionable
+    state; none renders a blank screen, a hang, or a message containing the
+    key.
+11. Family safety: with no key set, every view's DOM outline is unchanged from
+    P5 in both modes, and a P6 `coachChats` collection survives a sync
+    round-trip through a P1-era client.
+
+## Release
+
+New files `js/coach.js` and `js/views-coach.js` must be added to `index.html`
+in load order AND to the `SHELL` array in `sw.js`, and `CACHE_NAME` bumped —
+otherwise installed PWAs serve the pre-coach app forever.

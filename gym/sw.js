@@ -3,10 +3,11 @@
    or installed PWAs keep serving the old cache forever. */
 'use strict';
 
-/* P5 (per-profile themes) changed css/styles.css, js/store.js and js/app.js —
-   all three are cached shell entries, so the name moves or installed PWAs
-   keep serving the pre-theme app forever. */
-const CACHE_NAME = 'ironlog-v2p7';
+/* P6 (AI coach) adds js/coach.js and js/views-coach.js to the shell and
+   changes styles.css, store.js and app.js. New shell entries are exactly the
+   case where a stale CACHE_NAME is fatal: the old cache has no record of the
+   new files, so an installed PWA would keep serving a coachless app forever. */
+const CACHE_NAME = 'ironlog-v2p8';
 
 const SHELL = [
   './',
@@ -23,12 +24,14 @@ const SHELL = [
   './js/charts.js',
   './js/musclemap.js',
   './js/applehealth.js',
+  './js/coach.js',
   './js/app.js',
   './js/views-log.js',
   './js/player.js',
   './js/views-library.js',
   './js/views-insights.js',
   './js/views-standards.js',
+  './js/views-coach.js',
   './manifest.webmanifest',
   './icons/icon.svg'
 ];

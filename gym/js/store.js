@@ -3,11 +3,11 @@
   'use strict';
 
   const KEY = 'ironlog/v1';
-  const COLLECTIONS = ['users', 'workouts', 'templates', 'bodyMetrics', 'healthSamples', 'customExercises', 'painLog', 'coachJournal', 'routines'];
+  const COLLECTIONS = ['users', 'workouts', 'templates', 'bodyMetrics', 'healthSamples', 'customExercises', 'painLog', 'coachJournal', 'routines', 'coachChats'];
   // Tombstone buckets. All but 'appleWorkouts' are keyed by entity id; that one
   // is keyed 'userId|appleId' so a deleted Apple Health import stays deleted
   // (a re-import would otherwise mint a brand-new workout id and resurrect it).
-  const DELETED_KEYS = ['workouts', 'templates', 'bodyMetrics', 'healthSamples', 'customExercises', 'users', 'painLog', 'coachJournal', 'routines', 'appleWorkouts'];
+  const DELETED_KEYS = ['workouts', 'templates', 'bodyMetrics', 'healthSamples', 'customExercises', 'users', 'painLog', 'coachJournal', 'routines', 'coachChats', 'appleWorkouts'];
   /* ---------- profile identity colours -----------------------------------
      Identity is keyed off the CVD-searched chart series --s1..--s6, which the
      palette deliberately keeps clear of the GO accent hue: an avatar ring must
@@ -323,6 +323,7 @@
       painLog: [],
       coachJournal: [],
       routines: [],
+      coachChats: [],
       deleted: emptyDeleted(),
       sync: { url: '', secret: '', enabled: false, lastSyncAt: null, deviceId: U.uid('dev') }
     };
@@ -555,7 +556,8 @@
       ['healthSamples', 'healthSamples'],
       ['painLog', 'painLog'],
       ['coachJournal', 'coachJournal'],
-      ['routines', 'routines']
+      ['routines', 'routines'],
+      ['coachChats', 'coachChats']
     ];
     for (const pair of cascade) {
       const coll = pair[0];
@@ -1472,6 +1474,110 @@
         if (a.date !== b.date) return a.date < b.date ? 1 : -1;
         return (b.createdAt || 0) - (a.createdAt || 0);
       });
+  };
+
+  /* ---------- coach chat (P6) ---------------------------------------------
+     The coach conversation, per user. NOT the dossier — that is derived on
+     demand and never stored.
+
+     BOUNDED ON PURPOSE. `state` is one localStorage blob that Sync pushes
+     wholesale, so an unbounded transcript would bloat every sync for every
+     family member on every save. Older turns roll off with real tombstones so
+     the trim replicates instead of resurrecting on the next pull.
+
+     THE KEY IS NOT HERE AND NEVER WILL BE. This collection is exported by
+     exportJSON and pushed to the shared family database; see the P6 addendum.
+     Rows carry text, an optional proposal, and token usage — nothing else. */
+  const CHAT_ROLES = ['user', 'assistant'];
+  const CHAT_CAP = 60;
+
+  function normalizeChat(m) {
+    const copy = shallowCopy(m);
+    copy.role = CHAT_ROLES.indexOf(copy.role) >= 0 ? copy.role : 'user';
+    copy.text = typeof copy.text === 'string' ? copy.text : '';
+    if (typeof copy.createdAt !== 'number') copy.createdAt = 0;
+    return copy;
+  }
+
+  Store.addChatMessage = function (m) {
+    ensureLoaded();
+    m = m || {};
+    const now = Date.now();
+    // Same monotonic rule as workouts: two messages saved inside one
+    // millisecond must not tie, or the transcript can reorder itself.
+    let createdAt = typeof m.createdAt === 'number' ? m.createdAt : now;
+    if (typeof m.createdAt !== 'number') {
+      for (let i = 0; i < state.coachChats.length; i++) {
+        const c = state.coachChats[i].createdAt || 0;
+        if (c >= createdAt) createdAt = c + 1;
+      }
+    }
+    const row = {
+      id: m.id || U.uid('cm'),
+      userId: m.userId || state.currentUserId,
+      role: CHAT_ROLES.indexOf(m.role) >= 0 ? m.role : 'user',
+      text: typeof m.text === 'string' ? m.text : '',
+      createdAt: createdAt,
+      updatedAt: now
+    };
+    if (m.proposal && typeof m.proposal === 'object') row.proposal = m.proposal;
+    if (m.usage && typeof m.usage === 'object') row.usage = m.usage;
+    if (typeof m.question === 'string' && m.question) row.question = m.question;
+    if (typeof m.error === 'string' && m.error) row.error = m.error;
+    state.coachChats.push(row);
+    trimChat(row.userId);
+    Store.save();
+    return row;
+  };
+
+  Store.updateChatMessage = function (id, patch) {
+    ensureLoaded();
+    const row = state.coachChats.find(function (x) { return x.id === id; });
+    if (!row) return null;
+    patch = patch || {};
+    for (const k in patch) {
+      if (k === 'id' || k === 'userId' || k === 'createdAt') continue;
+      row[k] = patch[k];
+    }
+    row.updatedAt = Date.now();
+    Store.save();
+    return row;
+  };
+
+  function trimChat(userId) {
+    const mine = state.coachChats
+      .filter(function (m) { return m.userId === userId; })
+      .sort(function (a, b) { return (a.createdAt || 0) - (b.createdAt || 0); });
+    if (mine.length <= CHAT_CAP) return;
+    const now = Date.now();
+    const drop = {};
+    for (let i = 0; i < mine.length - CHAT_CAP; i++) {
+      drop[mine[i].id] = true;
+      state.deleted.coachChats[mine[i].id] = now;
+    }
+    state.coachChats = state.coachChats.filter(function (m) { return !drop[m.id]; });
+  }
+
+  Store.chatFor = function (userId) {
+    ensureLoaded();
+    return state.coachChats
+      .filter(function (m) { return m.userId === userId; })
+      .map(normalizeChat)
+      .sort(function (a, b) { return (a.createdAt || 0) - (b.createdAt || 0); });
+  };
+
+  Store.clearChat = function (userId) {
+    ensureLoaded();
+    const now = Date.now();
+    let n = 0;
+    state.coachChats = state.coachChats.filter(function (m) {
+      if (m.userId !== userId) return true;
+      state.deleted.coachChats[m.id] = now;
+      n++;
+      return false;
+    });
+    if (n) Store.save();
+    return n;
   };
 
   /* ---------- backup: export / import ---------- */
