@@ -632,17 +632,26 @@
     if (!st || !st.perModality) return '';
 
     const chips = [];
+    let anyRatio = false;
     for (const mod of MODALITY_ORDER) {
       const row = st.perModality[mod];
       if (!row) continue;
+      if (typeof row.ratio === 'number' && isFinite(row.ratio)) anyRatio = true;
       if (!(row.acute > 0) && !(row.chronic > 0)) continue;
       chips.push(acwrChipHTML(mod, row));
     }
+    // A chip is emitted for any load at all, but a ratio only exists once a
+    // modality has an established four-week baseline. Without one there is no
+    // normal range to be inside of — say so instead of claiming steadiness.
     let line = st.headline;
     if (!line) {
-      line = chips.length
-        ? 'Steady — every modality is inside its four-week normal range.'
-        : 'No training load in the last four weeks. Log a session and today\'s guidance fills in.';
+      if (!chips.length) {
+        line = 'No training load in the last four weeks. Log a session and today\'s guidance fills in.';
+      } else if (anyRatio) {
+        line = 'Steady — every modality is inside its four-week normal range.';
+      } else {
+        line = 'Building your baseline — four weeks of history unlocks load guidance.';
+      }
     }
     let html = '<section class="card p4-today" data-p4="today">';
     html += '<div class="p4-eyebrow">Today</div>';
@@ -740,12 +749,23 @@
         'style="margin-top:8px">Import Apple Health</button></div>';
     }
 
+    // The 7-day window is a subset of the 28-day one, so a stale feed (rows
+    // 8-28 days old, none since) leaves sleep7 null while sleep28 is real.
+    // Differencing them there would coerce null to 0 and print the whole
+    // baseline as a fabricated deficit.
+    let sleepSub;
+    if (sleep28 === null) {
+      sleepSub = 'no sleep data yet';
+    } else if (sleep7 === null) {
+      sleepSub = '28-day ' + sleep28 + ' h · no nights logged in the last 7 days';
+    } else {
+      sleepSub = '28-day ' + sleep28 + ' h · ' + (sleep7 >= sleep28 ? '+' : '') +
+        U.round1(sleep7 - sleep28) + ' h';
+    }
     html += '<div class="p4-rec-cells">';
     html += recCellHTML('Sleep (7-day)',
       sleep7 === null ? '—' : U.esc(String(sleep7)) + '<span class="unit"> h</span>',
-      sleep28 === null ? 'no sleep data yet'
-        : '28-day ' + sleep28 + ' h · ' + (sleep7 >= sleep28 ? '+' : '') +
-          U.round1(sleep7 - sleep28) + ' h');
+      sleepSub);
     html += recCellHTML('Open niggles', String(openPain.length),
       openPain.length ? 'in the pain log' : 'nothing logged');
     html += recCellHTML('Rest day',
@@ -823,12 +843,17 @@
   // Clean 0..max tick ladder (1 / 2 / 5 x 10^n steps). The top tick always
   // sits at or above max — charts scale to it, so a short ladder would draw
   // bars and dots outside the plot.
-  function p4Ticks(max, count) {
+  // `integer` is opt-in from axes whose formatter rounds to whole numbers
+  // (counts, whole kg, anything through U.fmtNum): without it max<=2 yields a
+  // 0.5 step and two distinct gridlines collapse onto the same label
+  // (0,1,1,2,2). Axes with a decimal formatter leave it off.
+  function p4Ticks(max, count, integer) {
     if (!(max > 0)) return [0, 1];
     const raw = max / Math.max(1, count || 4);
     const mag = Math.pow(10, Math.floor(Math.log10(raw)));
     const n = raw / mag;
-    const step = (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * mag;
+    let step = (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * mag;
+    if (integer) step = Math.max(1, Math.round(step)); // ladder is 1/2/5x10^n, so this is a no-op above 1
     const hi = Math.ceil((max - step * 1e-9) / step) * step;
     const out = [];
     for (let i = 0; i * step <= hi + step * 1e-9; i++) {
@@ -852,7 +877,7 @@
 
   // Stacked (or single-series) column chart with an optional reference line.
   // opts: {groups:[{label, values:[{seriesLabel, value, color}]}], yFmt,
-  //        refLine, refLabel, note}
+  //        refLine, refLabel, note, integer}
   function p4Bars(el, opts) {
     if (!el) return;
     p4Responsive(el, function () {
@@ -869,7 +894,7 @@
       });
       if (!groups.length || maxV <= 0) { p4Empty(el, H, opts.note); return; }
 
-      const ticks = p4Ticks(maxV, 4);
+      const ticks = p4Ticks(maxV, 4, opts.integer);
       const yHi = ticks[ticks.length - 1];
       const W = p4Width(el);
       let tickW = 0;
@@ -903,12 +928,16 @@
           }
           const y0 = Y(acc);
           const y1 = Y(acc + v.value);
-          const gap = vi === vals.length - 1 ? 0 : 2; // 2px surface gap between segments
+          const top = vi === vals.length - 1;
+          const gap = top ? 0 : 2; // 2px surface gap between segments
           const h = Math.max(0, y0 - y1 - gap);
           if (h > 0.5) {
-            const top = vi === vals.length - 1;
-            g += '<path d="' + (top ? p4TopRect(cx - barW / 2, y1, barW, h, 4)
-              : 'M' + p4r(cx - barW / 2) + ',' + p4r(y1) + ' h' + p4r(barW) + ' v' + p4r(h) +
+            // The gap comes off the segment's TOP edge, so the space lands on
+            // the boundary with the segment above. Shrinking height alone would
+            // strand it at the bottom and float the whole stack off the axis.
+            const ry = y1 + gap;
+            g += '<path d="' + (top ? p4TopRect(cx - barW / 2, ry, barW, h, 4)
+              : 'M' + p4r(cx - barW / 2) + ',' + p4r(ry) + ' h' + p4r(barW) + ' v' + p4r(h) +
                 ' h' + p4r(-barW) + ' Z') +
               '" fill="' + v.color + '"><title>' + U.esc(grp.label + ' · ' + v.seriesLabel +
               ' ' + yFmt(v.value)) + '</title></path>';
@@ -937,7 +966,7 @@
   }
 
   // Scatter plot. opts: {points:[{x, y, label, recent}], xFmt, yFmt, xTitle,
-  //                      yTitle, color, mutedColor, note}
+  //                      yTitle, color, mutedColor, note, integer}
   function p4Scatter(el, opts) {
     if (!el) return;
     p4Responsive(el, function () {
@@ -961,7 +990,7 @@
       const yPad = (yMax - yMin) * 0.15;
       const yLo = Math.max(0, yMin - yPad);
       const yHi = yMax + yPad;
-      const xTicks = p4Ticks(xMax || 1, 4);
+      const xTicks = p4Ticks(xMax || 1, 4, opts.integer);
       const xHi = xTicks[xTicks.length - 1];
       const yTicks = [yLo, yLo + (yHi - yLo) / 2, yHi];
 
@@ -1138,10 +1167,18 @@
       load[mod] = { weeks: weeks, total: total, chronic: chronic };
     }
 
-    // The selected modality falls back to the first one with any load, so the
-    // card opens on something worth looking at instead of an empty chart.
+    // The card opens on the first modality with any load, so it starts on
+    // something worth looking at — but only until the user picks. Re-applying
+    // this on every render would revert an explicit tap on an untrained
+    // modality, leaving three of four segments dead. Once they choose we honour
+    // it and p4Bars shows the "No <modality> load…" note it already prepares.
+    if (aState.loadModUser !== u.id) {
+      aState.loadModUser = u.id;
+      aState.loadMod = 'run';
+      aState.loadModAuto = true;
+    }
     let mod = aState.loadMod;
-    if (!load[mod] || !(load[mod].total > 0)) {
+    if (aState.loadModAuto && (!load[mod] || !(load[mod].total > 0))) {
       mod = '';
       for (const m of MODALITY_ORDER) {
         if (load[m].total > 0) { mod = m; break; }
@@ -1149,6 +1186,7 @@
       if (!mod) mod = 'run';
       aState.loadMod = mod;
     }
+    if (!load[mod]) mod = 'run'; // stale/unknown key guard
 
     return {
       split: effortSplitWeeks(w, u, 12, today),
@@ -1223,13 +1261,17 @@
         groups: data.split.map(function (r) {
           return {
             label: U.fmtDate(r.weekStart),
+            // Two series, so the contract's in-order CVD-safe pair (s1 + s2).
+            // The old s1 + s5 green/pink read as one flat olive under
+            // deuteranopia, and neither segment carries a direct label.
             values: [
               { seriesLabel: 'Easy', value: r.easy, color: Charts.SERIES[0] },
-              { seriesLabel: 'Hard', value: r.hard, color: Charts.SERIES[4] }
+              { seriesLabel: 'Hard', value: r.hard, color: Charts.SERIES[1] }
             ]
           };
         }),
-        yFmt: function (v) { return String(Math.round(v)); }
+        yFmt: function (v) { return String(Math.round(v)); },
+        integer: true // session counts — never half a session on the axis
       });
     }
 
@@ -1250,6 +1292,7 @@
         }),
         xFmt: function (v) { return U.fmtNum(Math.round(v)); },
         yFmt: fmtMinSec,
+        integer: true, // whole kg/lb on the load axis — xFmt rounds
         xTitle: 'Pack load (' + unitLbl() + ')',
         yTitle: 'min ' + paceUnit,
         color: Charts.SERIES[1]
@@ -1291,6 +1334,10 @@
         refLine: modalityDisplay(mod, row.chronic),
         refLabel: '4-week average',
         yFmt: U.fmtNum,
+        // U.fmtNum rounds to whole numbers, so this axis is integral too: a
+        // light week (1.9 mi) would otherwise ladder in 0.5 steps and label
+        // five gridlines 0/1/1/2/2.
+        integer: true,
         note: 'No ' + MODALITY_LABEL[mod].toLowerCase() + ' load in the last 12 weeks'
       });
     }
@@ -1876,7 +1923,12 @@
      Analytics
      ====================================================================== */
 
-  const aState = { exId: null, range: '8w', metric: 'volume', prKind: 'all', loadMod: 'run' };
+  // loadModAuto: the weekly-load modality is still the auto-picked default, so
+  // the fallback may move it; a tap clears the flag and the choice sticks.
+  const aState = {
+    exId: null, range: '8w', metric: 'volume', prKind: 'all',
+    loadMod: 'run', loadModAuto: true, loadModUser: null
+  };
 
   App.registerView('analytics', {
     title: 'Analytics',
@@ -2146,6 +2198,7 @@
       const val = btn.getAttribute('data-seg-val');
       if (aState[key] === val) return;
       aState[key] = val;
+      if (key === 'loadMod') aState.loadModAuto = false; // explicit tap wins from here on
       App.rerender();
     });
     U.on(container, 'click', '[data-prkind]', function (e, chip) {

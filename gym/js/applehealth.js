@@ -87,12 +87,16 @@
 
   /* ---------- P4: HK workout -> typed cardio mapping ----------
      Only these activity types become cardio entries (the contract's list).
+     Walking maps to its own 'walk' mode: an Apple Watch records ordinary daily
+     walks prolifically, and walking kilometres are not running kilometres —
+     'walk' belongs to no LoadModel modality, so imported walks are logged and
+     visible but never move run load, run ACWR or the run-ramp advisory.
      Hiking defaults to 'run' (foot mileage) and only becomes a ruck behind the
      one per-import-session confirmation — a ruck without a load is a lie about
      the session, so it is never assumed. */
   const WORKOUT_MODES = {
     Running: 'run',
-    Walking: 'run',
+    Walking: 'walk',
     Hiking: 'run',
     Swimming: 'swim',
     Cycling: 'bike',
@@ -589,6 +593,8 @@
      untouched and so the UI can preview the plan before writing anything. */
 
   const DUP_REASON = 'duplicate';
+  const DUP_DETAIL = 'Already imported';
+  const DELETED_DETAIL = 'Deleted earlier — not re-imported';
   const OVERLAP_REASON = 'overlap';
   const OVERLAP_TOLERANCE = 0.25; // |duration delta| <= 25% counts as the same session
 
@@ -655,6 +661,12 @@
     for (const w of existing) {
       if (w && w.appleId) seen[String(w.appleId)] = true;
     }
+    // Deleting an imported session is a decision, not a hiccup: its appleId is
+    // tombstoned by the Store, so re-importing the same export never brings it
+    // back. Callers planning against a hypothetical store can pass their own map.
+    const tombstoned = (opts.deletedAppleIds && typeof opts.deletedAppleIds === 'object')
+      ? opts.deletedAppleIds
+      : ((Store && typeof Store.deletedAppleIds === 'function') ? Store.deletedAppleIds(userId) || {} : {});
 
     const items = [];
     const skipped = [];
@@ -670,7 +682,12 @@
       const id = String(r.appleId || '');
       if (id && seen[id]) {
         skipped.push({ date: r.date, name: r.name, durationMin: r.durationMin,
-          reason: DUP_REASON, detail: 'Already imported' });
+          reason: DUP_REASON, detail: DUP_DETAIL });
+        continue;
+      }
+      if (id && tombstoned[id]) {
+        skipped.push({ date: r.date, name: r.name, durationMin: r.durationMin,
+          reason: DUP_REASON, detail: DELETED_DETAIL });
         continue;
       }
       const clash = findClash(existing, r, mode);
@@ -698,6 +715,12 @@
     const Store = window.Store;
     if (!userId || !Store || !Store.addWorkout) return out;
 
+    // Build every session first, then hand the whole list to the Store: one
+    // persist for the import instead of two per session (a multi-year export is
+    // 1000+ sessions, and every persist re-serializes the entire state).
+    // appleId rides on the workout, not the entry, and addWorkout carries it in
+    // its fixed shape — no second write to patch it on.
+    const built = [];
     for (const it of plan.items) {
       const r = it.row;
       const dur = r.durationMin > 0 ? r.durationMin : 0;
@@ -706,7 +729,7 @@
       if (r.distanceKm > 0) entry.distanceKm = r.distanceKm;
       if (r.avgHR > 0) entry.avgHR = r.avgHR;
       if (r.maxHR > 0) entry.maxHR = r.maxHR;
-      const w = Store.addWorkout({
+      const w = {
         userId: userId,
         date: r.date,
         name: r.name || 'Workout',
@@ -715,11 +738,21 @@
         endedAt: typeof r.endedAt === 'number' ? r.endedAt : null,
         source: 'apple',
         entries: [entry]
-      });
-      // appleId rides on the workout, not the entry — Store.addWorkout builds a
-      // fixed shape, so it is patched on (updateWorkout copies unknown keys).
-      if (w && w.id && it.appleId && Store.updateWorkout) {
-        Store.updateWorkout(w.id, { appleId: it.appleId });
+      };
+      if (it.appleId) w.appleId = it.appleId;
+      built.push(w);
+    }
+    if (!built.length) return out;
+    if (typeof Store.addWorkouts === 'function') {
+      out.workoutsAdded = (Store.addWorkouts(built) || []).length;
+      return out;
+    }
+    // Older Store without the batch entry point: write one at a time, and only
+    // patch the appleId on when that Store's fixed shape dropped it.
+    for (const w of built) {
+      const saved = Store.addWorkout(w);
+      if (saved && saved.id && w.appleId && !saved.appleId && Store.updateWorkout) {
+        Store.updateWorkout(saved.id, { appleId: w.appleId });
       }
       out.workoutsAdded++;
     }

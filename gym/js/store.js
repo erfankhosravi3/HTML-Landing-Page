@@ -4,7 +4,10 @@
 
   const KEY = 'ironlog/v1';
   const COLLECTIONS = ['users', 'workouts', 'templates', 'bodyMetrics', 'healthSamples', 'customExercises', 'painLog', 'coachJournal', 'routines'];
-  const DELETED_KEYS = ['workouts', 'templates', 'bodyMetrics', 'healthSamples', 'customExercises', 'users', 'painLog', 'coachJournal', 'routines'];
+  // Tombstone buckets. All but 'appleWorkouts' are keyed by entity id; that one
+  // is keyed 'userId|appleId' so a deleted Apple Health import stays deleted
+  // (a re-import would otherwise mint a brand-new workout id and resurrect it).
+  const DELETED_KEYS = ['workouts', 'templates', 'bodyMetrics', 'healthSamples', 'customExercises', 'users', 'painLog', 'coachJournal', 'routines', 'appleWorkouts'];
   const SERIES = ['#2ca350', '#0a84ff', '#cf7c00', '#bf5af2', '#ff375f', '#3399cc'];
 
   const Store = {};
@@ -341,7 +344,11 @@
      sane coercion and passes any other keys through untouched, so data written
      by newer app versions survives a round trip through this one. ---- */
 
-  const CARDIO_MODES = ['run', 'ruck', 'swim', 'bike', 'row', 'stairs', 'circuit'];
+  // 'walk' is additive (P4): Apple Health imports ordinary daily walks, and a
+  // walk is foot mileage, not a run — it deliberately belongs to no LoadModel
+  // modality (run counts mode 'run' only; the engine bucket counts
+  // swim/bike/row/stairs/circuit), so walks never move run km or run ACWR.
+  const CARDIO_MODES = ['run', 'ruck', 'swim', 'bike', 'row', 'stairs', 'circuit', 'walk'];
   const CARDIO_EFFORTS = ['easy', 'moderate', 'hard'];
   const CARDIO_SURFACES = ['road', 'trail', 'track', 'treadmill', 'sand'];
   const CARDIO_FOOTWEAR = ['boots', 'trainers'];
@@ -570,24 +577,25 @@
 
   const WORKOUT_FEELS = ['easy', 'normal', 'hard', 'hurt'];
 
-  Store.addWorkout = function (w) {
-    ensureLoaded();
-    w = w || {};
-    const now = Date.now();
+  // Same-date ordering ties on createdAt, so two saves within one millisecond
+  // must never share a stamp — bump past the newest existing workout.
+  function nextCreatedAt(now) {
+    let createdAt = now;
+    for (let i = 0; i < state.workouts.length; i++) {
+      const c = state.workouts[i].createdAt || 0;
+      if (c >= createdAt) createdAt = c + 1;
+    }
+    return createdAt;
+  }
+
+  // The fixed workout shape, built but NOT stored — addWorkout and addWorkouts
+  // share it so a batch insert writes exactly what a single insert would.
+  function buildWorkout(w, now, createdAt) {
     const startedAt = typeof w.startedAt === 'number' ? w.startedAt : null;
     const endedAt = typeof w.endedAt === 'number' ? w.endedAt : null;
     let durationMin = typeof w.durationMin === 'number' ? w.durationMin : null;
     if (durationMin === null && startedAt !== null && endedAt !== null && endedAt > startedAt) {
       durationMin = Math.round((endedAt - startedAt) / 60000);
-    }
-    // Same-date ordering ties on createdAt, so two saves within one millisecond
-    // must never share a stamp — bump past the newest existing workout.
-    let createdAt = typeof w.createdAt === 'number' ? w.createdAt : now;
-    if (typeof w.createdAt !== 'number') {
-      for (let i = 0; i < state.workouts.length; i++) {
-        const c = state.workouts[i].createdAt || 0;
-        if (c >= createdAt) createdAt = c + 1;
-      }
     }
     const workout = {
       id: w.id || U.uid('w'),
@@ -608,12 +616,47 @@
     if (w.rpe !== undefined && w.rpe !== null && isFinite(Number(w.rpe))) workout.rpe = Number(w.rpe);
     if (WORKOUT_FEELS.indexOf(w.feel) >= 0) workout.feel = w.feel;
     if (typeof w.checkin === 'string' && w.checkin) workout.checkin = w.checkin;
+    // The Apple Health identity rides on the workout (never on an entry), so an
+    // import needs no second write to attach it.
+    if (typeof w.appleId === 'string' && w.appleId) workout.appleId = w.appleId;
     const kind = deriveKind(workout.entries);
     if (kind) workout.kind = kind;
     else if (typeof w.kind === 'string' && w.kind) workout.kind = w.kind;
+    return workout;
+  }
+
+  Store.addWorkout = function (w) {
+    ensureLoaded();
+    w = w || {};
+    const now = Date.now();
+    const createdAt = typeof w.createdAt === 'number' ? w.createdAt : nextCreatedAt(now);
+    const workout = buildWorkout(w, now, createdAt);
     state.workouts.push(workout);
     Store.save();
     return workout;
+  };
+
+  // Batch insert: identical rows to N addWorkout calls, but ONE persist for the
+  // whole list (the Apple Health import writes hundreds of sessions at once —
+  // per-row saves re-serialize the entire state every time). The createdAt
+  // high-water mark is computed once and carried, so the same-millisecond
+  // tie-break invariant still holds across the batch.
+  Store.addWorkouts = function (list) {
+    ensureLoaded();
+    if (!Array.isArray(list) || !list.length) return [];
+    const now = Date.now();
+    let stamp = nextCreatedAt(now);
+    const out = [];
+    for (const src of list) {
+      const w = src && typeof src === 'object' ? src : {};
+      const createdAt = typeof w.createdAt === 'number' ? w.createdAt : stamp;
+      const workout = buildWorkout(w, now, createdAt);
+      if (workout.createdAt >= stamp) stamp = workout.createdAt + 1;
+      state.workouts.push(workout);
+      out.push(workout);
+    }
+    Store.save();
+    return out;
   };
 
   Store.updateWorkout = function (id, patch) {
@@ -636,14 +679,43 @@
     return w;
   };
 
+  // Apple Health tombstone key — scoped to the user so one family member
+  // deleting an imported session never blocks another member's import.
+  function appleKey(userId, appleId) {
+    return String(userId || '') + '|' + String(appleId);
+  }
+
   Store.deleteWorkout = function (id) {
     ensureLoaded();
     const i = state.workouts.findIndex(function (x) { return x.id === id; });
     if (i < 0) return false;
+    const w = state.workouts[i];
+    const now = Date.now();
+    // A deleted import must stay deleted: the workout id is replaced on every
+    // re-import, so the Apple identity is tombstoned alongside it.
+    if (w && typeof w.appleId === 'string' && w.appleId) {
+      if (!state.deleted.appleWorkouts) state.deleted.appleWorkouts = {};
+      state.deleted.appleWorkouts[appleKey(w.userId, w.appleId)] = now;
+    }
     state.workouts.splice(i, 1);
-    state.deleted.workouts[id] = Date.now();
+    state.deleted.workouts[id] = now;
     Store.save();
     return true;
+  };
+
+  // { appleId: deletedAt } for one user — the import dedupe reads it so a
+  // session the user removed is never silently written back.
+  Store.deletedAppleIds = function (userId) {
+    ensureLoaded();
+    const src = state.deleted.appleWorkouts || {};
+    const prefix = String(userId || '') + '|';
+    const out = {};
+    for (const key in src) {
+      if (key.indexOf(prefix) !== 0) continue;
+      const t = Number(src[key]);
+      if (isFinite(t) && t > 0) out[key.slice(prefix.length)] = t;
+    }
+    return out;
   };
 
   Store.workoutsFor = function (userId) {

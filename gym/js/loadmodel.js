@@ -19,8 +19,16 @@
 
    ACWR: acute = the trailing 7-day sum ending today; chronic = the mean of the
    4 trailing 7-day windows ending today / -7 / -14 / -21 (i.e. the standard
-   rolling 28-day load ÷ 4, acute week included). ratio is null when chronic
-   sits under a per-modality floor (insufficient history — never divide by ~0).
+   rolling 28-day load ÷ 4, acute week included). ratio is null on insufficient
+   history — two independent gates, both must pass:
+     magnitude — chronic sits at or above a per-modality floor (never divide
+                 by ~0);
+     history   — at least 2 of the 4 trailing windows carry load, so there is
+                 a PRIOR week to compare the acute week against. Without it
+                 chronic is acute/4 by construction and the ratio is pinned at
+                 exactly 4.00, which would tell every brand-new user they are
+                 ramping 300% after one session. Same principle as
+                 Guardrails.checkSession: every comparison needs a baseline.
    Weeks start Monday (U.weekStart), like every other week window in the app. */
 (function () {
   'use strict';
@@ -36,6 +44,11 @@
   // noise, so acwr reports ratio null instead of a scare number. Units match
   // each modality (km, kg·mi, kg, min). Inclusive: chronic === floor computes.
   const FLOORS = { run: 5, ruck: 20, lift: 1000, other: 30 };
+
+  // History gate: how many of the 4 trailing 7-day windows must carry load
+  // before a ratio is published. 2 = the acute week plus at least one earlier
+  // week, i.e. the minimum needed for "compared to before" to mean anything.
+  const MIN_WEEKS_WITH_LOAD = 2;
 
   // Ratio zones, evaluated on the SAME 2-decimal ratio the object reports so a
   // chip and its number can never disagree:
@@ -62,6 +75,7 @@
   LoadModel.KM_PER_MILE = KM_PER_MILE;
   LoadModel.MODALITIES = MODALITIES;
   LoadModel.FLOORS = FLOORS;
+  LoadModel.MIN_WEEKS_WITH_LOAD = MIN_WEEKS_WITH_LOAD;
   LoadModel.ZONE_SEVERITY = SEVERITY;
   LoadModel.ZONE_LABELS = ZONE_LABELS;
   LoadModel.TIE_ORDER = TIE_ORDER;
@@ -145,21 +159,27 @@
   // { acute, chronic, ratio|null } for one modality as of todayStr (default
   // today). acute/chronic are rounded to 1 decimal and the ratio is derived
   // from those reported numbers, so the returned object is self-consistent and
-  // auditable by hand. ratio is null below the modality's chronic floor.
+  // auditable by hand. ratio is null on insufficient history: below the
+  // modality's chronic floor (magnitude), or with load in fewer than
+  // MIN_WEEKS_WITH_LOAD of the 4 trailing windows (no prior week to compare
+  // against — a single loaded window forces chronic to acute/4, i.e. 4.00).
   LoadModel.acwr = function (workouts, modality, todayStr) {
     const today = todayStr || U.todayStr();
     let sum = 0;
     let acuteRaw = 0;
+    let weeksWithLoad = 0;
     for (let k = 0; k < 4; k++) {
       const s = windowSum(workouts, modality, U.addDays(today, -6 - 7 * k), U.addDays(today, -7 * k));
       if (k === 0) acuteRaw = s;
+      if (s > 0) weeksWithLoad++;
       sum += s;
     }
     const acute = U.round1(acuteRaw);
     const chronic = U.round1(sum / 4);
     const floor = FLOORS[modality];
     let ratio = null;
-    if (typeof floor === 'number' && chronic >= floor && chronic > 0) {
+    if (typeof floor === 'number' && chronic >= floor && chronic > 0 &&
+      weeksWithLoad >= MIN_WEEKS_WITH_LOAD) {
       ratio = Math.round((acute / chronic) * 100) / 100;
     }
     return { acute: acute, chronic: chronic, ratio: ratio };
@@ -311,6 +331,11 @@
   // both); the view plots pace vs load. loadKg falls back total -> dry -> 0, so
   // an unloaded march still charts, at zero load. Rows date asc, ties by
   // createdAt asc (same deterministic order as Analytics).
+  // km and loadKg are round1 — wide display axes. minPerKm is NOT: the economy
+  // scatter's whole y-range for a real ruck block is ~40 s/mile, and 0.1 min/km
+  // buckets (6 s/km ≈ 9.7 s/mile) would collapse genuinely different sessions
+  // onto one y-value. 3 decimals only guards float noise (0.001 min/km =
+  // 0.06 s/km); the view formats through fmtMinSec, which rounds to the second.
   LoadModel.ruckEconomy = function (workouts) {
     const sorted = (workouts || []).slice().sort(function (a, b) {
       const ad = (a && a.date) || '';
@@ -330,7 +355,7 @@
           date: w.date,
           km: U.round1(km),
           loadKg: load === null ? 0 : U.round1(load),
-          minPerKm: U.round1(min / km)
+          minPerKm: Math.round((min / km) * 1000) / 1000
         });
       }
     }
