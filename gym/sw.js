@@ -3,11 +3,11 @@
    or installed PWAs keep serving the old cache forever. */
 'use strict';
 
-/* P6 (AI coach) adds js/coach.js and js/views-coach.js to the shell and
-   changes styles.css, store.js and app.js. New shell entries are exactly the
-   case where a stale CACHE_NAME is fatal: the old cache has no record of the
-   new files, so an installed PWA would keep serving a coachless app forever. */
-const CACHE_NAME = 'ironlog-v2p10';
+/* This release changes how updates themselves reach people: the worker no
+   longer skips waiting, and the page offers the handover instead of taking it
+   silently. It is also the LAST release the old auto-skipping worker installs
+   for you — from here on, an update announces itself. */
+const CACHE_NAME = 'ironlog-v2p11';
 
 const SHELL = [
   './',
@@ -36,12 +36,27 @@ const SHELL = [
   './icons/icon.svg'
 ];
 
+/* INSTALL DOES NOT SKIP WAITING, deliberately.
+
+   It used to. The effect was that a new worker activated the moment it
+   finished installing and deleted the old cache out from under a page that
+   was still running the OLD JavaScript — a mixed-version state the user could
+   neither see nor resolve, since nothing on screen changed until they fully
+   closed and reopened the app. That is how a shipped feature can be invisible
+   for days.
+
+   Now the new worker installs and WAITS. The page notices it waiting and
+   offers an update; the switch happens only when the user takes it, and then
+   the page reloads immediately, so old code and new cache never coexist. */
 self.addEventListener('install', function (event) {
   event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then(function (cache) { return cache.addAll(SHELL); })
-      .then(function () { return self.skipWaiting(); })
+    caches.open(CACHE_NAME).then(function (cache) { return cache.addAll(SHELL); })
   );
+});
+
+// The page asks for the handover once the user has accepted it.
+self.addEventListener('message', function (event) {
+  if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting();
 });
 
 self.addEventListener('activate', function (event) {
