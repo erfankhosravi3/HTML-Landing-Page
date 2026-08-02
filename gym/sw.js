@@ -5,7 +5,7 @@
 
 /* Coach replies now stream, so js/coach.js, js/views-coach.js and
    css/styles.css all changed. */
-const CACHE_NAME = 'ironlog-v2p12';
+const CACHE_NAME = 'ironlog-v2p13';
 
 const SHELL = [
   './',

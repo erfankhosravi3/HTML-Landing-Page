@@ -443,10 +443,48 @@
     return state;
   };
 
+  /* ---------- save health ------------------------------------------------
+     A failed write used to be swallowed in silence. Keeping the in-memory app
+     alive is right — losing the session you are mid-way through would be
+     worse — but silence is not. The screen showed the workout, the disk did
+     not have it, and the user found out by closing the app.
+
+     So the failure is now reported. The Store does not own any UI, so it
+     raises a signal and app.js decides what to say. */
+  let saveBroken = false;
+  const saveWatchers = [];
+
+  Store.onSaveError = function (fn) {
+    saveWatchers.push(fn);
+    // Late subscribers still learn about a failure that already happened.
+    if (saveBroken) { try { fn(true); } catch (e) { /* ignore */ } }
+    return function () {
+      const i = saveWatchers.indexOf(fn);
+      if (i >= 0) saveWatchers.splice(i, 1);
+    };
+  };
+  Store.saveBroken = function () { return saveBroken; };
+
+  // Callable by the draft writers, which keep their own localStorage keys and
+  // hit exactly the same wall.
+  Store.reportSaveFailure = function (broken) {
+    const next = !!broken;
+    if (next === saveBroken) return;
+    saveBroken = next;
+    for (const fn of saveWatchers.slice()) {
+      try { fn(next); } catch (e) { /* a watcher must not break saving */ }
+    }
+  };
+
   function persist(queueSync) {
+    let failed = false;
     try {
       localStorage.setItem(KEY, JSON.stringify(state));
-    } catch (e) { /* quota/private mode — keep in-memory state working */ }
+    } catch (e) {
+      // Quota exhausted, or private mode. In-memory state stays usable.
+      failed = true;
+    }
+    Store.reportSaveFailure(failed);
     for (const fn of subscribers.slice()) {
       try { fn(state); } catch (e) { /* subscriber errors must not break saves */ }
     }

@@ -4667,3 +4667,59 @@ button.std-row:hover .std-name {
 @media (prefers-reduced-motion: reduce) {
   .update-bar { animation: none; }
 }
+
+/* =====================================================================
+   §14  STORAGE-FULL BANNER
+   Not dismissable, and it sits above everything: the screen is showing
+   data that is not on disk, which is the one state where a quiet UI is
+   actively harmful.
+   ===================================================================== */
+
+.storage-bar {
+  position: fixed;
+  left: 8px;
+  right: 8px;
+  top: calc(var(--topbar-h) + 8px);
+  z-index: 70;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  border-radius: var(--radius);
+  background: var(--red-tint);
+  border: 1px solid var(--red);
+  box-shadow: var(--shadow);
+}
+
+@media (min-width: 768px) {
+  .storage-bar {
+    left: auto;
+    right: 16px;
+    max-width: 460px;
+  }
+}
+
+.storage-bar .sb-icon {
+  flex: none;
+  color: var(--red);
+  display: inline-flex;
+}
+.storage-bar .sb-icon svg { width: 20px; height: 20px; }
+
+.storage-bar .sb-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.storage-bar .sb-body strong {
+  font-size: var(--fs-sm);
+  color: var(--text);
+}
+.storage-bar .sb-body span {
+  font-size: var(--fs-micro);
+  color: var(--text-2);
+  line-height: var(--lh-tight);
+}
+.storage-bar .btn { flex: none; align-self: center; }
