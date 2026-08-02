@@ -1870,6 +1870,140 @@
     catch (e) { /* storage unavailable */ }
   }
 
+  /* ======================================================================
+     App updates — tell the user, do not surprise them
+     ======================================================================
+     A PWA runs whatever the service worker cached, and browsers only check
+     for a new worker on navigation or roughly once a day. An installed app
+     that lives in the background can therefore sit on an old build for days
+     with nothing on screen to say so — which is exactly how a shipped feature
+     goes missing for the person who asked for it.
+
+     Two halves, and both are needed:
+       1. ASK. registration.update() on every foreground and hourly, so the
+          check actually happens instead of waiting for a navigation that a
+          standalone PWA may never make.
+       2. TELL. When a new worker is installed and waiting, show a bar. The
+          handover happens when the user takes it, then the page reloads at
+          once so old code never runs against the new cache. */
+
+  let updateBarEl = null;
+  let reloadingForUpdate = false;
+  let onUpdateDismissed = null;
+
+  function showUpdateBar(onAccept) {
+    if (updateBarEl) return;
+    updateBarEl = U.el('<div class="update-bar" role="status">' +
+      '<span class="ub-text">New version ready</span>' +
+      '<button type="button" class="btn primary small" data-act="update">Update</button>' +
+      '<button type="button" class="btn ghost small" data-act="later" aria-label="Dismiss">Later</button>' +
+      '</div>');
+    document.body.appendChild(updateBarEl);
+    U.on(updateBarEl, 'click', '[data-act="update"]', function () {
+      const b = U.$('[data-act="update"]', updateBarEl);
+      if (b) { b.disabled = true; b.textContent = 'Updating…'; }
+      onAccept();
+    });
+    U.on(updateBarEl, 'click', '[data-act="later"]', function () {
+      if (onUpdateDismissed) onUpdateDismissed();
+      hideUpdateBar();
+    });
+  }
+
+  function hideUpdateBar() {
+    if (!updateBarEl) return;
+    updateBarEl.remove();
+    updateBarEl = null;
+  }
+
+  // Exposed so a test can drive the UI without a real service worker.
+  App._showUpdateBar = showUpdateBar;
+
+  function initServiceWorker() {
+    if (!('serviceWorker' in navigator)) return;
+    // Never on file:// — registration throws there and the app works fine
+    // without it.
+    if (location.protocol !== 'http:' && location.protocol !== 'https:') return;
+
+    navigator.serviceWorker.register('./sw.js', { scope: './' }).then(function (reg) {
+      // "Later" is for now, not forever. It suppresses the bar for this
+      // stretch of use and is cleared the next time the app is foregrounded,
+      // so a pending update stays reachable. Otherwise one stray tap strands
+      // the user on the old build until they kill the app — which is the very
+      // problem this feature exists to end.
+      let dismissed = false;
+
+      /* Driven by STATE, not only by the updatefound event. An event fires
+         once; the waiting worker persists. Anything that re-checks can call
+         this and the user gets another chance to take the update. */
+      function offerIfWaiting() {
+        if (dismissed || updateBarEl) return;
+        // A controller must already exist ⇒ this is an UPDATE, not the very
+        // first install. The first install has nothing to update from.
+        if (!navigator.serviceWorker.controller) return;
+        const worker = reg.waiting;
+        if (!worker) return;
+        showUpdateBar(function () {
+          worker.postMessage({ type: 'SKIP_WAITING' });
+        });
+      }
+
+      App._offerIfWaiting = offerIfWaiting;    // for tests
+      onUpdateDismissed = function () { dismissed = true; };
+
+      // Already waiting when the app opened — an update that landed while the
+      // app was closed must not need a second visit to be noticed.
+      offerIfWaiting();
+
+      reg.addEventListener('updatefound', function () {
+        const installing = reg.installing;
+        if (!installing) return;
+        installing.addEventListener('statechange', function () {
+          if (installing.state === 'installed') offerIfWaiting();
+        });
+      });
+
+      function check() {
+        try { reg.update(); } catch (e) { /* offline, or update in flight */ }
+        // Re-offer whatever is already waiting, whether or not the check
+        // above turns up anything newer.
+        offerIfWaiting();
+      }
+      document.addEventListener('visibilitychange', function () {
+        if (document.hidden) return;
+        dismissed = false;  // a fresh look at the app is a fresh chance to ask
+        check();
+      });
+      window.setInterval(check, 3600000); // hourly for an app left open
+    }).catch(function () {
+      /* offline caching is a progressive enhancement — ignore failures */
+    });
+
+    /* Reload on handover — but ONLY when this is a handover.
+
+       controllerchange also fires on a FIRST-EVER install, when activate's
+       clients.claim() takes an until-then uncontrolled page. Reloading there
+       is a spurious refresh in every new user's first seconds, and it looks
+       like a crash. The page had no controller when it loaded ⇒ that first
+       claim is not an update, so let it pass silently.
+
+       Reloading is still right when another tab took the update: this tab is
+       running code the new cache no longer matches. */
+    /* Track whether a controller has EVER been seen, not whether one existed
+       at load. Keying off load time also suppressed a real handover later in
+       that same first session — install, then an update arrives before the
+       tab is closed. The first claim flips the flag and returns; every change
+       after it is a genuine handover. */
+    let sawController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.addEventListener('controllerchange', function () {
+      if (!sawController) { sawController = true; return; }
+      // A reload loop would be far worse than a stale build.
+      if (reloadingForUpdate) return;
+      reloadingForUpdate = true;
+      location.reload();
+    });
+  }
+
   App.init = function () {
     Store.load();
     // Before anything paints, so the first frame is already in the profile's
@@ -1890,6 +2024,8 @@
       if (e.key === 'ironlog/activeWorkout') updateChrome();
     });
     render();
+    // After the first paint: registration must never delay the app appearing.
+    initServiceWorker();
   };
 
   window.App = App;

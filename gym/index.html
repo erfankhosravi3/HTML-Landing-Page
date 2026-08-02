@@ -44,18 +44,12 @@
   <script src="js/views-standards.js"></script>
   <script src="js/views-coach.js"></script>
   <script>
+    // Service-worker registration moved into app.js (App.init -> after first
+    // paint) so the update-prompt logic lives in a module that can be tested
+    // rather than in an inline script that cannot.
     document.addEventListener('DOMContentLoaded', function () {
       App.init();
     });
-    // Service worker: only when served over http(s) — never on file://
-    if ('serviceWorker' in navigator &&
-        (location.protocol === 'http:' || location.protocol === 'https:')) {
-      window.addEventListener('load', function () {
-        navigator.serviceWorker.register('./sw.js', { scope: './' }).catch(function () {
-          /* offline caching is a progressive enhancement — ignore failures */
-        });
-      });
-    }
   </script>
 </body>
 </html>
