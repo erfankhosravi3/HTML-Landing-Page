@@ -787,10 +787,45 @@
      border, 2px surface gaps, viewBox sized to the measured container so text
      renders at true 11px, re-drawn on container resize. */
 
-  const P4_GRID = 'rgba(255,255,255,.06)';
-  const P4_GOAL = 'rgba(255,255,255,.18)';
-  const P4_MUTED = '#6b7683';
-  const P4_TEXT2 = '#98a2ae';
+  /* Colour comes from the CSS custom properties, never from a JS constant:
+     per-user themes are applied as :root[data-theme="slug"], so a frozen value
+     would stop following the theme mid-session. js/charts.js owns the resolver
+     (one cache, one pass, one theme for every chart on the view); the local
+     branch below only runs when Charts is absent or stubbed, e.g. headless.
+     SVG presentation attributes cannot substitute var(), so these must be
+     resolved literals — HTML style attributes still spend var() directly. */
+  const P4_FALLBACK = {
+    '--hairline': 'rgba(233,222,190,.08)',
+    '--border': 'rgba(233,222,190,.15)',
+    '--card': '#1c1f14',
+    '--text-2': '#b5ae98',
+    '--text-muted': '#96917f',
+    '--accent': '#ff7a1f'
+  };
+
+  function p4Color(name) {
+    if (window.Charts && typeof Charts.token === 'function') return Charts.token(name);
+    let v = '';
+    try {
+      if (typeof getComputedStyle === 'function' &&
+          typeof document !== 'undefined' && document.documentElement) {
+        v = getComputedStyle(document.documentElement).getPropertyValue(name);
+      }
+    } catch (e) { v = ''; }
+    v = String(v || '').trim();
+    return v || P4_FALLBACK[name] || '#96917f';
+  }
+
+  function p4Alpha(name, a) {
+    const c = p4Color(name);
+    if (window.Charts && typeof Charts.alpha === 'function') return Charts.alpha(c, a);
+    return c;
+  }
+
+  function p4Grid() { return p4Color('--hairline'); }
+  function p4Goal() { return p4Color('--text-muted'); }  // drawn at .45 opacity
+  function p4Muted() { return p4Color('--text-muted'); }
+  function p4Text2() { return p4Color('--text-2'); }
 
   function p4r(v) { return Math.round(v * 100) / 100; }
 
@@ -820,13 +855,13 @@
 
   function p4Empty(el, h, note) {
     el.innerHTML = '<div style="height:' + h + 'px;display:flex;align-items:center;' +
-      'justify-content:center;color:' + P4_MUTED + ';font-size:12px;">' +
+      'justify-content:center;color:' + p4Muted() + ';font-size:12px;">' +
       U.esc(note || 'No data yet') + '</div>';
   }
 
   function p4Text(x, y, s, anchor, fill, size, weight) {
     return '<text x="' + p4r(x) + '" y="' + p4r(y) + '" text-anchor="' + (anchor || 'start') +
-      '" fill="' + (fill || P4_MUTED) + '" font-size="' + (size || 11) + '"' +
+      '" fill="' + (fill || p4Muted()) + '" font-size="' + (size || 11) + '"' +
       (weight ? ' font-weight="' + weight + '"' : '') + '>' + U.esc(s) + '</text>';
   }
 
@@ -835,7 +870,7 @@
     return '<div style="display:flex;flex-wrap:wrap;gap:4px 14px;margin:2px 2px 8px;">' +
       items.map(function (it) {
         return '<span style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:' +
-          P4_TEXT2 + ';"><span style="width:10px;height:10px;border-radius:50%;background:' +
+          p4Text2() + ';"><span style="width:10px;height:10px;border-radius:50%;background:' +
           it.color + ';flex:none;"></span>' + U.esc(it.label) + '</span>';
       }).join('') + '</div>';
   }
@@ -909,7 +944,7 @@
       ticks.forEach(function (t) {
         const y = Y(t);
         g += '<line x1="' + pad.l + '" y1="' + p4r(y) + '" x2="' + p4r(pad.l + pw) +
-          '" y2="' + p4r(y) + '" stroke="' + P4_GRID + '" stroke-width="1"/>';
+          '" y2="' + p4r(y) + '" stroke="' + p4Grid() + '" stroke-width="1"/>';
         g += p4Text(pad.l - 8, y + 3.5, yFmt(t), 'end');
       });
 
@@ -949,8 +984,8 @@
       if (ref !== null) {
         const y = Y(ref);
         g += '<line x1="' + pad.l + '" y1="' + p4r(y) + '" x2="' + p4r(pad.l + pw) + '" y2="' + p4r(y) +
-          '" stroke="' + P4_GOAL + '" stroke-width="1" stroke-dasharray="4 4"/>';
-        g += p4Text(pad.l + pw, y - 5, opts.refLabel || 'average', 'end', P4_TEXT2);
+          '" stroke="' + p4Goal() + '" stroke-opacity=".45" stroke-width="1" stroke-dasharray="4 4"/>';
+        g += p4Text(pad.l + pw, y - 5, opts.refLabel || 'average', 'end', p4Text2());
       }
 
       const every = Math.max(1, Math.ceil(groups.length / Math.max(2, Math.floor(pw / 76))));
@@ -1007,21 +1042,21 @@
       yTicks.forEach(function (t) {
         const y = Y(t);
         g += '<line x1="' + pad.l + '" y1="' + p4r(y) + '" x2="' + p4r(pad.l + pw) + '" y2="' +
-          p4r(y) + '" stroke="' + P4_GRID + '" stroke-width="1"/>';
+          p4r(y) + '" stroke="' + p4Grid() + '" stroke-width="1"/>';
         g += p4Text(pad.l - 8, y + 3.5, yFmt(t), 'end');
       });
       xTicks.forEach(function (t) {
         g += p4Text(X(t), H - 16, xFmt(t), 'middle');
       });
-      if (opts.yTitle) g += p4Text(pad.l - tickW - 4, 12, opts.yTitle, 'start', P4_TEXT2);
-      if (opts.xTitle) g += p4Text(pad.l + pw / 2, H - 3, opts.xTitle, 'middle', P4_TEXT2);
+      if (opts.yTitle) g += p4Text(pad.l - tickW - 4, 12, opts.yTitle, 'start', p4Text2());
+      if (opts.xTitle) g += p4Text(pad.l + pw / 2, H - 3, opts.xTitle, 'middle', p4Text2());
 
       const color = opts.color || Charts.SERIES[0];
-      const muted = opts.mutedColor || 'rgba(255,255,255,.28)';
+      const muted = opts.mutedColor || p4Alpha('--text-muted', .55);
       pts.forEach(function (p) {
         g += '<circle cx="' + p4r(X(p.x)) + '" cy="' + p4r(Y(p.y)) + '" r="4.5" fill="' +
           (p.recent ? color : muted) + '" fill-opacity="' + (p.recent ? '.95' : '.75') +
-          '" stroke="#1b1f26" stroke-width="1.5"><title>' + U.esc(p.label || '') +
+          '" stroke="' + p4Color('--card') + '" stroke-width="1.5"><title>' + U.esc(p.label || '') +
           '</title></circle>';
       });
 
@@ -1629,7 +1664,7 @@
       const dCount = Array.isArray(draft.entries) ? draft.entries.length : 0;
       html += '<button type="button" class="card interactive" data-act="resume" ' +
         'style="display:flex;align-items:center;gap:14px;background:var(--accent-tint);' +
-        'border-color:rgba(48,209,88,.45);">' +
+        'border-color:var(--accent-tint-strong);">' +
         '<span style="flex:none;width:44px;height:44px;border-radius:12px;display:inline-flex;' +
         'align-items:center;justify-content:center;background:var(--accent);color:var(--accent-ink);">' +
         sizedIcon(App.icons.timer, 22) + '</span>' +
@@ -1836,7 +1871,7 @@
     /* mount charts */
     Charts.rings(U.$('[data-slot="rings"]', container), {
       rings: [
-        { value: thisWk.workouts, goal: goalW, color: '#30d158', label: 'Workouts' },
+        { value: thisWk.workouts, goal: goalW, color: Charts.SERIES[0], label: 'Workouts' },
         {
           value: Math.round(dispVol(thisWk.volumeKg)),
           goal: Math.max(1, Math.round(dispVol(avg4Kg > 0 ? avg4Kg : (thisWk.volumeKg || 1)))),
@@ -2009,14 +2044,18 @@
     const setGoal = setting('weeklySetGoal', 15);
     const topMuscles = avgSets.slice(0, 12);
     const restSum = U.sum(avgSets.slice(12), function (r) { return r.v; });
+    const metTargetColor = p4Color('--accent');
+    const underTargetColor = p4Alpha('--text-muted', .55);
     const balanceData = topMuscles.map(function (r) {
       return {
         label: muscleLabel(r.id),
         value: U.round1(r.v),
-        color: r.v >= setGoal ? Charts.SERIES[0] : 'rgba(255,255,255,.25)'
+        // --accent is the app's GO / hit-a-target colour; everything short of
+        // the target recedes to muted ink. Both resolved from the live theme.
+        color: r.v >= setGoal ? metTargetColor : underTargetColor
       };
     });
-    if (restSum > 0) balanceData.push({ label: 'Other', value: U.round1(restSum), color: 'rgba(255,255,255,.25)' });
+    if (restSum > 0) balanceData.push({ label: 'Other', value: U.round1(restSum), color: underTargetColor });
 
     const mv28 = Analytics.muscleVolume28d(w, today);
     let mvMax = 0;
@@ -2087,8 +2126,8 @@
     } else {
       html += '<div data-slot="balance-bars"></div>';
     }
-    html += '<p style="font-size:12px;color:var(--text-muted);margin-top:8px;">Average weekly sets per muscle over the last 4 weeks — green bars meet your ' +
-      setGoal + '-set target, gray bars are below it.</p></div>';
+    html += '<p style="font-size:12px;color:var(--text-muted);margin-top:8px;">Average weekly sets per muscle over the last 4 weeks — filled bars meet your ' +
+      setGoal + '-set target, faded bars are below it.</p></div>';
     html += '<div><div style="font-size:13px;font-weight:600;color:var(--text-2);margin-bottom:6px;">Last 28 days</div>' +
       '<div data-slot="balance-map" class="muscle-map"></div>' +
       '<div class="muscle-legend"><span>Less volume</span><span class="ramp"></span><span>More volume</span></div></div>';

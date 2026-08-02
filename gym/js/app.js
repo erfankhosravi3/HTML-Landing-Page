@@ -559,7 +559,9 @@
     if (btn) {
       if (cur) {
         btn.textContent = cur.emoji || '💪';
-        btn.style.setProperty('--user-color', cur.color || 'var(--accent)');
+        // Identity resolves from the stylesheet on every paint (Store.userColorVar
+        // hands back a var() expression), so a per-user theme moves the ring.
+        btn.style.setProperty('--user-color', Store.userColorVar(cur));
         btn.title = cur.name;
       } else {
         btn.textContent = '💪';
@@ -626,7 +628,7 @@
     const rows = Store.state.users.map(function (u) {
       const isCur = cur && u.id === cur.id;
       return '<button type="button" class="list-row" data-uid="' + U.esc(u.id) + '" style="min-height:48px;border:0;background:none">' +
-        '<span class="leading plain"><span class="avatar sm" style="--user-color:' + U.esc(u.color || '#2ca350') + '">' + U.esc(u.emoji || '💪') + '</span></span>' +
+        '<span class="leading plain"><span class="avatar sm" style="--user-color:' + U.esc(Store.userColorVar(u)) + '">' + U.esc(u.emoji || '💪') + '</span></span>' +
         '<span class="body"><span class="title">' + U.esc(u.name) + '</span></span>' +
         (isCur ? '<span class="trailing" style="color:var(--accent)">' + icons.check + '</span>' : '') +
       '</button>';
@@ -672,24 +674,33 @@
   const EMOJIS = ['💪', '🏋️', '🤸', '🏃', '🚴', '🧗', '⛹️', '🤾', '🏊', '🥊', '🤼', '🧘',
     '🦍', '🐺', '🦁', '🐻', '🦅', '🐂', '🔥', '⚡', '🏆', '🥇', '🎯', '🚀'];
 
-  function seriesColors() {
-    return (window.Charts && Charts.SERIES) ||
-      ['#2ca350', '#0a84ff', '#cf7c00', '#bf5af2', '#ff375f', '#3399cc'];
+  // Identity is picked by SLOT ('s1'..'s6'), never by literal: the swatch, the
+  // selection ring and the saved record all spend var(--sN), so the whole
+  // picker follows whichever theme the profile is wearing.
+  function identitySlots() {
+    return Store.identityKeys();
   }
 
-  // Returns {el, read()} — read() -> {name, emoji, color, units, goals?} or null when invalid.
+  function currentSlot(user) {
+    const keys = identitySlots();
+    if (user && typeof user.colorKey === 'string' && keys.indexOf(user.colorKey) !== -1) return user.colorKey;
+    return keys[0];
+  }
+
+  // Returns {el, read()} — read() -> {name, emoji, colorKey, color, units, goals?}
+  // or null when invalid. `color` is carried for old clients (see store.js).
   function buildProfileForm(user, opts) {
     opts = opts || {};
     const withGoals = !!opts.withGoals;
     const s = (user && user.settings) || {};
     const state = {
       emoji: (user && user.emoji) || '💪',
-      color: (user && user.color) || seriesColors()[0],
+      colorKey: currentSlot(user),
       units: s.units === 'kg' ? 'kg' : 'lb',
       // v2 goal question — 'none' | 'general' | 'sfas'
       goal: (user && user.goals && user.goals.preset) || 'none'
     };
-    const colors = seriesColors();
+    const colors = identitySlots();
 
     const el = U.el('<form novalidate>' +
       '<div class="field">' +
@@ -710,8 +721,10 @@
         '<label>Color</label>' +
         '<div data-color-row style="display:flex;gap:12px;flex-wrap:wrap;padding:2px">' +
           colors.map(function (c) {
-            return '<button type="button" data-color="' + U.esc(c) + '" aria-label="Color ' + U.esc(c) + '" ' +
-              'style="width:34px;height:34px;border-radius:50%;background:' + U.esc(c) + ';border:0;cursor:pointer"></button>';
+            return '<button type="button" data-color="' + U.esc(c) + '" ' +
+              'aria-label="Color ' + U.esc(Store.identityLabel(c) || c) + '" ' +
+              'style="width:34px;height:34px;border-radius:50%;background:' + U.esc(Store.identityVar(c)) +
+              ';border:0;cursor:pointer"></button>';
           }).join('') +
         '</div>' +
       '</div>' +
@@ -765,8 +778,10 @@
         b.classList.toggle('active', b.getAttribute('data-emoji') === state.emoji);
       });
       U.$$('[data-color]', el).forEach(function (b) {
-        const on = b.getAttribute('data-color') === state.color;
-        b.style.boxShadow = on ? '0 0 0 2px var(--card), 0 0 0 4px ' + state.color : 'none';
+        const on = b.getAttribute('data-color') === state.colorKey;
+        b.style.boxShadow = on
+          ? '0 0 0 2px var(--card), 0 0 0 4px ' + Store.identityVar(state.colorKey)
+          : 'none';
         b.style.transform = on ? 'scale(1.08)' : '';
       });
       U.$$('[data-units] button', el).forEach(function (b) {
@@ -777,7 +792,7 @@
       });
     }
     U.on(el, 'click', '[data-emoji]', function (e, b) { state.emoji = b.getAttribute('data-emoji'); paint(); });
-    U.on(el, 'click', '[data-color]', function (e, b) { state.color = b.getAttribute('data-color'); paint(); });
+    U.on(el, 'click', '[data-color]', function (e, b) { state.colorKey = b.getAttribute('data-color'); paint(); });
     U.on(el, 'click', '[data-units] button', function (e, b) { state.units = b.getAttribute('data-v'); paint(); });
     U.on(el, 'click', '[data-goal] button', function (e, b) { state.goal = b.getAttribute('data-v'); paint(); });
     el.addEventListener('submit', function (e) { e.preventDefault(); });
@@ -792,7 +807,10 @@
           U.$('#pf-name', el).focus();
           return null;
         }
-        const out = { name: name, emoji: state.emoji, color: state.color, units: state.units, goalPreset: state.goal };
+        const out = {
+          name: name, emoji: state.emoji, colorKey: state.colorKey,
+          units: state.units, goalPreset: state.goal
+        };
         if (withGoals) {
           out.goals = {
             weeklyWorkoutGoal: U.clamp(parseInt(U.$('#pf-wgoal', el).value, 10) || 4, 1, 7),
@@ -839,7 +857,7 @@
             if (!v) return;
             if (user) {
               Store.updateUser(user.id, {
-                name: v.name, emoji: v.emoji, color: v.color,
+                name: v.name, emoji: v.emoji, colorKey: v.colorKey,
                 settings: {
                   units: v.units,
                   weeklyWorkoutGoal: v.goals.weeklyWorkoutGoal,
@@ -850,7 +868,7 @@
               applyGoalChoice(user.id, v.goalPreset, user);
               App.toast('Profile updated', 'ok');
             } else {
-              const u = Store.addUser({ name: v.name, emoji: v.emoji, color: v.color, settings: { units: v.units } });
+              const u = Store.addUser({ name: v.name, emoji: v.emoji, colorKey: v.colorKey, settings: { units: v.units } });
               Store.setCurrentUser(u.id);
               applyGoalChoice(u.id, v.goalPreset, null);
               App.toast('Welcome, ' + u.name + '!', 'ok');
@@ -916,7 +934,7 @@
       U.$('#ob-save', card).addEventListener('click', function () {
         const v = form.read();
         if (!v) return;
-        const u = Store.addUser({ name: v.name, emoji: v.emoji, color: v.color, settings: { units: v.units } });
+        const u = Store.addUser({ name: v.name, emoji: v.emoji, colorKey: v.colorKey, settings: { units: v.units } });
         Store.setCurrentUser(u.id);
         applyGoalChoice(u.id, v.goalPreset, null);
         App.toast('Welcome, ' + u.name + '! Time to lift.', 'ok');
@@ -954,7 +972,7 @@
           '<button type="button" data-switch="' + U.esc(u.id) + '" aria-label="Switch to ' + U.esc(u.name) + '" ' +
             'style="display:flex;align-items:center;gap:12px;flex:1;min-width:0;border:0;background:none;padding:0;' +
             'cursor:pointer;text-align:left;color:inherit;font:inherit">' +
-            '<span class="avatar" style="--user-color:' + U.esc(u.color || '#2ca350') + '">' + U.esc(u.emoji || '💪') + '</span>' +
+            '<span class="avatar" style="--user-color:' + U.esc(Store.userColorVar(u)) + '">' + U.esc(u.emoji || '💪') + '</span>' +
             '<span class="body">' +
               '<span class="title">' + U.esc(u.name) +
                 (isCur ? ' <span class="badge" style="margin-left:6px">Current</span>' : '') + '</span>' +
@@ -1035,7 +1053,7 @@
       cardTitle(icons.users, 'Profile & Units') +
       (cur ?
         '<div style="display:flex;align-items:center;gap:12px;margin:10px 0 14px">' +
-          '<span class="avatar lg" style="--user-color:' + U.esc(cur.color || '#2ca350') + '">' + U.esc(cur.emoji || '💪') + '</span>' +
+          '<span class="avatar lg" style="--user-color:' + U.esc(Store.userColorVar(cur)) + '">' + U.esc(cur.emoji || '💪') + '</span>' +
           '<div style="flex:1;min-width:0">' +
             '<div style="font-weight:700;font-size:16px">' + U.esc(cur.name) + '</div>' +
             '<div class="small-text muted">' + (s.weeklyWorkoutGoal || 4) + ' workouts/week goal · rest ' +
@@ -1146,8 +1164,10 @@
     wireData(dataCard);
 
     /* ---- 6. Danger zone ---- */
-    const dangerCard = U.el('<div class="card" style="border-color:rgba(255,69,58,.25)">' +
-      '<div class="card-title" style="color:#ff6961">Danger zone</div>' +
+    // ONE red, from the token: the rule and the title are both --red (see
+    // .card.danger in css/styles.css) instead of two different retired reds.
+    const dangerCard = U.el('<div class="card danger">' +
+      '<div class="card-title">Danger zone</div>' +
       '<p class="text-2 small-text" style="margin:6px 0 12px">Erase every profile, workout and setting stored on this device.</p>' +
       '<button type="button" class="btn danger" id="dz-erase">' + icons.trash + ' Erase all data</button>' +
       '</div>');
@@ -1246,7 +1266,7 @@
   function syncStatusLine(st) {
     if (!st || !st.enabled) return '<span class="muted">Sync is off.</span>';
     let out = '<span class="muted">Last synced: ' + U.esc(relTime(st.lastSyncAt)) + '</span>';
-    if (st.lastError) out += '<br><span style="color:#ff6961">Error: ' + U.esc(st.lastError) + '</span>';
+    if (st.lastError) out += '<br><span style="color:var(--red)">Error: ' + U.esc(st.lastError) + '</span>';
     return out;
   }
 
@@ -1307,7 +1327,8 @@
       drop.addEventListener(evt, function (e) {
         e.preventDefault();
         drop.style.borderColor = 'var(--accent)';
-        drop.style.background = 'rgba(48,209,88,.06)';
+        // the fill must be the SAME hue as the border it is paired with
+        drop.style.background = 'var(--accent-tint)';
       });
     });
     ['dragleave', 'drop'].forEach(function (evt) {

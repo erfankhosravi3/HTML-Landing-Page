@@ -102,11 +102,24 @@
   --radius-sm: 4px;
   --shadow: 0 10px 26px rgba(0, 0, 0, .62);
 
-  /* derived tints (kept as tokens so components stay consistent) */
+  /* derived tints (kept as tokens so components stay consistent).
+     A tint is a TOKEN, never a literal in a component or in js/ — that is what
+     lets a per-user theme (:root[data-theme="slug"]) restate the whole family
+     of status fills by overriding this block alongside the base hues. Anything
+     in js/ that needs one of these spends var(--…-tint); nothing copies the
+     rgba() into a JS constant, where a theme could never reach it. */
   --accent-tint: rgba(255, 122, 31, .13);
   --accent-tint-strong: rgba(255, 122, 31, .24);
   --red-tint: rgba(255, 85, 69, .14);
   --hairline: rgba(233, 222, 190, .08);
+  /* The three below are also DERIVED from their base hue further down (see the
+     @supports block after §1), so a theme that restates only --blue / --orange
+     / --red still moves the fill and the rule it is paired with together.
+     These literals are the fallback, and are the exact values these tints have
+     always had. */
+  --red-line: rgba(255, 85, 69, .28);     /* stop — hairline on a red card   */
+  --blue-tint: rgba(79, 176, 232, .14);   /* the machine is driving this set */
+  --orange-tint: rgba(242, 195, 63, .13); /* caution / rest / warm-up        */
 
   /* ---- type scale ------------------------------------------------------
      display  the big instrument metric  .stat .value
@@ -189,6 +202,16 @@
 @media (min-width: 768px) {
   :root {
     --content-pad: var(--sp-6);
+  }
+}
+
+/* Derived status tints — see the note in §1. Guarded by @supports so the
+   literal values above remain the fallback on engines without color-mix. */
+@supports (color: color-mix(in srgb, red 50%, transparent)) {
+  :root {
+    --blue-tint: color-mix(in srgb, var(--blue) 14%, transparent);
+    --orange-tint: color-mix(in srgb, var(--orange) 13%, transparent);
+    --red-line: color-mix(in srgb, var(--red) 28%, transparent);
   }
 }
 
@@ -782,6 +805,16 @@ button.card:active {
   text-transform: none;
 }
 
+/* destructive card (settings "Danger zone"). ONE red: the rule and the title
+   are the same --red token, so a theme moves both together. */
+.card.danger {
+  border-color: var(--red-line);
+}
+
+.card.danger > .card-title {
+  color: var(--red);
+}
+
 /* ---------- stat tiles ---------- */
 
 .stat-grid {
@@ -1328,15 +1361,29 @@ textarea.input {
   vertical-align: middle;
 }
 
-.badge.green { background: var(--accent-tint); color: var(--accent); }
+/* badge variants — ONE MEANING PER STATUS COLOUR applies here too.
+   .go        GO: a goal met, a standard hit, the thing the app wants. ACCENT.
+   .info/.green  identity + information ("You", "Custom", a phase name, a
+              percentage). Emphasised ink on the neutral pill — deliberately
+              NOT the accent, because none of these mean "go".
+   .blue      the machine is driving it · .orange caution · .red stop.
+   `.green` is the historical class name and keeps every existing call site
+   working; it is the informational variant now, so an identity badge can no
+   longer spend the GO accent. New GO badges use `.badge.go`. A banded value
+   (e.g. a readiness score) picks .red / .orange / .go from its own band. */
+.badge.go { background: var(--accent-tint); color: var(--accent); }
+.badge.info,
+.badge.green { color: var(--text); }
 .badge.blue { background: rgba(79, 176, 232, .16); color: var(--blue); }
 .badge.orange { background: rgba(242, 195, 63, .16); color: var(--orange); }
 .badge.red { background: var(--red-tint); color: var(--red); }
 
 /* avatar — emoji on user-color tinted circle with user-color ring.
-   Set inline: style="--user-color: #4fb0e8" (or the shorthand --c) */
+   Set inline: style="--user-color: var(--s3)" (or the shorthand --c).
+   Identity is keyed off the CVD-searched series --s1..--s6, which excludes the
+   GO accent hue — an avatar ring must never read as "the app wants this". */
 .avatar {
-  --user-color: var(--c, var(--accent));
+  --user-color: var(--c, var(--s1));
   width: 36px;
   height: 36px;
   border-radius: 50%;
@@ -1928,6 +1975,21 @@ button.list-row:active,
 .set-row.done .set-num,
 .set-row.completed .set-num {
   color: var(--accent);
+}
+
+/* CONTRAST: --text-muted is measured against the FLAT surfaces (5.30:1 on
+   --card). A tinted row is a composited surface, and every status tint lifts
+   it enough to drop muted 12px text under 4.5:1 — measured worst case 3.61:1
+   (the amber resting tint over --card-2). Secondary ink on a tinted row is
+   therefore --text-2, which measures 5.15:1 in that same worst case. Applies
+   to every tinted row state, not just the one that was caught. */
+.set-row.done .set-prev,
+.set-row.completed .set-prev,
+.set-row.running .set-prev,
+.set-row.done .muted,
+.set-row.completed .muted,
+.set-row.running .muted {
+  color: var(--text-2);
 }
 
 /* warmup rows */
@@ -3408,11 +3470,11 @@ button.std-row:hover .std-name {
 
 .set-row.running {
   position: relative;
-  background: rgba(79, 176, 232, .14);
+  background: var(--blue-tint);
 }
 
 .set-row.running.resting {
-  background: rgba(242, 195, 63, .13);
+  background: var(--orange-tint);
 }
 
 .set-row.running .set-num,
