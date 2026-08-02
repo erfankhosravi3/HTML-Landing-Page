@@ -4239,6 +4239,17 @@ button.std-row:hover .std-name {
   }
 }
 
+/* The head carries the Clear action, so it becomes a row rather than a stack. */
+.coach-head {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: start;
+  column-gap: var(--sp-2);
+}
+.coach-head h2 { grid-column: 1; }
+.coach-head .sub { grid-column: 1; }
+.coach-head #coach-clear { grid-column: 2; grid-row: 1 / span 2; align-self: center; }
+
 .coach-thread {
   flex: 1 1 auto;
   display: flex;

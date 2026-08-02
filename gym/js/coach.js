@@ -563,6 +563,13 @@
   const PROPOSAL_KINDS = ['lift', 'durability', 'stretch', 'circuit', 'cardio', 'custom'];
   const METHODS = ['static', 'dynamic', 'pnf', 'loaded'];
 
+  function humanise(ref) {
+    if (!ref) return '';
+    return String(ref).replace(/[_-]+/g, ' ').replace(/\b[a-z]/g, function (c) {
+      return c.toUpperCase();
+    });
+  }
+
   function num(v, min, max, round) {
     const x = Number(v);
     if (!isFinite(x)) return null;
@@ -600,9 +607,10 @@
       }
       const item = {
         exerciseRef: ref,
-        // The label the user sees. For an unresolved ref, the model's own name
-        // is all we have, so keep it rather than showing a raw id.
-        name: known ? exName(ref) : String(it.name || ref || 'Unknown exercise'),
+        // The label the user sees. For an unresolved ref the model's own name
+        // is all we have; failing that, humanise the id rather than showing
+        // raw snake_case in the middle of a sentence.
+        name: known ? exName(ref) : String(it.name || humanise(ref) || 'Unknown exercise'),
         resolved: known,
         sets: num(it.sets, 1, 20, true) || 1,
         note: typeof it.note === 'string' ? it.note : ''

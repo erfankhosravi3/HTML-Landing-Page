@@ -284,8 +284,13 @@
 
     const thread = Store.chatFor(u.id);
     let html = '<div class="coach-view">' +
-      '<div class="view-head"><h2>Coach</h2>' +
-      '<div class="sub">Sees your whole log. Proposes; you decide.</div></div>';
+      '<div class="view-head coach-head"><h2>Coach</h2>' +
+      '<div class="sub">Sees your whole log. Proposes; you decide.</div>' +
+      /* Clearing lives up here, not in the composer bar: it is destructive and
+         has no business sitting beside Send, and pinning it made the bar tall
+         enough to graze the tabbar. */
+      (thread.length ? '<button type="button" class="btn ghost small" id="coach-clear">Clear</button>' : '') +
+      '</div>';
 
     html += '<div class="coach-thread" id="coach-thread">';
     if (!thread.length) {
@@ -325,7 +330,6 @@
       (pending ? ' disabled' : '') + '></textarea>' +
       '<button type="submit" class="btn primary" id="coach-send"' + (pending ? ' disabled' : '') + '>Send</button>' +
       '</form>' +
-      (thread.length ? '<button type="button" class="btn ghost small" id="coach-clear">Clear conversation</button>' : '') +
       '</div></div>';
 
     container.innerHTML = html;
