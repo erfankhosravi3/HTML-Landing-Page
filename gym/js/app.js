@@ -1214,6 +1214,71 @@
     el.appendChild(dataCard);
     wireData(dataCard);
 
+    /* ---- 6b. AI Coach key ----
+       The key is stored by coach.js at its OWN localStorage key, outside
+       `state`. That is not a detail: `state` is what Export backup writes to a
+       file and what Sync pushes to the shared family database, so a key kept
+       there would be published twice over. It is never rendered except masked,
+       never logged, and never leaves the device except as a header to
+       api.anthropic.com. */
+    if (window.Coach) {
+      const hasKey = Coach.hasKey();
+      const coachCard = U.el('<div class="card">' +
+        cardTitle((window.CoachSettings && CoachSettings.icon) || icons.journal, 'AI Coach') +
+        '<p class="text-2 small-text" style="margin:6px 0 12px">' +
+        (hasKey
+          ? 'Connected. The Coach tab reads your whole log and proposes sessions you can edit before running.'
+          : 'Bring your own Anthropic API key and the Coach tab appears. It reads your whole log — ' +
+            'every session, the pain entries, the journal — and proposes sessions you edit before running. ' +
+            'It cannot log anything itself, and it cannot override your injury rules.') +
+        '</p>' +
+        (hasKey
+          ? '<div class="field"><label>Key on this device</label>' +
+            '<div style="display:flex;gap:8px;align-items:center">' +
+            '<code style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">' +
+            U.esc(Coach.maskedKey()) + '</code>' +
+            '<button type="button" class="btn ghost small" id="ck-remove">Remove</button>' +
+            '</div></div>'
+          : '<div class="field"><label for="ck-input">Anthropic API key</label>' +
+            '<input type="password" id="ck-input" autocomplete="off" spellcheck="false" ' +
+            'placeholder="sk-ant-…"></div>' +
+            '<button type="button" class="btn primary small" id="ck-save">Save key</button>') +
+        '<p class="text-2 small-text" style="margin:12px 0 0">Stored on this device only. It is ' +
+        'never included in a backup export and never sent to the family sync — each device keeps ' +
+        'its own. Get one at <code>console.anthropic.com</code>. Requests are billed to you.</p>' +
+        '</div>');
+      el.appendChild(coachCard);
+      const saveBtn = U.$('#ck-save', coachCard);
+      if (saveBtn) {
+        saveBtn.addEventListener('click', function () {
+          const box = U.$('#ck-input', coachCard);
+          const v = (box && box.value || '').trim();
+          if (!v) { App.toast('Paste a key first', 'err'); return; }
+          Coach.setKey(v);
+          if (box) box.value = '';
+          App.toast('Coach connected', 'ok');
+          App.rerender();
+        });
+      }
+      const rmBtn = U.$('#ck-remove', coachCard);
+      if (rmBtn) {
+        rmBtn.addEventListener('click', function () {
+          App.confirm({
+            title: 'Remove the API key?',
+            message: 'The Coach tab disappears until you add a key again. Your conversation stays.',
+            danger: true, confirmLabel: 'Remove'
+          }).then(function (ok) {
+            if (!ok) return;
+            Coach.setKey('');
+            if (typeof Coach.resetDossierCache === 'function') Coach.resetDossierCache();
+            App.toast('Key removed', 'ok');
+            if (location.hash.indexOf('coach') !== -1) App.navigate('settings');
+            else App.rerender();
+          });
+        });
+      }
+    }
+
     /* ---- 7. Danger zone ---- */
     // ONE red, from the token: the rule and the title are both --red (see
     // .card.danger in css/styles.css) instead of two different retired reds.

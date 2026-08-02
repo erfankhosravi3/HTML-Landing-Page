@@ -752,18 +752,21 @@
 
       if (latest.boneLine) {
         flags.push({
+          muscleId: region,
           level: 'red', code: 'pain_bone_line',
           message: msg('pain_bone_line', { region: label }), entryIds: ids([latest])
         });
       }
       if (latest.morning) {
         flags.push({
+          muscleId: region,
           level: 'red', code: 'pain_morning',
           message: msg('pain_morning', { region: label }), entryIds: ids([latest])
         });
       }
       if (typeof latest.severity === 'number' && latest.severity >= LIMITS.PAIN_SEVERE) {
         flags.push({
+          muscleId: region,
           level: 'red', code: 'pain_severe',
           message: msg('pain_severe', { region: label, severity: latest.severity }),
           entryIds: ids([latest])
@@ -776,6 +779,7 @@
         if (typeof s0 === 'number' && typeof s1 === 'number' && typeof s2 === 'number' &&
             s0 < s1 && s1 < s2) {
           flags.push({
+          muscleId: region,
             level: 'red', code: 'pain_rising',
             message: msg('pain_rising', { region: label }),
             entryIds: ids([entries[2], entries[1], entries[0]])
@@ -784,12 +788,14 @@
       }
       if (latest.worseDuring && entries.length >= 2 && entries[1].worseDuring) {
         flags.push({
+          muscleId: region,
           level: 'red', code: 'pain_worse_consecutive',
           message: msg('pain_worse_consecutive', { region: label }),
           entryIds: ids([entries[1], entries[0]])
         });
       } else if (latest.worseDuring) {
         flags.push({
+          muscleId: region,
           level: 'warn', code: 'pain_worse_during',
           message: msg('pain_worse_during', { region: label }), entryIds: ids([latest])
         });

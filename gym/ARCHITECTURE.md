@@ -1596,11 +1596,19 @@ A user paying per token is entitled to see the meter.
 
 ## Mode gate and empty states
 
-The Coach view is visible only when a key is set — in EITHER mode, via a
-`visible()` predicate. It is not a performance-mode feature; Amu Reza may want
-a coach without wanting ACWR. The charter and dossier adapt to the user's mode:
-in simple mode the coach does not discuss ACWR, SFAS tiers or ACFT scoring, and
-coaches to the surface that user actually has.
+The Coach view is visible when **performance mode is on AND a key is set**, via
+a `visible()` predicate.
+
+The mode half of that is a deliberate reversal of the first draft of this
+section, which put the coach in both modes on the grounds that a family member
+might want coaching without wanting ACWR. The reasoning was fine and the
+engineering was not: the coach's central act is "propose a session, then run
+it", and the guided player it hands off to (`Player.start`) is performance-mode
+only. A simple-mode coach would be a coach that cannot do the main thing, bought
+at the price of a second accept path, a second charter, and a fresh chance to
+leak performance surfaces into simple mode — a bug this project has already
+shipped once. Performance mode is one toggle, and it is already the documented
+way every other intelligence surface unlocks.
 
 With no key, Settings explains what the coach does, what it costs, and where to
 get a key. Offline, the view renders the thread and queues the message. Neither
