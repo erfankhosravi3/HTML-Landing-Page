@@ -21,72 +21,458 @@
    ========================================================================== */
 
 /* ==========================================================================
-   1. TOKENS
+   1. TOKENS — "FIELD / ISSUED, AT EMBER SCALE"
+
+   PALETTE INTENT
+   The app reads as issued field kit: a four-step olive-drab surface ramp at
+   very low chroma, bone-coloured ink (field-notebook paper, never blue-white),
+   and one signal orange. --card-2 breaks the olive ramp on purpose — it is
+   coyote brown, so every raised thing reads as webbing stitched onto a drab
+   panel rather than another shade of the same panel.
+
+   ONE MEANING PER STATUS COLOUR — do not reuse these for decoration:
+     --accent (signal orange)  GO. The app wants you to do this thing.
+     --orange (amber)          caution / rest / warm-up. Not an error.
+     --red                     stop / regression / destructive.
+     --blue                    the machine is driving this set (player, pace).
+     --yellow (brass)          a record — PR, best-ever, boundary.
+   THE GO ACCENT RULE: --accent is spent only where the app means GO — the
+   log FAB, the primary button, an active chip, a completed set, progress
+   toward a target. It is never a neutral highlight; if two things on one
+   screen are orange, one of them is wrong.
+
+   TYPE + SPACE SCALE
+   The --fs-, --lh-, --fw- and --sp- tokens are the measured scale, named so
+   components spend tokens instead of repeating pixel values. Small labels are
+   deliberately NOT shrunk: they stay at the app's existing sizes in sentence
+   case. Stencil ALL-CAPS survives on section eyebrows only (see §12/P4).
+
+   TWO LAYERS, STRICTLY SEPARATED (P5)
+   §1a is the THEME layer: the 37 colour tokens a palette is allowed to move.
+   §1b is the UNIVERSAL layer: geometry, type, space, motion, layout metrics —
+   identical in every theme, so a palette can never change the shape of the
+   app. §1c appends the non-default palettes as :root[data-theme="slug"].
+   The DEFAULT palette ("field-issued") lives in §1a's bare :root, so an
+   absent or unknown slug still resolves a complete, valid palette instead of
+   half a theme.
+
+   The second selector on §1a/§1c ([data-theme-preview="slug"]) scopes the same
+   token block to a SUBTREE. It exists so the theme picker in Settings can
+   paint a swatch row in a palette that is not the active one without any
+   JS ever holding a hex — the swatches spend var(--accent) / var(--s1) like
+   everything else, and the attribute decides which palette answers.
    ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   1a. THEME TOKENS — the default palette, "field-issued".
+   This block is the exhaustive theme-token set (37): every :root[data-theme]
+   block in §1c restates exactly these names and nothing else.
+   -------------------------------------------------------------------------- */
+
+:root,
+[data-theme-preview='field-issued'] {
+  /* surfaces — olive-drab ramp; --card-2 is coyote, not olive */
+  --bg: #0c0d09;             /* deck — near-black, faint olive              */
+  --surface: #15170f;        /* topbar / sidebar / tabbar plate             */
+  --card: #1c1f14;           /* the panel everything lives on              */
+  --card-2: #2a2416;         /* COYOTE — raised, tactile, warm              */
+  --border: rgba(233, 222, 190, .15);   /* bone hairline, never white       */
+
+  /* text — bone ink */
+  --text: #f2efe3;           /* 14.52:1 on --card                           */
+  --text-2: #b5ae98;         /*  7.55:1 on --card                           */
+  --text-muted: #96917f;     /*  5.30:1 on --card, 4.88:1 on --card-2       */
+
+  /* brand + status — one meaning each, see header */
+  --accent: #ff7a1f;         /* signal orange — GO — 6.42:1 on --card       */
+  --accent-ink: #1a0c00;     /* 7.35:1 on --accent                          */
+  --blue: #4fb0e8;           /* the machine is driving this set             */
+  --orange: #f2c33f;         /* amber — caution / rest / warm-up            */
+  --purple: #bc9cf5;
+  --red: #ff5545;            /* stop / regression                           */
+  --teal: #68c8c8;
+  --yellow: #e8c96a;         /* brass — a record                            */
+  --pink: #ff6b83;
+
+  /* chart series (CVD-searched, use in order)
+     brass · instrument blue · rust · violet · tracer · steel teal.
+     Worst-case minimum CIEDE2000 over all 15 pairs across normal /
+     protanopia / deuteranopia / tritanopia: 9.8. */
+  --s1: #e89f2e;
+  --s2: #3890c0;
+  --s3: #c96b41;
+  --s4: #bc9cf5;
+  --s5: #b0dc78;
+  --s6: #68c8c8;
+
+  /* muscle-map heat ramp — ash -> ember -> bronze -> brass -> amber -> blaze.
+     One hue family with strictly increasing L*, so the scalar survives every
+     CVD model on lightness alone. These six values MUST stay in step with
+     STOPS in js/musclemap.js, or the legend in §12 lies about the map. */
+  --heat-0: #222517;         /* ash — worked, needs rest                    */
+  --heat-1: #4a3c18;         /* ember                                       */
+  --heat-2: #7d5615;         /* bronze                                      */
+  --heat-3: #ad6f14;         /* brass                                       */
+  --heat-4: #dc8f22;         /* amber                                       */
+  --heat-5: #ffb04a;         /* blaze — fresh, ready to train               */
+
+  /* the muscle-map figure itself: the unworked body plate and the separation
+     stroke between two adjacent muscles. musclemap.js resolves these at render
+     time like every other colour it paints. */
+  --plate: #171a0e;          /* the unworked body plate                     */
+  --seam: #0e1108;           /* separation stroke between two muscles       */
+
+  /* derived tints (kept as tokens so components stay consistent).
+     A tint is a TOKEN, never a literal in a component or in js/ — that is what
+     lets a per-user theme (:root[data-theme="slug"]) restate the whole family
+     of status fills by overriding this block alongside the base hues. Anything
+     in js/ that needs one of these spends var(--…-tint); nothing copies the
+     rgba() into a JS constant, where a theme could never reach it.
+     --blue-tint and --amber-tint are NOT their status colour at a low alpha:
+     they are the live-session row washes, and on that one screen three status
+     rows sit adjacent, so each theme separates them in LIGHTNESS as well as
+     hue and carries its own searched base + alpha. */
+  --accent-tint: rgba(255, 122, 31, .13);
+  --accent-tint-strong: rgba(255, 122, 31, .24);
+  --red-tint: rgba(255, 85, 69, .14);
+  --blue-tint: rgba(79, 176, 232, .14);   /* .set-row.running                */
+  --amber-tint: rgba(242, 195, 63, .13);  /* .set-row.running.resting        */
+  --hairline: rgba(233, 222, 190, .08);
+}
+
+/* --------------------------------------------------------------------------
+   1b. UNIVERSAL TOKENS — geometry, type, space, motion, layout.
+   NEVER varies by theme. No :root[data-theme] block below may restate one of
+   these names; a theme that touches geometry is malformed, and the harness in
+   the P5 verification set asserts it.
+   -------------------------------------------------------------------------- */
 
 :root {
   color-scheme: dark;
 
-  /* surfaces */
-  --bg: #0b0d10;
-  --surface: #14171c;
-  --card: #1b1f26;
-  --card-2: #232935;
-  --border: rgba(255, 255, 255, .08);
+  /* shape & elevation — issued kit has stamped, flat corners.
+     Round things stay round on purpose (§8: chips, badges, tabs, FAB, timer).
+     The shadow is black-only, so it is theme-neutral by construction. */
+  --radius: 6px;
+  --radius-sm: 4px;
+  --shadow: 0 10px 26px rgba(0, 0, 0, .62);
 
-  /* text */
-  --text: #f2f5f7;
-  --text-2: #98a2ae;
-  --text-muted: #6b7683;
+  /* DERIVED, not a theme token: --red-line is --red at .28, computed from
+     whichever --red the active theme supplies (see the @supports block after
+     §1c). A theme therefore never restates it. The literal below is the
+     no-color-mix fallback and is the exact value this rule has always had. */
+  --red-line: rgba(255, 85, 69, .28);     /* stop — hairline on a red card   */
 
-  /* brand + status */
-  --accent: #30d158;
-  --accent-ink: #04220d;
-  --blue: #0a84ff;
-  --orange: #ff9f0a;
-  --purple: #bf5af2;
-  --red: #ff453a;
-  --teal: #64d2ff;
-  --yellow: #ffd60a;
-  --pink: #ff375f;
+  /* ---- type scale ------------------------------------------------------
+     display  the big instrument metric  .stat .value
+     h1       view titles at phone width
+     h2/h3    section + topbar
+     metric   secondary readouts (recovery cells)
+     body     the app's prose baseline
+     sm       secondary prose: view-head sub, standard names
+     label    card titles, chips, list subs
+     label-sm stat labels, recovery labels
+     micro    badges, table heads, section eyebrows
+     nano     tab-bar labels only                                          */
+  --fs-display: 26px;
+  --fs-h1: 24px;
+  --fs-h2: 22px;
+  --fs-h3: 17px;
+  --fs-metric: 20px;
+  --fs-body: 15px;
+  --fs-sm: 14px;
+  --fs-label: 13px;
+  --fs-label-sm: 12px;
+  --fs-micro: 11px;
+  --fs-nano: 10px;
 
-  /* chart series (CVD-safe, use in order) */
-  --s1: #2ca350;
-  --s2: #0a84ff;
-  --s3: #cf7c00;
-  --s4: #bf5af2;
-  --s5: #ff375f;
-  --s6: #3399cc;
+  /* line-heights */
+  --lh-display: 1.15;
+  --lh-head: 1.2;
+  --lh-body: 1.45;
+  --lh-prose: 1.5;
+  --lh-label: 1.45;
 
-  /* shape & elevation */
-  --radius: 16px;
-  --radius-sm: 10px;
-  --shadow: 0 8px 24px rgba(0, 0, 0, .35);
+  /* weights */
+  --fw-label: 600;
+  --fw-label-sm: 500;
+  --fw-metric: 600;
+  --fw-head: 800;            /* stamped heading weight — silhouette         */
 
-  /* derived tints (kept as tokens so components stay consistent) */
-  --accent-tint: rgba(48, 209, 88, .14);
-  --accent-tint-strong: rgba(48, 209, 88, .22);
-  --red-tint: rgba(255, 69, 58, .14);
-  --hairline: rgba(255, 255, 255, .06);
+  /* stencil tracking. Reserved for SECTION EYEBROWS ONLY, so the treatment
+     marks structure instead of competing with thirty other shouted labels. */
+  --label-track: .11em;
+
+  /* ---- space scale ----------------------------------------------------- */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+
+  /* component spacing, spent from the scale above */
+  --card-pad: var(--sp-4);
+  --card-pad-lg: var(--sp-5);
+  --card-gap: var(--sp-4);
+  --grid-gap: var(--sp-3);
+  --row-gap: var(--sp-2);
+  --title-gap: var(--sp-3);
+  --chip-pad-y: 7px;
+  --chip-pad-x: 14px;
 
   /* layout metrics */
   --topbar-h: 56px;
   --tabbar-h: 60px;
   --sidebar-w: 232px;
   --content-max: 1080px;
-  --content-pad: 16px;
+  --content-pad: var(--sp-4);
 
-  /* motion */
-  --ease: cubic-bezier(.25, .1, .25, 1);
-  --speed: .15s;
+  /* motion — instruments respond, they don't ease */
+  --ease: cubic-bezier(.2, .05, .2, 1);
+  --speed: .12s;
 
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI',
+  /* type stacks */
+  --font-ui: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI',
     Roboto, Inter, system-ui, sans-serif;
+  --font-num: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas,
+    'Roboto Mono', monospace;
+
+  font-family: var(--font-ui);
 }
 
 @media (min-width: 768px) {
   :root {
-    --content-pad: 24px;
+    --content-pad: var(--sp-6);
+  }
+}
+
+/* ==========================================================================
+   1c. THE OTHER PALETTES
+
+   One look, several palettes. Each block below restates EXACTLY the 37 names
+   in §1a and nothing else: no --radius, no --fs-*, no --sp-*, no font stack.
+   Markup, gating and layout are identical in every theme — only colour moves.
+
+   Applied by app.js as data-theme="<slug>" on <html>, from
+   user.settings.theme, at boot and on every profile switch. An absent or
+   unknown slug matches none of these blocks and therefore falls through to
+   §1a's complete default palette.
+
+   Every number here was MEASURED, not chosen: worst-case CIEDE2000 across all
+   15 chart-series pairs under normal / protanopia / deuteranopia / tritanopia,
+   contrast on the actual composited row backgrounds, and a heat ramp that is
+   strictly increasing in L* under all three dichromat simulations. The
+   provenance for each is in its own NOTES.md / check-output.txt.
+
+   SEMANTIC ROLES, binding in all four palettes:
+     --accent  GO — primary, FAB, active tab, completed set, hit goal.
+               Exactly one hue carries this; nothing informational borrows it.
+     --orange  caution / rest interval / warm-up   --red  stop / over limit
+     --blue    the session is DRIVING this set     --yellow  a personal record
+     --purple --teal --pink  secondary data only, never a state
+     --s1..--s6  chart series only, all kept clear of the accent hue so a
+               chart line can never read as a GO state.
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   CLASSIC GREEN — the original IronLog identity, preserved and repaired.
+   Near-black cool surfaces and the familiar green that has meant GO since the
+   first build. What moved: the six chart series (the shipped set scored a
+   worst-case dE00 of 1.9 — s1 and s6 were literally the same colour to a
+   tritanope; the searched replacement scores 11.2), --text-2 / --text-muted
+   lifted off a real contrast failure (3.58:1 on --card, carrying set hints
+   and standards minimums; now 5.93 / 5.24), --blue --red --purple --pink
+   lifted just enough to clear 4.5:1 on --card-2, and a heat ramp that is a
+   strict lightness ramp instead of the old white-to-green wash.
+   -------------------------------------------------------------------------- */
+
+:root[data-theme='classic'],
+[data-theme-preview='classic'] {
+  /* surfaces — unchanged from the app people already know */
+  --bg: #0b0d10;
+  --surface: #14171c;
+  --card: #1b1f26;
+  --card-2: #232935;
+  --border: rgba(226, 233, 242, .13);
+  --hairline: rgba(226, 233, 242, .07);
+
+  /* ink — cool grey, three tiers (15.10 / 7.69 / 5.93 on --card) */
+  --text: #f2f5f7;
+  --text-2: #a8b2be;
+  --text-muted: #919caa;
+
+  /* brand — the one hue that means GO, untouched */
+  --accent: #30d158;         /* 8.17:1 on --card, 7.21 on --card-2          */
+  --accent-ink: #04220d;     /* 8.38:1 on --accent                          */
+
+  /* status — familiar system hues, four of them lifted in lightness only */
+  --blue: #3d95ff;
+  --orange: #ff9f0a;
+  --purple: #cb74f5;
+  --red: #ff5c52;
+  --teal: #64d2ff;
+  --yellow: #ffd60a;
+  --pink: #ff5c7c;
+
+  /* chart series — constrained LCh search, floor dE00 11.2, nothing within
+     46 deg of the accent hue */
+  --s1: #ffdd67;             /* gold   L* 88.9  — the primary line          */
+  --s2: #caaefa;             /* violet L* 75.9                              */
+  --s3: #e68d51;             /* orange L* 66.9                              */
+  --s4: #40c0bc;             /* teal   L* 71.2                              */
+  --s5: #ba6e94;             /* rose   L* 55.8                              */
+  --s6: #308ec7;             /* blue   L* 56.2                              */
+
+  /* heat ramp — one hue family, L* 14.2 -> 80.1, min step dE00 10.8 */
+  --heat-0: #21242b;
+  --heat-1: #1e4533;
+  --heat-2: #256843;
+  --heat-3: #2e8d51;
+  --heat-4: #45b65d;
+  --heat-5: #70de6e;
+  --plate: #171a21;
+  --seam: #0b0d10;
+
+  /* tints — the two session washes separate in LIGHTNESS as well as hue:
+     done #1e382d · running #182d4b · resting #3d301d, worst pair dE00 4.2
+     (the shipped tints put done and running 1.6 apart under tritanopia) */
+  --accent-tint: rgba(48, 209, 88, .14);
+  --accent-tint-strong: rgba(48, 209, 88, .22);
+  --red-tint: rgba(255, 92, 82, .14);
+  --blue-tint: rgba(15, 95, 208, .22);
+  --amber-tint: rgba(168, 100, 0, .24);
+}
+
+/* --------------------------------------------------------------------------
+   SLATE — cold-rolled steel instead of issued canvas. Blue-grey surfaces at
+   very low chroma, cool ink, one restrained indigo that means GO. The hard
+   part: the accent is cool here, so it cannot separate from --blue on
+   temperature the way the default does. The separation is bought on four axes
+   and measured — hue 75 deg, L* 18.2, chroma 21.3, and a role split (the
+   accent is a FILL, the blue is a STROKE, which needs no colour vision).
+   Chart series floor dE00 9.89; worst session-row pair 8.5 (shipped: 1.3).
+   -------------------------------------------------------------------------- */
+
+:root[data-theme='slate'],
+[data-theme-preview='slate'] {
+  --bg: #0a0c11;
+  --surface: #11141a;
+  --card: #181c24;
+  --card-2: #232b38;         /* STEEL — the raised layer is the bluer one   */
+  --border: rgba(200, 214, 236, .15);
+  --hairline: rgba(200, 214, 236, .08);
+
+  --text: #eaeef4;
+  --text-2: #aab4c4;
+  --text-muted: #8c95a6;     /* 5.66 on --card, 4.72 on --card-2            */
+
+  --accent: #7b8fe0;         /* indigo, h288 — fixed by design              */
+  --accent-ink: #080b14;
+  --blue: #84d0dc;           /* steel-cyan, h213 — fixed by design          */
+  --orange: #f5af71;
+  --purple: #d7a7da;
+  --red: #e67266;            /* the one colour allowed to shout             */
+  --teal: #66b896;
+  --yellow: #ffe794;
+  --pink: #c86fa4;
+
+  --s1: #ffbe6d;             /* brass — the primary line                    */
+  --s2: #1192ad;             /* steel                                       */
+  --s3: #b27954;             /* copper                                      */
+  --s4: #cda4d2;             /* orchid                                      */
+  --s5: #bfefb3;             /* sage                                        */
+  --s6: #8fdacb;             /* cyan                                        */
+
+  /* heat ramp — gunmetal to ice, min step dE00 12.4 under the worst model */
+  --heat-0: #1c2128;
+  --heat-1: #25424f;
+  --heat-2: #276678;
+  --heat-3: #4e8995;
+  --heat-4: #8aaaad;
+  --heat-5: #c1cbcb;
+  --plate: #12161d;
+  --seam: #080b11;
+
+  /* the row alphas were searched alongside the hues, not guessed: the running
+     row is the most tinted thing on screen and the done row the least */
+  --accent-tint: rgba(123, 143, 224, .12);
+  --accent-tint-strong: rgba(123, 143, 224, .22);
+  --red-tint: rgba(230, 114, 102, .14);
+  --blue-tint: rgba(132, 208, 220, .24);
+  --amber-tint: rgba(245, 175, 113, .14);
+}
+
+/* --------------------------------------------------------------------------
+   EMBER — heat is the app's native unit. Everything at rest is deep warm
+   charcoal; everything under load glows. Warmth is exactly what colour-blind
+   simulation destroys, so the four warm meaning colours sit on a strict
+   LIGHTNESS ladder (--red 59 < --accent 66 < --orange 88 < --yellow 96) and
+   --blue is kept genuinely cold, because a clock is not effort. Worst pair
+   among the five meaning colours dE00 6.0 (shipped: 0.7); chart series floor
+   16.9; heat ramp min step 13.2 across all four vision models.
+   -------------------------------------------------------------------------- */
+
+:root[data-theme='ember'],
+[data-theme-preview='ember'] {
+  --bg: #100c09;
+  --surface: #1a1410;
+  --card: #221a15;
+  --card-2: #2e241c;
+  --border: rgba(255, 214, 178, .13);   /* warm bone — a white rule on warm
+                                           charcoal reads as a scratch      */
+  --hairline: rgba(255, 214, 178, .07);
+
+  --text: #f7f0e7;
+  --text-2: #d6c7b6;
+  --text-muted: #bcab98;     /* lifted: at #9a8a7c the "prev" hint on a
+                                resting row measured 3.03:1                 */
+
+  --accent: #ff7a2e;         /* 6.58:1 on --card, 5.83 on --card-2          */
+  --accent-ink: #2a0e00;
+  --blue: #4fa8ff;           /* L* 67 — the one cold hue                    */
+  --orange: #ffda3a;         /* L* 88                                       */
+  --purple: #c9a8fb;
+  --red: #e76173;            /* L* 59 — crimson, so "delete" never reads hot */
+  --teal: #4fd5c3;
+  --yellow: #fff3c6;         /* L* 96 — white-hot, a personal record        */
+  --pink: #f58bc5;
+
+  --s1: #fbd277;             /* brass       L* 86 — the primary line        */
+  --s2: #1a8bdd;             /* signal blue L* 56                           */
+  --s3: #d45f88;             /* crimson     L* 56                           */
+  --s4: #d1bcfe;             /* periwinkle  L* 80                           */
+  --s5: #7f8e30;             /* tracer      L* 56                           */
+  --s6: #2fe4c7;             /* ice         L* 82                           */
+
+  /* a black-body curve: ash -> deep ember -> fire -> bronze -> amber ->
+     white-hot. L* 15.6 -> 97.1, hue may only ever warm, never cool. */
+  --heat-0: #2f251e;
+  --heat-1: #812300;
+  --heat-2: #a55100;
+  --heat-3: #cb8400;
+  --heat-4: #ffba2b;
+  --heat-5: #fff7d8;
+  --plate: #241c16;
+  --seam: #150f0b;
+
+  /* --red-tint's base is a deep oxblood rather than --red itself: --red sits
+     as low as the contrast gates allow, and a .16 wash of itself drops --red
+     to 4.17:1 on its own badge. A darker base at a higher alpha lands 4.61. */
+  --accent-tint: rgba(255, 122, 46, .12);
+  --accent-tint-strong: rgba(255, 122, 46, .24);
+  --red-tint: rgba(150, 23, 60, .26);
+  --blue-tint: rgba(9, 72, 157, .34);
+  --amber-tint: rgba(203, 111, 3, .36);
+}
+
+/* Derived status tints — see the note in §1a. Guarded by @supports so the
+   literal value in §1b remains the fallback on engines without color-mix.
+   This is why no theme block restates --red-line: it follows --red on its
+   own, in every palette, including one a future build adds. */
+@supports (color: color-mix(in srgb, red 50%, transparent)) {
+  :root {
+    --red-line: color-mix(in srgb, var(--red) 28%, transparent);
   }
 }
 
@@ -110,11 +496,14 @@ html {
 }
 
 body {
-  background: var(--bg);
+  /* one flat wash so the deck reads as matte material, not glass */
+  background:
+    radial-gradient(130% 55% at 50% 0%, #13150d 0%, var(--bg) 62%) fixed,
+    var(--bg);
   color: var(--text);
   font-family: inherit;
-  font-size: 15px;
-  line-height: 1.45;
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
   min-height: 100vh;
   min-height: 100dvh;
   -webkit-font-smoothing: antialiased;
@@ -122,6 +511,27 @@ body {
   text-rendering: optimizeLegibility;
   overflow-x: hidden;
   overscroll-behavior-y: none;
+}
+
+/* The deck wash is the one paint that is not a token: it is a gradient stop,
+   and each palette carries its own measured value for it. Geometry (130% 55%
+   at 50% 0%, 62% stop) is universal and identical in all four. */
+:root[data-theme='classic'] body {
+  background:
+    radial-gradient(130% 55% at 50% 0%, #121620 0%, var(--bg) 62%) fixed,
+    var(--bg);
+}
+
+:root[data-theme='slate'] body {
+  background:
+    radial-gradient(130% 55% at 50% 0%, #12161e 0%, var(--bg) 62%) fixed,
+    var(--bg);
+}
+
+:root[data-theme='ember'] body {
+  background:
+    radial-gradient(130% 55% at 50% 0%, #191009 0%, var(--bg) 62%) fixed,
+    var(--bg);
 }
 
 img,
@@ -176,14 +586,19 @@ h2,
 h3,
 h4 {
   font-weight: 700;
-  line-height: 1.2;
+  line-height: var(--lh-head);
   letter-spacing: -.01em;
 }
 
+/* the direction's heading tracking. h4 is body-adjacent and stays at -.01em. */
+h1,
+h2,
+h3 { letter-spacing: -.02em; }
+
 h1 { font-size: 28px; }
-h2 { font-size: 22px; }
-h3 { font-size: 17px; }
-h4 { font-size: 15px; }
+h2 { font-size: var(--fs-h2); }
+h3 { font-size: var(--fs-h3); }
+h4 { font-size: var(--fs-body); }
 
 p {
   color: var(--text-2);
@@ -247,8 +662,33 @@ input[type='number']::-webkit-inner-spin-button {
 
 .muted { color: var(--text-muted); }
 .text-2 { color: var(--text-2); }
-.small-text { font-size: 13px; }
+.small-text { font-size: var(--fs-label); }
 .tabular { font-variant-numeric: tabular-nums; }
+
+/* ---------- instrument numerals ----------
+   Every readout the user reads as a MEASUREMENT is set in the mono stack with
+   tabular figures, so columns line up and a changing digit does not shift the
+   row. This is the direction's instrument character and it is free in density:
+   a tabular digit occupies the same box as a proportional one. Prose, labels
+   and headings stay in --font-ui. */
+.stat .value,
+.p4-rec .v,
+.p4-rec-cell .v,
+.rest-timer .time,
+.std-val,
+.acft-row .input,
+.acft-row .pts,
+.acft-total,
+.p4-chip b,
+.list-row .trailing,
+.set-row .input,
+.set-row .set-num,
+.set-row .set-run,
+.set-row .set-prev {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.02em;
+}
 .nowrap { white-space: nowrap; }
 .truncate {
   overflow: hidden;
@@ -287,14 +727,17 @@ input[type='number']::-webkit-inner-spin-button {
   gap: 12px;
   height: calc(var(--topbar-h) + env(safe-area-inset-top, 0px));
   padding: env(safe-area-inset-top, 0px) var(--content-pad) 0;
-  background: rgba(20, 23, 28, .78);
+  /* the plate, at 80% — written off --surface so it follows the theme; the
+     literal is the no-color-mix fallback and is the value it has always had */
+  background: rgba(21, 23, 15, .80);
+  background: color-mix(in srgb, var(--surface) 80%, transparent);
   -webkit-backdrop-filter: saturate(180%) blur(16px);
   backdrop-filter: saturate(180%) blur(16px);
   border-bottom: 1px solid var(--hairline);
 }
 
 .topbar .topbar-title {
-  font-size: 17px;
+  font-size: var(--fs-h3);
   font-weight: 700;
   letter-spacing: -.01em;
   flex: 1;
@@ -332,8 +775,12 @@ input[type='number']::-webkit-inner-spin-button {
   transition: background var(--speed) var(--ease);
 }
 
-.sync-dot.ok { background: var(--accent); box-shadow: 0 0 6px rgba(48, 209, 88, .6); }
-.sync-dot.err { background: var(--red); box-shadow: 0 0 6px rgba(255, 69, 58, .6); }
+.sync-dot.ok { background: var(--accent); box-shadow: 0 0 6px rgba(255, 122, 31, .6); }
+.sync-dot.err { background: var(--red); box-shadow: 0 0 6px rgba(255, 85, 69, .6); }
+@supports (color: color-mix(in srgb, red 50%, transparent)) {
+  .sync-dot.ok { box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 60%, transparent); }
+  .sync-dot.err { box-shadow: 0 0 6px color-mix(in srgb, var(--red) 60%, transparent); }
+}
 .sync-dot.off { background: var(--text-muted); box-shadow: none; }
 
 /* ---------- content column ---------- */
@@ -349,7 +796,7 @@ input[type='number']::-webkit-inner-spin-button {
 .view {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: var(--card-gap);
   animation: view-in .2s var(--ease);
 }
 
@@ -364,14 +811,18 @@ input[type='number']::-webkit-inner-spin-button {
 
 .view-head h1,
 .view-head h2 {
-  font-size: 24px;
+  font-size: var(--fs-h1);
+  line-height: var(--lh-head);
+  font-weight: var(--fw-head);   /* stamped — this is silhouette, not density */
   letter-spacing: -.02em;
 }
 
 .view-head .sub {
   width: 100%;
   color: var(--text-2);
-  font-size: 14px;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-body);
+  font-weight: 400;
 }
 
 @media (min-width: 768px) {
@@ -490,7 +941,8 @@ input[type='number']::-webkit-inner-spin-button {
   align-items: end;
   height: calc(var(--tabbar-h) + env(safe-area-inset-bottom, 0px));
   padding: 0 4px env(safe-area-inset-bottom, 0px);
-  background: rgba(20, 23, 28, .82);
+  background: rgba(21, 23, 15, .84);
+  background: color-mix(in srgb, var(--surface) 84%, transparent);
   -webkit-backdrop-filter: saturate(180%) blur(16px);
   backdrop-filter: saturate(180%) blur(16px);
   border-top: 1px solid var(--hairline);
@@ -511,10 +963,10 @@ input[type='number']::-webkit-inner-spin-button {
   height: var(--tabbar-h);
   min-height: 44px;
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: var(--fs-nano);
   font-weight: 600;
   letter-spacing: .01em;
-  border-radius: var(--radius-sm);
+  border-radius: 999px;   /* controls stay pills — see §1 shape note */
   text-decoration: none;
   transition: color var(--speed) var(--ease);
 }
@@ -546,13 +998,15 @@ input[type='number']::-webkit-inner-spin-button {
   width: 56px;
   height: 56px;
   margin-top: -18px;
-  border-radius: 50%;
+  border-radius: 999px;   /* control, not a plate */
   background: var(--accent);
   color: var(--accent-ink);
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 6px 18px rgba(48, 209, 88, .35), 0 2px 6px rgba(0, 0, 0, .4);
+  box-shadow: 0 6px 18px rgba(255, 122, 31, .34), 0 2px 6px rgba(0, 0, 0, .5);
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--accent) 34%, transparent),
+    0 2px 6px rgba(0, 0, 0, .5);
   transition: transform var(--speed) var(--ease), box-shadow var(--speed) var(--ease),
     filter var(--speed) var(--ease);
 }
@@ -568,7 +1022,9 @@ input[type='number']::-webkit-inner-spin-button {
 
 .fab-log:active {
   transform: scale(.94);
-  box-shadow: 0 3px 10px rgba(48, 209, 88, .3), 0 1px 4px rgba(0, 0, 0, .4);
+  box-shadow: 0 3px 10px rgba(255, 122, 31, .28), 0 1px 4px rgba(0, 0, 0, .5);
+  box-shadow: 0 3px 10px color-mix(in srgb, var(--accent) 28%, transparent),
+    0 1px 4px rgba(0, 0, 0, .5);
 }
 
 /* ==========================================================================
@@ -579,14 +1035,14 @@ input[type='number']::-webkit-inner-spin-button {
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 16px;
+  padding: var(--card-pad);
   transition: box-shadow var(--speed) var(--ease), border-color var(--speed) var(--ease),
     background var(--speed) var(--ease);
 }
 
 @media (min-width: 768px) {
   .card {
-    padding: 20px;
+    padding: var(--card-pad-lg);
   }
 }
 
@@ -605,8 +1061,12 @@ button.card {
 a.card:hover,
 button.card:hover {
   box-shadow: var(--shadow);
-  border-color: rgba(255, 255, 255, .14);
-  background: #1d222a;
+  /* the hover lift is the ink at a low alpha over the card, so it stays in
+     the theme's own ink family (bone / cool white / warm white) */
+  border-color: rgba(233, 222, 190, .24);
+  border-color: color-mix(in srgb, var(--text) 24%, transparent);
+  background: #22261a;
+  background: color-mix(in srgb, var(--text) 3%, var(--card));
   text-decoration: none;
 }
 
@@ -617,20 +1077,40 @@ button.card:active {
 }
 
 .card-title {
-  font-size: 13px;
-  font-weight: 600;
+  font-size: var(--fs-label);
+  line-height: var(--lh-label);
+  font-weight: var(--fw-label);
   color: var(--text-2);
   letter-spacing: normal;
-  margin-bottom: 12px;
+  text-transform: none;
+  margin-bottom: var(--title-gap);
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
 }
 
+/* a card title is a label, not a stencil: nothing inside it gets tracking or
+   caps, badges and buttons included. */
 .card-title a,
 .card-title .btn.small {
   font-weight: 500;
+}
+
+.card-title .badge,
+.card-title .btn {
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+/* destructive card (settings "Danger zone"). ONE red: the rule and the title
+   are the same --red token, so a theme moves both together. */
+.card.danger {
+  border-color: var(--red-line);
+}
+
+.card.danger > .card-title {
+  color: var(--red);
 }
 
 /* ---------- stat tiles ---------- */
@@ -638,23 +1118,26 @@ button.card:active {
 .stat-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 12px;
+  gap: var(--grid-gap);
 }
 
 .stat {
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 14px 16px;
+  padding: 14px var(--card-pad);
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--sp-1);
   min-width: 0;
 }
 
 .stat .label {
-  font-size: 12px;
-  font-weight: 500;
+  font-size: var(--fs-label-sm);
+  line-height: var(--lh-label);
+  font-weight: var(--fw-label-sm);
+  letter-spacing: normal;
+  text-transform: none;
   color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;
@@ -662,15 +1145,15 @@ button.card:active {
 }
 
 .stat .value {
-  font-size: 26px;
-  font-weight: 700;
+  font-size: var(--fs-display);
+  font-weight: var(--fw-metric);
   letter-spacing: -.02em;
-  line-height: 1.15;
+  line-height: var(--lh-display);
   color: var(--text);
 }
 
 .stat .value .unit {
-  font-size: 14px;
+  font-size: var(--fs-sm);
   font-weight: 500;
   color: var(--text-2);
   margin-left: 3px;
@@ -685,8 +1168,8 @@ button.card:active {
   font-variant-numeric: tabular-nums;
 }
 
-.stat .delta.up { color: #30d158; }
-.stat .delta.down { color: #ff453a; }
+.stat .delta.up { color: var(--accent); }
+.stat .delta.down { color: var(--red); }
 .stat .delta.flat { color: var(--text-muted); }
 
 .stat .delta.up::before { content: '\2191'; font-weight: 700; }
@@ -772,11 +1255,12 @@ button.card:active {
 
 .btn.danger {
   background: var(--red-tint);
-  color: #ff6961;
+  color: var(--red);
 }
 
 .btn.danger:hover {
-  background: rgba(255, 69, 58, .22);
+  background: var(--red);
+  color: var(--accent-ink);
   filter: none;
 }
 
@@ -1032,7 +1516,7 @@ textarea.input {
 
 .chip-row {
   display: flex;
-  gap: 8px;
+  gap: var(--sp-2);
   overflow-x: auto;
   flex-wrap: nowrap;
   padding: 2px;
@@ -1056,13 +1540,13 @@ textarea.input {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 7px 14px;
+  padding: var(--chip-pad-y) var(--chip-pad-x);
   min-height: 36px;
   border-radius: 999px;
   background: var(--card);
   border: 1px solid var(--border);
   color: var(--text-2);
-  font-size: 13px;
+  font-size: var(--fs-label);
   font-weight: 500;
   white-space: nowrap;
   flex: none;
@@ -1090,7 +1574,8 @@ textarea.input {
 .chip[aria-pressed='true'],
 .chip[aria-selected='true'] {
   background: var(--accent-tint);
-  border-color: rgba(48, 209, 88, .45);
+  border-color: rgba(255, 122, 31, .48);
+  border-color: color-mix(in srgb, var(--accent) 48%, transparent);
   color: var(--accent);
   font-weight: 600;
 }
@@ -1106,7 +1591,7 @@ textarea.input {
   display: inline-flex;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: 999px;   /* control, not a plate */
   padding: 3px;
   gap: 2px;
   max-width: 100%;
@@ -1123,9 +1608,9 @@ textarea.input {
   flex: 1;
   min-height: 36px;
   padding: 6px 14px;
-  border-radius: 8px;
+  border-radius: 999px;
   color: var(--text-2);
-  font-size: 13px;
+  font-size: var(--fs-label);
   font-weight: 500;
   white-space: nowrap;
   transition: background var(--speed) var(--ease), color var(--speed) var(--ease);
@@ -1165,7 +1650,7 @@ textarea.input {
   gap: 4px;
   padding: 3px 9px;
   border-radius: 999px;
-  font-size: 11px;
+  font-size: var(--fs-micro);
   font-weight: 600;
   letter-spacing: .01em;
   line-height: 1.4;
@@ -1175,15 +1660,33 @@ textarea.input {
   vertical-align: middle;
 }
 
-.badge.green { background: var(--accent-tint); color: var(--accent); }
-.badge.blue { background: rgba(10, 132, 255, .16); color: #409cff; }
-.badge.orange { background: rgba(255, 159, 10, .16); color: var(--orange); }
-.badge.red { background: var(--red-tint); color: #ff6961; }
+/* badge variants — ONE MEANING PER STATUS COLOUR applies here too.
+   .go        GO: a goal met, a standard hit, the thing the app wants. ACCENT.
+   .info/.green  identity + information ("You", "Custom", a phase name, a
+              percentage). Emphasised ink on the neutral pill — deliberately
+              NOT the accent, because none of these mean "go".
+   .blue      the machine is driving it · .orange caution · .red stop.
+   `.green` is the historical class name and keeps every existing call site
+   working; it is the informational variant now, so an identity badge can no
+   longer spend the GO accent. New GO badges use `.badge.go`. A banded value
+   (e.g. a readiness score) picks .red / .orange / .go from its own band. */
+.badge.go { background: var(--accent-tint); color: var(--accent); }
+.badge.info,
+.badge.green { color: var(--text); }
+.badge.blue { background: rgba(79, 176, 232, .16); color: var(--blue); }
+.badge.orange { background: rgba(242, 195, 63, .16); color: var(--orange); }
+@supports (color: color-mix(in srgb, red 50%, transparent)) {
+  .badge.blue { background: color-mix(in srgb, var(--blue) 16%, transparent); }
+  .badge.orange { background: color-mix(in srgb, var(--orange) 16%, transparent); }
+}
+.badge.red { background: var(--red-tint); color: var(--red); }
 
 /* avatar — emoji on user-color tinted circle with user-color ring.
-   Set inline: style="--user-color: #0a84ff" (or the shorthand --c) */
+   Set inline: style="--user-color: var(--s3)" (or the shorthand --c).
+   Identity is keyed off the CVD-searched series --s1..--s6, which excludes the
+   GO accent hue — an avatar ring must never read as "the app wants this". */
 .avatar {
-  --user-color: var(--c, var(--accent));
+  --user-color: var(--c, var(--s1));
   width: 36px;
   height: 36px;
   border-radius: 50%;
@@ -1362,9 +1865,9 @@ button.list-row:active,
   flex: none;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-2);
   color: var(--text-2);
-  font-size: 14px;
+  font-size: var(--fs-sm);
   font-variant-numeric: tabular-nums;
 }
 
@@ -1651,7 +2154,7 @@ button.list-row:active,
 .set-row {
   display: grid;
   grid-template-columns: 28px minmax(0, 1fr) 76px 60px 48px 44px;
-  gap: 8px;
+  gap: var(--row-gap);
   align-items: center;
   padding: 6px 0;
   border-radius: var(--radius-sm);
@@ -1677,7 +2180,7 @@ button.list-row:active,
 .set-row.set-head,
 .set-row.head {
   padding: 0 0 4px;
-  font-size: 11px;
+  font-size: var(--fs-micro);
   font-weight: 600;
   color: var(--text-muted);
   letter-spacing: .02em;
@@ -1690,7 +2193,7 @@ button.list-row:active,
 }
 
 .set-row .set-num {
-  font-size: 13px;
+  font-size: var(--fs-label);
   font-weight: 600;
   color: var(--text-2);
   text-align: center;
@@ -1698,7 +2201,7 @@ button.list-row:active,
 }
 
 .set-row .set-prev {
-  font-size: 12px;
+  font-size: var(--fs-label-sm);
   color: var(--text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1777,6 +2280,21 @@ button.list-row:active,
   color: var(--accent);
 }
 
+/* CONTRAST: --text-muted is measured against the FLAT surfaces (5.30:1 on
+   --card). A tinted row is a composited surface, and every status tint lifts
+   it enough to drop muted 12px text under 4.5:1 — measured worst case 3.61:1
+   (the amber resting tint over --card-2). Secondary ink on a tinted row is
+   therefore --text-2, which measures 5.15:1 in that same worst case. Applies
+   to every tinted row state, not just the one that was caught. */
+.set-row.done .set-prev,
+.set-row.completed .set-prev,
+.set-row.running .set-prev,
+.set-row.done .muted,
+.set-row.completed .muted,
+.set-row.running .muted {
+  color: var(--text-2);
+}
+
 /* warmup rows */
 .set-row.warmup {
   opacity: .62;
@@ -1825,10 +2343,9 @@ button.list-row:active,
 }
 
 .rest-timer .time {
-  font-size: 18px;
-  font-weight: 600;
+  font-size: var(--fs-h3);
+  font-weight: var(--fw-metric);
   font-variant-numeric: tabular-nums;
-  letter-spacing: .01em;
   min-width: 52px;
   text-align: center;
 }
@@ -1968,22 +2485,30 @@ button.list-row:active,
   white-space: nowrap;
 }
 
-/* muscle map heat legend: gradient bar + low/high labels */
+/* muscle map heat legend: gradient bar + low/high labels.
+   The gradient MUST be the map's actual six-stop ramp or the legend is lying;
+   --heat-0..5 mirror STOPS in js/musclemap.js. */
 .muscle-legend {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 11px;
+  gap: var(--sp-2);
+  font-size: var(--fs-micro);
+  line-height: var(--lh-label);
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
   color: var(--text-muted);
-  margin-top: 12px;
+  margin-top: var(--sp-3);
 }
 
 .muscle-legend .ramp {
   flex: 1;
   max-width: 160px;
-  height: 6px;
-  border-radius: 3px;
-  background: linear-gradient(to right, rgba(255, 255, 255, .06), var(--accent));
+  height: 8px;
+  border-radius: 4px;
+  background: linear-gradient(to right,
+    var(--heat-0), var(--heat-1), var(--heat-2),
+    var(--heat-3), var(--heat-4), var(--heat-5));
   border: 1px solid var(--hairline);
 }
 
@@ -2125,10 +2650,15 @@ button.list-row:active,
   height: 20px;
 }
 
-.icon-bubble.blue { background: rgba(10, 132, 255, .16); color: #409cff; }
-.icon-bubble.orange { background: rgba(255, 159, 10, .16); color: var(--orange); }
-.icon-bubble.red { background: var(--red-tint); color: #ff6961; }
-.icon-bubble.purple { background: rgba(191, 90, 242, .16); color: var(--purple); }
+.icon-bubble.blue { background: rgba(79, 176, 232, .16); color: var(--blue); }
+.icon-bubble.orange { background: rgba(242, 195, 63, .16); color: var(--orange); }
+.icon-bubble.red { background: var(--red-tint); color: var(--red); }
+.icon-bubble.purple { background: rgba(188, 156, 245, .16); color: var(--purple); }
+@supports (color: color-mix(in srgb, red 50%, transparent)) {
+  .icon-bubble.blue { background: color-mix(in srgb, var(--blue) 16%, transparent); }
+  .icon-bubble.orange { background: color-mix(in srgb, var(--orange) 16%, transparent); }
+  .icon-bubble.purple { background: color-mix(in srgb, var(--purple) 16%, transparent); }
+}
 
 /* two-column card grid on desktop */
 .grid-2 {
@@ -2349,7 +2879,8 @@ button.std-row:hover .std-name {
 }
 
 .std-name {
-  font-size: 14px;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-body);
   font-weight: 600;
   min-width: 0;
   overflow: hidden;
@@ -2359,7 +2890,7 @@ button.std-row:hover .std-name {
 
 .std-val {
   flex: none;
-  font-size: 13px;
+  font-size: var(--fs-label);
 }
 
 /* progress bar toward competitive, with a notch at the minimum tier */
@@ -2388,7 +2919,8 @@ button.std-row:hover .std-name {
 }
 
 .std-sub {
-  font-size: 12px;
+  font-size: var(--fs-label-sm);
+  line-height: var(--lh-label);
   color: var(--text-muted);
 }
 
@@ -2510,14 +3042,17 @@ button.std-row:hover .std-name {
 
 /* depth 4 is a flag, never a target — it reads as a warning when selected */
 .sw-depth-row .chip[data-depth='4'].active {
-  background: rgba(255, 69, 58, .16);
-  border-color: rgba(255, 69, 58, .5);
+  background: rgba(255, 85, 69, .16);
+  background: color-mix(in srgb, var(--red) 16%, transparent);
+  border-color: rgba(255, 85, 69, .5);
+  border-color: color-mix(in srgb, var(--red) 50%, transparent);
   color: var(--red);
 }
 
 /* hold countdown pill — same chrome as the rest timer, blue accent */
 .rest-timer.hold-pill {
-  border-color: rgba(10, 132, 255, .35);
+  border-color: rgba(79, 176, 232, .4);
+  border-color: color-mix(in srgb, var(--blue) 40%, transparent);
 }
 
 .rest-timer.hold-pill .fill {
@@ -2682,7 +3217,8 @@ button.std-row:hover .std-name {
   display: inline-block;
   padding: 5px 16px;
   border-radius: 999px;
-  background: rgba(10, 132, 255, .16);
+  background: rgba(79, 176, 232, .16);
+  background: color-mix(in srgb, var(--blue) 16%, transparent);
   color: var(--blue);
   font-weight: 800;
   font-size: 15px;
@@ -2886,8 +3422,10 @@ button.std-row:hover .std-name {
 }
 
 .player-depth > button[data-depth='4'].active {
-  background: rgba(255, 69, 58, .16);
-  border-color: rgba(255, 69, 58, .5);
+  background: rgba(255, 85, 69, .16);
+  background: color-mix(in srgb, var(--red) 16%, transparent);
+  border-color: rgba(255, 85, 69, .5);
+  border-color: color-mix(in srgb, var(--red) 50%, transparent);
   color: var(--red);
 }
 
@@ -2938,8 +3476,9 @@ button.std-row:hover .std-name {
 .player-station.done { color: var(--text-muted); }
 
 .player-station.cur {
-  background: rgba(48, 209, 88, .12);
-  border-color: rgba(48, 209, 88, .4);
+  background: var(--accent-tint);
+  border-color: rgba(255, 122, 31, .4);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
   font-weight: 700;
 }
 
@@ -3073,27 +3612,34 @@ button.std-row:hover .std-name {
   border-color: rgba(255, 255, 255, .14);
 }
 
-.p4-eyebrow {
-  font-size: 11px;
+/* SECTION EYEBROWS — the only stencil ALL-CAPS treatment in the app.
+   Every other small label stays sentence case at its existing size; reserving
+   the caps for section markers is what makes them read as structure. They
+   carry the full --label-track because they are now the only element wearing
+   it. Keep this list closed: adding a third caps selector dilutes both. */
+.p4-eyebrow,
+.p4-sec-head {
+  font-size: var(--fs-micro);
+  line-height: var(--lh-label);
   font-weight: 700;
-  letter-spacing: .09em;
+  letter-spacing: var(--label-track);
   text-transform: uppercase;
   color: var(--text-muted);
 }
 
 .p4-headline {
   margin: 6px 0 0;
-  font-size: 15px;
+  font-size: var(--fs-body);
   font-weight: 600;
-  line-height: 1.5;
+  line-height: var(--lh-prose);
   color: var(--text);
 }
 
 .p4-chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 12px;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
 }
 
 /* ACWR chip: the zone color rides on --zone (a CVD-safe series token) and is
@@ -3130,9 +3676,9 @@ button.std-row:hover .std-name {
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  margin-top: 12px;
-  font-size: 13px;
-  line-height: 1.5;
+  margin-top: var(--sp-3);
+  font-size: var(--fs-label);
+  line-height: var(--lh-prose);
   color: var(--orange);
 }
 
@@ -3163,38 +3709,39 @@ button.std-row:hover .std-name {
   min-width: 0;
 }
 
+/* Sentence case at the app's existing label size — deliberately NOT shrunk
+   to stencil caps. See the note on .p4-eyebrow above. */
 .p4-rec .lb,
 .p4-rec-cell .lb {
-  font-size: 12px;
+  font-size: var(--fs-label-sm);
+  line-height: var(--lh-label);
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
   color: var(--text-muted);
   white-space: nowrap;
 }
 
 .p4-rec .v,
 .p4-rec-cell .v {
-  font-size: 20px;
+  font-size: var(--fs-metric);
   font-weight: 700;
-  letter-spacing: -.01em;
   margin-top: 2px;
-}
-
-.p4-rec-cell .v {
-  font-size: 17px;
 }
 
 .p4-rec .v .unit,
 .p4-rec-cell .v .unit {
-  font-size: 12px;
+  font-size: var(--fs-label-sm);
   font-weight: 600;
   color: var(--text-muted);
 }
 
 .p4-rec .sub,
 .p4-rec-cell .sub {
-  font-size: 12px;
+  font-size: var(--fs-label-sm);
   color: var(--text-2);
   margin-top: 2px;
-  line-height: 1.45;
+  line-height: var(--lh-label);
 }
 
 .p4-spark {
@@ -3204,8 +3751,8 @@ button.std-row:hover .std-name {
 
 .p4-hint {
   margin: 14px 0 0;
-  font-size: 13px;
-  line-height: 1.5;
+  font-size: var(--fs-label);
+  line-height: var(--lh-prose);
   color: var(--text-muted);
 }
 
@@ -3217,18 +3764,13 @@ button.std-row:hover .std-name {
 }
 
 .p4-sec-head {
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: .07em;
-  text-transform: uppercase;
-  color: var(--text-muted);
   margin: 6px 2px -4px;
 }
 
 .p4-cap {
-  font-size: 12px;
+  font-size: var(--fs-label-sm);
   color: var(--text-muted);
-  line-height: 1.5;
+  line-height: var(--lh-prose);
   margin-top: 10px;
 }
 
@@ -3243,11 +3785,11 @@ button.std-row:hover .std-name {
 
 .set-row.running {
   position: relative;
-  background: rgba(10, 132, 255, .13);
+  background: var(--blue-tint);
 }
 
 .set-row.running.resting {
-  background: rgba(255, 159, 10, .12);
+  background: var(--amber-tint);
 }
 
 .set-row.running .set-num,
@@ -3285,7 +3827,8 @@ button.std-row:hover .std-name {
 /* the advisory cursor — never modal, just a hint of where you left off */
 .set-row.cursor .set-num,
 .set-row.cursor .set-run {
-  box-shadow: inset 0 0 0 1.5px rgba(48, 209, 88, .5);
+  box-shadow: inset 0 0 0 1.5px rgba(255, 122, 31, .55);
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent) 55%, transparent);
   border-radius: 999px;
 }
 
@@ -3335,24 +3878,26 @@ button.std-row:hover .std-name {
 /* card pace button, lit when the card overrides the session */
 .btn.icon.pace-on {
   color: var(--blue);
-  border-color: rgba(10, 132, 255, .45);
+  border-color: rgba(79, 176, 232, .48);
+  border-color: color-mix(in srgb, var(--blue) 48%, transparent);
 }
 
 /* ---- the session pill: a remote control for whichever row owns it ---- */
 
 .rest-timer.sess-pill {
   flex-wrap: wrap;
-  border-radius: 20px;
+  border-radius: 14px;
   padding: 10px 12px;
   gap: 6px;
   row-gap: 6px;
-  border-color: rgba(10, 132, 255, .4);
+  border-color: rgba(79, 176, 232, .45);
+  border-color: color-mix(in srgb, var(--blue) 45%, transparent);
   width: max-content;
   max-width: min(460px, calc(100vw - 16px));
 }
 
 .rest-timer.sess-pill .time {
-  font-size: 17px;
+  font-size: var(--fs-h3);
   min-width: 44px;
   flex: none;
 }
@@ -3365,11 +3910,13 @@ button.std-row:hover .std-name {
 }
 
 .rest-timer.sess-pill.is-rest {
-  border-color: rgba(255, 159, 10, .4);
+  border-color: rgba(242, 195, 63, .45);
+  border-color: color-mix(in srgb, var(--orange) 45%, transparent);
 }
 
 .rest-timer.sess-pill.is-boundary {
-  border-color: rgba(255, 214, 10, .55);
+  border-color: rgba(232, 201, 106, .6);
+  border-color: color-mix(in srgb, var(--yellow) 60%, transparent);
 }
 
 .rest-timer.sess-pill .sess-ic {
@@ -3473,8 +4020,10 @@ button.std-row:hover .std-name {
 
 .chip.pace-chip.active {
   color: var(--blue);
-  border-color: rgba(10, 132, 255, .5);
-  background: rgba(10, 132, 255, .12);
+  border-color: rgba(79, 176, 232, .5);
+  border-color: color-mix(in srgb, var(--blue) 50%, transparent);
+  background: rgba(79, 176, 232, .12);
+  background: color-mix(in srgb, var(--blue) 12%, transparent);
 }
 
 /* ---- granularity sheet ('How much should the app drive?') ---- */

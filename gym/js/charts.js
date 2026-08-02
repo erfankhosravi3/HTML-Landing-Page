@@ -6,20 +6,98 @@
 
   const Charts = {};
 
-  /* Validated CVD-safe series order — the only colors data series may wear. */
-  Charts.SERIES = ['#2ca350', '#0a84ff', '#cf7c00', '#bf5af2', '#ff375f', '#3399cc'];
+  /* ---------- palette: resolved from CSS custom properties, per render pass ----------
+     Nothing here may be frozen into a JS constant. Per-user themes are applied
+     as :root[data-theme="slug"], so a value copied at module load would stop
+     following the theme the moment one is switched with the app open. Every
+     colour below is read live off document.documentElement with
+     getComputedStyle, cached only for the duration of one render pass (and
+     dropped again at the end of the current task), and falls back to the
+     shipped literal so a chart never renders colourless in a headless/stubbed
+     DOM. */
 
-  const SURFACE = '#1b1f26';            // card / chart surface
-  const GRID = 'rgba(255,255,255,.06)'; // hairline gridlines
-  const CROSS = 'rgba(255,255,255,.15)';// crosshair
-  const GOAL = 'rgba(255,255,255,.18)'; // goal line
-  const MUTED = '#6b7683';              // tick text
-  const TEXT2 = '#98a2ae';              // secondary text / legend
-  const EXTRA = '#5a6472';              // slot for series beyond the 6 (should be folded upstream)
+  const TOKEN_FALLBACK = {
+    '--s1': '#e89f2e', '--s2': '#3890c0', '--s3': '#c96b41',
+    '--s4': '#bc9cf5', '--s5': '#b0dc78', '--s6': '#68c8c8',
+    '--accent': '#ff7a1f',
+    '--card': '#1c1f14',
+    '--text': '#f2efe3',
+    '--text-2': '#b5ae98',
+    '--text-muted': '#96917f',
+    '--border': 'rgba(233,222,190,.15)',
+    '--hairline': 'rgba(233,222,190,.08)'
+  };
+
+  const SERIES_TOKENS = ['--s1', '--s2', '--s3', '--s4', '--s5', '--s6'];
+
+  let tokenCache = null;
+  let tokenTimer = null;
+
+  function dropTokens() { tokenCache = null; tokenTimer = null; }
+
+  // Start of a render pass — the next token read re-queries the live theme.
+  function beginPass() { tokenCache = null; }
+
+  function readToken(name) {
+    let v = '';
+    try {
+      if (typeof getComputedStyle === 'function' &&
+          typeof document !== 'undefined' && document.documentElement) {
+        v = getComputedStyle(document.documentElement).getPropertyValue(name);
+      }
+    } catch (e) { v = ''; }
+    v = String(v || '').trim();
+    return v || TOKEN_FALLBACK[name] || '#96917f';
+  }
+
+  // Public so sibling render modules (views-insights P4 charts) share one
+  // resolver — and therefore one theme — instead of re-freezing their own.
+  Charts.token = function (name) {
+    if (!tokenCache) {
+      tokenCache = {};
+      // A pass is synchronous; anything read after it belongs to a later task
+      // and must re-query in case the theme changed in between.
+      if (typeof setTimeout === 'function' && !tokenTimer) tokenTimer = setTimeout(dropTokens, 0);
+    }
+    if (typeof tokenCache[name] === 'string') return tokenCache[name];
+    const v = readToken(name);
+    tokenCache[name] = v;
+    return v;
+  };
+
+  const tok = Charts.token;
+
+  /* Validated CVD-safe series order — the only colors data series may wear.
+     Live getter: reads --s1..--s6 at access time so it follows the theme. */
+  Object.defineProperty(Charts, 'SERIES', {
+    enumerable: true,
+    configurable: true,
+    get: function () {
+      return SERIES_TOKENS.map(function (t) { return tok(t); });
+    }
+  });
+
+  function cSurface() { return tok('--card'); }      // card the chart sits on
+  function cGrid() { return tok('--hairline'); }     // hairline gridlines
+  function cCross() { return tok('--border'); }      // crosshair
+  function cGoal() { return tok('--text-muted'); }   // goal line (drawn at .45)
+  function cMuted() { return tok('--text-muted'); }  // tick text
+  function cText2() { return tok('--text-2'); }      // secondary text / legend
+  function cText() { return tok('--text'); }         // emphasis text
+  function cExtra() { return tok('--text-muted'); }  // series beyond the 6 (fold upstream)
 
   function seriesColor(i) {
-    return i < Charts.SERIES.length ? Charts.SERIES[i] : EXTRA;
+    return i < SERIES_TOKENS.length ? tok(SERIES_TOKENS[i]) : cExtra();
   }
+
+  // rgba() from any resolved token colour. SVG presentation attributes cannot
+  // substitute var() / color-mix(), so anything painted into fill="…" needs a
+  // literal — resolve the token first, then thin it here.
+  Charts.alpha = function (color, a) {
+    const c = hexToRgb(color);
+    if (!c) return color;
+    return 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + a + ')';
+  };
 
   /* ---------- small helpers ---------- */
 
@@ -28,20 +106,41 @@
   // crude but reliable width estimate for 11px system font
   function tw(s, size) { return String(s).length * (size || 11) * 0.62; }
 
-  function hexToRgb(hex) {
-    const h = hex.replace('#', '');
-    const f = h.length === 3 ? h.split('').map((c) => c + c).join('') : h;
-    return [parseInt(f.slice(0, 2), 16), parseInt(f.slice(2, 4), 16), parseInt(f.slice(4, 6), 16)];
+  // Accepts #rgb / #rrggbb / rgb() / rgba() — token values are authored by the
+  // theme, so this must not assume hex. Unparseable input returns null and the
+  // callers fall back to the colour untouched.
+  function hexToRgb(color) {
+    const s = String(color || '').trim();
+    if (s.charAt(0) === '#') {
+      const h = s.slice(1);
+      const f = h.length === 3 ? h.split('').map(function (c) { return c + c; }).join('') : h;
+      if (!/^[0-9a-f]{6}$/i.test(f)) return null;
+      return [parseInt(f.slice(0, 2), 16), parseInt(f.slice(2, 4), 16), parseInt(f.slice(4, 6), 16)];
+    }
+    const m = s.match(/^rgba?\(([^)]+)\)$/i);
+    if (m) {
+      const parts = m[1].split(/[,\s/]+/).filter(function (p) { return p.length; });
+      if (parts.length >= 3) {
+        const v = parts.slice(0, 3).map(function (p) {
+          return Math.round(p.indexOf('%') !== -1 ? parseFloat(p) * 2.55 : parseFloat(p));
+        });
+        if (v.every(function (n) { return isFinite(n); })) return v;
+      }
+    }
+    return null;
   }
 
   function mixHex(a, b, t) { // t = weight of b
     const ra = hexToRgb(a), rb = hexToRgb(b);
-    const m = ra.map((v, i) => Math.round(v + (rb[i] - v) * t));
+    if (!ra || !rb) return b;
+    const m = ra.map(function (v, i) { return Math.round(v + (rb[i] - v) * t); });
     return 'rgb(' + m[0] + ',' + m[1] + ',' + m[2] + ')';
   }
 
   function lightenHex(hex, f) { // push toward white by fraction f
-    const c = hexToRgb(hex).map((v) => Math.round(v + (255 - v) * f));
+    const rgb = hexToRgb(hex);
+    if (!rgb) return hex;
+    const c = rgb.map(function (v) { return Math.round(v + (255 - v) * f); });
     return 'rgb(' + c[0] + ',' + c[1] + ',' + c[2] + ')';
   }
 
@@ -104,6 +203,7 @@
   // render now; re-render (without entry animation) when the container resizes
   function responsive(el, draw) {
     Charts.tooltip.hide();
+    beginPass();
     draw(true);
     if (el.__chartRO) { el.__chartRO.disconnect(); el.__chartRO = null; }
     if (typeof ResizeObserver === 'undefined') return;
@@ -111,7 +211,7 @@
     const ro = new ResizeObserver(U.debounce(function () {
       if (!document.body.contains(el)) { ro.disconnect(); return; }
       const w = el.clientWidth;
-      if (Math.abs(w - lastW) > 8) { lastW = w; Charts.tooltip.hide(); draw(false); }
+      if (Math.abs(w - lastW) > 8) { lastW = w; Charts.tooltip.hide(); beginPass(); draw(false); }
     }, 120));
     ro.observe(el);
     el.__chartRO = ro;
@@ -119,7 +219,7 @@
 
   function emptyState(el, h) {
     el.innerHTML = '<div style="height:' + h + 'px;display:flex;align-items:center;' +
-      'justify-content:center;color:' + MUTED + ';font-size:12px;">No data yet</div>';
+      'justify-content:center;color:' + cMuted() + ';font-size:12px;">No data yet</div>';
   }
 
   function svgOpen(w, h, extraStyle) {
@@ -129,7 +229,7 @@
 
   function txt(x, y, s, anchor, fill, size, weight) {
     return '<text x="' + r2(x) + '" y="' + r2(y) + '" text-anchor="' + (anchor || 'start') +
-      '" fill="' + (fill || MUTED) + '" font-size="' + (size || 11) + '"' +
+      '" fill="' + (fill || cMuted()) + '" font-size="' + (size || 11) + '"' +
       (weight ? ' font-weight="' + weight + '"' : '') + '>' + U.esc(s) + '</text>';
   }
 
@@ -139,7 +239,7 @@
       (center ? 'justify-content:center;' : '') + 'margin:2px 2px 8px;">' +
       items.map(function (it) {
         return '<span style="display:inline-flex;align-items:center;gap:6px;font-size:12px;' +
-          'color:' + TEXT2 + ';">' +
+          'color:' + cText2() + ';">' +
           '<span style="width:10px;height:10px;border-radius:50%;background:' + it.color +
           ';flex:none;"></span>' + U.esc(it.label) + '</span>';
       }).join('') + '</div>';
@@ -153,10 +253,12 @@
       if (this.el && document.body.contains(this.el)) return this.el;
       const d = document.createElement('div');
       d.className = 'chart-tip';
+      // Geometry only. Every colour (surface / border / ink / shadow) comes
+      // from the .chart-tip rule in styles.css so the tip follows the theme;
+      // position stays absolute here because show() offsets by page scroll.
       d.style.cssText = 'position:absolute;z-index:1000;pointer-events:none;display:none;' +
-        'background:#232935;border:1px solid rgba(255,255,255,.1);border-radius:8px;' +
-        'padding:6px 10px;font-size:12px;line-height:1.55;color:#f2f5f7;' +
-        'box-shadow:0 8px 24px rgba(0,0,0,.35);max-width:280px;white-space:nowrap;';
+        'padding:6px 10px;font-size:12px;line-height:1.55;' +
+        'max-width:280px;white-space:nowrap;';
       document.body.appendChild(d);
       this.el = d;
       return d;
@@ -180,14 +282,14 @@
   };
 
   function tipHead(s) {
-    return '<div style="color:' + TEXT2 + ';margin-bottom:3px;">' + U.esc(s) + '</div>';
+    return '<div style="color:' + cText2() + ';margin-bottom:3px;">' + U.esc(s) + '</div>';
   }
 
   function tipRow(color, label, value) {
     return '<div style="display:flex;align-items:center;gap:6px;">' +
       (color ? '<span style="width:8px;height:8px;border-radius:50%;background:' + color +
         ';flex:none;"></span>' : '') +
-      (label ? '<span style="color:' + TEXT2 + ';">' + U.esc(label) + '</span>' : '') +
+      (label ? '<span style="color:' + cText2() + ';">' + U.esc(label) + '</span>' : '') +
       '<span style="margin-left:auto;padding-left:12px;font-weight:600;">' +
       U.esc(value) + '</span></div>';
   }
@@ -294,7 +396,7 @@
     yTicks.forEach(function (t) {
       const y = Y(t);
       g += '<line x1="' + pad.l + '" y1="' + r2(y) + '" x2="' + (pad.l + pw) + '" y2="' + r2(y) +
-        '" stroke="' + GRID + '" stroke-width="1"/>';
+        '" stroke="' + cGrid() + '" stroke-width="1"/>';
       g += txt(pad.l - 8, y + 3.5, yFmt(t), 'end');
     });
 
@@ -313,7 +415,7 @@
     if (opts.goalY !== undefined && opts.goalY !== null) {
       const gy = Y(opts.goalY);
       g += '<line x1="' + pad.l + '" y1="' + r2(gy) + '" x2="' + (pad.l + pw) + '" y2="' + r2(gy) +
-        '" stroke="' + GOAL + '" stroke-width="1"/>';
+        '" stroke="' + cGoal() + '" stroke-opacity=".45" stroke-width="1"/>';
       const glabel = 'goal ' + yFmt(opts.goalY);
       const gw = tw(glabel, 10);
       const ends = series.filter(function (s) { return s.points.length; }).map(function (s) {
@@ -336,7 +438,7 @@
           lx = Math.max(pad.l + gw + 4, minX - 12);
         }
       }
-      g += txt(lx, ly, glabel, 'end', MUTED, 10);
+      g += txt(lx, ly, glabel, 'end', cMuted(), 10);
     }
 
     // area fills first (under all lines), then lines, then markers
@@ -365,15 +467,15 @@
       if (!s.points.length) return;
       const p = s.points[s.points.length - 1];
       g += '<circle cx="' + r2(X(xv(p.x))) + '" cy="' + r2(Y(p.y)) + '" r="4.5" fill="' + s.color +
-        '" stroke="' + SURFACE + '" stroke-width="2"/>';
+        '" stroke="' + cSurface() + '" stroke-width="2"/>';
     });
 
     // crosshair + hover dots (hidden until hover)
     g += '<line class="ch-x" x1="0" y1="' + pad.t + '" x2="0" y2="' + baseY +
-      '" stroke="' + CROSS + '" stroke-width="1" style="display:none"/>';
+      '" stroke="' + cCross() + '" stroke-width="1" style="display:none"/>';
     series.forEach(function (s, i) {
       g += '<circle class="ch-dot" data-s="' + i + '" r="3.5" fill="' + s.color +
-        '" stroke="' + SURFACE + '" stroke-width="2" style="display:none"/>';
+        '" stroke="' + cSurface() + '" stroke-width="2" style="display:none"/>';
     });
     // full-plot hit target (>= 24px everywhere)
     g += '<rect x="' + pad.l + '" y="' + pad.t + '" width="' + r2(pw) + '" height="' + r2(ph) +
@@ -435,7 +537,7 @@
 
   function renderBars(el, opts) {
     const data = (opts.data || []).map(function (d) {
-      return { label: String(d.label === undefined ? '' : d.label), value: +d.value || 0, color: d.color || Charts.SERIES[0] };
+      return { label: String(d.label === undefined ? '' : d.label), value: +d.value || 0, color: d.color || seriesColor(0) };
     });
     if (!data.length) { emptyState(el, 200); return; }
     if (opts.horizontal) { renderBarsH(el, data, opts); return; }
@@ -456,7 +558,7 @@
     yTicks.forEach(function (t) {
       const y = Y(t);
       g += '<line x1="' + pad.l + '" y1="' + r2(y) + '" x2="' + (pad.l + pw) + '" y2="' + r2(y) +
-        '" stroke="' + GRID + '" stroke-width="1"/>';
+        '" stroke="' + cGrid() + '" stroke-width="1"/>';
       g += txt(pad.l - 8, y + 3.5, yFmt(t), 'end');
     });
 
@@ -473,7 +575,7 @@
       const y = Y(d.value);
       const h = baseY - y;
       if (h > 0.5) g += '<path d="' + topRoundRect(x, y, barW, h, 4) + '" fill="' + d.color + '"/>';
-      if (showVals && d.value > 0) g += txt(cx, y - 6, yFmt(d.value), 'middle', TEXT2);
+      if (showVals && d.value > 0) g += txt(cx, y - 6, yFmt(d.value), 'middle', cText2());
     });
 
     const xIdx = thinIndices(n, U.clamp(Math.floor(pw / 76), 2, 6));
@@ -521,7 +623,7 @@
     ticksArr.forEach(function (t, ti) {
       const x = X(t);
       g += '<line x1="' + r2(x) + '" y1="' + pad.t + '" x2="' + r2(x) + '" y2="' + (pad.t + n * rowH) +
-        '" stroke="' + GRID + '" stroke-width="1"/>';
+        '" stroke="' + cGrid() + '" stroke-width="1"/>';
       if (labelIdx.indexOf(ti) !== -1) {
         g += txt(x, H - 6, yFmt(t), t === 0 ? 'start' : (ti === ticksArr.length - 1 ? 'end' : 'middle'));
       }
@@ -532,12 +634,12 @@
       const cy = pad.t + rowH * i + rowH / 2;
       let label = d.label;
       if (tw(label) > labMax) label = label.slice(0, Math.max(3, Math.floor(labMax / 6.8))) + '…';
-      g += txt(pad.l - 8, cy + 3.5, label, 'end', TEXT2);
+      g += txt(pad.l - 8, cy + 3.5, label, 'end', cText2());
       const w = X(d.value) - pad.l;
       if (w > 0.5) {
         g += '<path d="' + rightRoundRect(pad.l, cy - barH / 2, w, barH, 4) + '" fill="' + d.color + '"/>';
       }
-      g += txt(pad.l + Math.max(w, 0) + 6, cy + 3.5, yFmt(d.value), 'start', TEXT2);
+      g += txt(pad.l + Math.max(w, 0) + 6, cy + 3.5, yFmt(d.value), 'start', cText2());
       g += '<rect class="hit" data-i="' + i + '" x="0" y="' + r2(pad.t + rowH * i) +
         '" width="' + W + '" height="' + rowH + '" fill="transparent"/>';
     });
@@ -609,7 +711,7 @@
     yTicks.forEach(function (t) {
       const y = Y(t);
       g += '<line x1="' + pad.l + '" y1="' + r2(y) + '" x2="' + (pad.l + pw) + '" y2="' + r2(y) +
-        '" stroke="' + GRID + '" stroke-width="1"/>';
+        '" stroke="' + cGrid() + '" stroke-width="1"/>';
       g += txt(pad.l - 8, y + 3.5, yFmt(t), 'end');
     });
 
@@ -661,13 +763,14 @@
   function renderHeat(el, opts) {
     const values = opts.values || {};
     const weeks = Math.max(1, opts.weeks || 26);
-    const color = opts.color || Charts.SERIES[0];
-    const bright = color.toLowerCase() === '#2ca350' ? '#30d158' : lightenHex(color, 0.22);
+    const color = opts.color || seriesColor(0);
+    const bright = lightenHex(color, 0.22);
     // 5-step ramp: surface hairline -> color -> brightened color
+    const surface = cSurface();
     const ramp = [
-      GRID,
-      mixHex(SURFACE, color, 0.35),
-      mixHex(SURFACE, color, 0.65),
+      cGrid(),
+      mixHex(surface, color, 0.35),
+      mixHex(surface, color, 0.65),
       color,
       bright
     ];
@@ -706,7 +809,7 @@
       const m = U.strToDate(monday).getMonth();
       if (m !== prevMonth) {
         if (col - lastLabelCol >= 3) {
-          g += txt(padL + col * step, 11, U.fmtDate(monday).split(' ')[0], 'start', MUTED, 10);
+          g += txt(padL + col * step, 11, U.fmtDate(monday).split(' ')[0], 'start', cMuted(), 10);
           lastLabelCol = col;
         }
         prevMonth = m;
@@ -724,7 +827,7 @@
     }
     ['Mon', 'Wed', 'Fri'].forEach(function (lbl, i) {
       const row = i * 2;
-      g += txt(padL - 6, padT + row * step + cs * 0.78, lbl, 'end', MUTED, 10);
+      g += txt(padL - 6, padT + row * step + cs * 0.78, lbl, 'end', cMuted(), 10);
     });
 
     el.innerHTML = svgOpen(W, H) + g + '</svg>';
@@ -740,7 +843,7 @@
       if (col < 0 || row < 0 || row > 6 || !date) { Charts.tooltip.hide(); return; }
       const v = values[date] || 0;
       Charts.tooltip.show(tipHead(U.fmtDateLong(date)) +
-        tipRow(v > 0 ? ramp[level(v)] : MUTED, '', U.fmtNum(v)), p.x, p.y);
+        tipRow(v > 0 ? ramp[level(v)] : cMuted(), '', U.fmtNum(v)), p.x, p.y);
     }, function () { Charts.tooltip.hide(); });
   }
 
@@ -798,10 +901,10 @@
     const legend = '<div style="display:flex;flex-wrap:wrap;justify-content:center;gap:4px 16px;' +
       'margin-top:8px;">' + rings.map(function (rg) {
         return '<span style="display:inline-flex;align-items:center;gap:6px;font-size:12px;' +
-          'color:' + TEXT2 + ';">' +
+          'color:' + cText2() + ';">' +
           '<span style="width:10px;height:10px;border-radius:50%;background:' + rg.color + ';flex:none;"></span>' +
-          U.esc(rg.label) + ' <b style="color:#f2f5f7;font-weight:600;">' + U.esc(U.fmtNum(rg.value)) +
-          '</b><span style="color:' + MUTED + ';">/' + U.esc(U.fmtNum(rg.goal)) + '</span></span>';
+          U.esc(rg.label) + ' <b style="color:' + cText() + ';font-weight:600;">' + U.esc(U.fmtNum(rg.value)) +
+          '</b><span style="color:' + cMuted() + ';">/' + U.esc(U.fmtNum(rg.goal)) + '</span></span>';
       }).join('') + '</div>';
 
     el.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;">' +
@@ -829,13 +932,13 @@
 
   function renderSpark(el, opts) {
     const H = 36;
-    const color = opts.color || Charts.SERIES[0];
+    const color = opts.color || seriesColor(0);
     const points = (opts.points || []).filter(function (p) {
       return p && p.y !== null && p.y !== undefined && !isNaN(p.y);
     }).slice();
     if (!points.length) {
       el.innerHTML = '<div style="height:' + H + 'px;display:flex;align-items:center;' +
-        'color:' + MUTED + ';font-size:11px;">No data yet</div>';
+        'color:' + cMuted() + ';font-size:11px;">No data yet</div>';
       return;
     }
     const isDate = typeof points[0].x === 'string';
@@ -864,7 +967,7 @@
     }
     const last = points[points.length - 1];
     g += '<circle cx="' + r2(X(xv(last.x))) + '" cy="' + r2(Y(last.y)) + '" r="3" fill="' + color +
-      '" stroke="' + SURFACE + '" stroke-width="2"/>';
+      '" stroke="' + cSurface() + '" stroke-width="2"/>';
 
     el.innerHTML = svgOpen(W, H) + g + '</svg>';
   }
@@ -908,7 +1011,7 @@
           ' A' + r2(R) + ' ' + r2(R) + ' 0 ' + large + ' 1 ' + p(R, a2) +
           ' L' + p(rIn, a2) +
           ' A' + r2(rIn) + ' ' + r2(rIn) + ' 0 ' + large + ' 0 ' + p(rIn, a) +
-          ' Z" fill="' + s.color + '" stroke="' + SURFACE + '" stroke-width="2" stroke-linejoin="round"/>';
+          ' Z" fill="' + s.color + '" stroke="' + cSurface() + '" stroke-width="2" stroke-linejoin="round"/>';
         a = a2;
       });
     }
@@ -916,9 +1019,9 @@
     const legend = '<div style="display:flex;flex-wrap:wrap;justify-content:center;gap:4px 14px;' +
       'margin-top:10px;">' + slices.map(function (s) {
         return '<span style="display:inline-flex;align-items:center;gap:6px;font-size:12px;' +
-          'color:' + TEXT2 + ';">' +
+          'color:' + cText2() + ';">' +
           '<span style="width:10px;height:10px;border-radius:50%;background:' + s.color + ';flex:none;"></span>' +
-          U.esc(s.label) + ' <span style="color:' + MUTED + ';">' + U.esc(U.fmtNum(s.value)) + '</span></span>';
+          U.esc(s.label) + ' <span style="color:' + cMuted() + ';">' + U.esc(U.fmtNum(s.value)) + '</span></span>';
       }).join('') + '</div>';
 
     el.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;">' +

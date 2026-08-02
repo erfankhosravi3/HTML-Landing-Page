@@ -1248,3 +1248,105 @@ is unchanged for everyone.
 
 sw.js CACHE_NAME → next version; no new files expected (player.js is
 refactored, not replaced).
+
+# V2 ADDENDUM — P5: VISUAL SYSTEM AND PER-PROFILE THEMES
+
+User-approved. The app ships ONE look ("Field / Issued": stamped 6px geometry,
+monospace numerals, stencil section eyebrows, the redrawn anatomical muscle map)
+and SEVERAL palettes. Each profile picks its own palette — "Just change the
+colors. Styles stays the same."
+
+## Two layers, strictly separated
+
+**UNIVERSAL (never varies by theme):** geometry (--radius*), type scale
+(--fs-*, --lh-*, --fw-*), spacing (--sp-*, --card-pad, --card-gap, --grid-gap,
+--row-gap, --title-gap, --chip-pad-*), --label-track, font stacks
+(--font-ui/--font-num), all layout, all markup, and musclemap.js geometry
+(every path coordinate and stroke width).
+
+**THEME (varies):** surfaces --bg/--surface/--card/--card-2/--border/--hairline;
+ink --text/--text-2/--text-muted; --accent/--accent-ink; status --blue/--orange/
+--purple/--red/--teal/--yellow/--pink; chart series --s1..--s6; muscle-map
+--heat-0..--heat-5 plus --plate and --seam; and the row tints (--accent-tint,
+--accent-tint-strong, --red-tint, --blue-tint, --amber-tint).
+
+A theme that touches a universal token is malformed. A theme that omits a theme
+token is malformed — the set above is exhaustive and required.
+
+## Semantic roles are binding across every theme
+
+- `--accent` = GO: primary, FAB, active tab, completed set, hit goal. Exactly
+  one hue carries this; nothing informational may borrow it (see the badge rule).
+- `--orange` = caution / rest / warm-up · `--red` = stop / red-flag / over-limit
+- `--blue` = the session is DRIVING this set (must stay unmistakable from
+  --accent and --orange on the live session screen, where done / running /
+  resting rows sit adjacent — measure on the COMPOSITED row background)
+- `--yellow` = personal record · `--purple`/`--teal`/`--pink` = secondary data
+- `--s1..--s6` = chart series only; they must sit far from the accent hue so a
+  chart line never reads as a GO state.
+
+## COLOUR MUST NOT BE FROZEN IN JAVASCRIPT (the rule this phase exists to enforce)
+
+A value copied into a JS constant cannot follow a theme. Every JS colour
+consumer resolves from the CSS custom properties at render time:
+`getComputedStyle(document.documentElement).getPropertyValue('--x')`, cached per
+render pass and NEVER at module load (the theme changes while the app is open),
+with a literal fallback so nothing renders colourless.
+
+Known consumers — all of these must comply:
+- `charts.js` — SERIES, SURFACE, GRID, CROSS, GOAL, MUTED, TEXT2, EXTRA
+- `views-insights.js` — P4_MUTED, P4_TEXT2, the muscle-balance target bar
+- `musclemap.js` — STOPS (heat ramp), BODY (plate), SEAM
+- `store.js` — profile identity colours (keyed off --s1..--s6, never the accent)
+- `player.js`, `app.js` — inline state tints
+Prose must not name a colour ("green bars mean…"): a themed app cannot promise a
+hue. Describe the meaning instead.
+
+## Storage and application
+
+`user.settings.theme` = a theme slug; absent ⇒ the default. Rides the settings
+object, which mergeSettings already carries through untouched on older clients
+(P0 forward-compat clause), so a family member on a stale build keeps their
+choice instead of losing it.
+
+Applied as `data-theme="<slug>"` on `document.documentElement`, set on boot and
+on every profile switch. The default theme's tokens live in the base `:root` so
+an unthemed/unknown slug degrades to a complete, valid palette. Theme blocks are
+`:root[data-theme="<slug>"]` overrides containing ONLY theme tokens.
+
+## Shipping themes
+
+`field-issued` (default) · `classic` (the original green identity, preserved for
+continuity and repaired) · `slate` · `ember`.
+
+## Validation bar — every theme, no exceptions
+
+1. Chart series: worst-case CIEDE2000 ≥ 9.0 across all 15 pairs under normal,
+   protanopia, deuteranopia and tritanopia, derived by constrained search, not
+   taste. (For reference: the pre-P5 palette scored 1.9 — two series were
+   literally indistinguishable to a tritanope.)
+2. Contrast: every body-text pair ≥ 4.5:1 and UI/large ≥ 3:1, measured on the
+   ACTUAL composited background including the tinted session rows — not on flat
+   token pairs.
+3. Heat ramp: --heat-0..5 strictly increasing in L*, and still strictly
+   increasing under all three dichromat simulations, so the muscle map reads
+   with zero colour vision.
+
+## Mode gate
+
+The theme picker is available to EVERY user, simple mode included — it is a
+personal preference, not a performance-mode feature. It changes colour only:
+markup, gating and layout stay byte-identical between themes.
+
+## Acceptance tests (binding)
+
+1. Every theme defines exactly the theme-token set; none defines a universal
+   token; an unknown slug renders a complete valid palette.
+2. Switching profiles switches theme live, with no reload and no stale colour:
+   assert rendered chart paints, muscle-map fills and state tints all change.
+3. No JS colour constant survives: grep the shipped JS for palette literals and
+   assert charts/map/identity colours equal the computed tokens per theme.
+4. Per theme: the validation bar above, re-measured on RENDERED nodes.
+5. Markup invariance: the DOM outline of every view is byte-identical across all
+   themes and unchanged from pre-P5, in both modes.
+6. A theme choice survives a sync round-trip through a P1-era client.

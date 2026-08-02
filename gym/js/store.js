@@ -8,10 +8,127 @@
   // is keyed 'userId|appleId' so a deleted Apple Health import stays deleted
   // (a re-import would otherwise mint a brand-new workout id and resurrect it).
   const DELETED_KEYS = ['workouts', 'templates', 'bodyMetrics', 'healthSamples', 'customExercises', 'users', 'painLog', 'coachJournal', 'routines', 'appleWorkouts'];
-  const SERIES = ['#2ca350', '#0a84ff', '#cf7c00', '#bf5af2', '#ff375f', '#3399cc'];
+  /* ---------- profile identity colours -----------------------------------
+     Identity is keyed off the CVD-searched chart series --s1..--s6, which the
+     palette deliberately keeps clear of the GO accent hue: an avatar ring must
+     never read as "the app wants you to do this thing".
+
+     WIRE FORMAT (this app syncs across a mixed-version family fleet, so the
+     representation is chosen for what an OLD client does with it):
+       user.colorKey  's1'..'s6' — the identity SLOT. New clients resolve it
+                      from the stylesheet at render time, so a per-user theme
+                      (:root[data-theme="slug"]) restyles every avatar.
+       user.color     a concrete hex, kept and kept correct. It is what an
+                      out-of-date phone paints, and what a canvas needs.
+     Old clients are safe by construction: normalizeState() shallow-copies user
+     records (nothing is whitelisted away), Store.updateUser copies unknown
+     patch keys, and mergeEntities merges whole user objects — so colorKey
+     round-trips through a P4-era client untouched, while that client keeps
+     reading the .color it already understands. Nothing about the old field
+     changes shape, so no old client can be broken by it.                    */
+  const IDENTITY_KEYS = ['s1', 's2', 's3', 's4', 's5', 's6'];
+  // FALLBACK ONLY — the live value is read from the stylesheet (see
+  // paletteToken below). Kept in step with --s1..--s6 in css/styles.css so a
+  // record written with no stylesheet in reach still names a real colour.
+  const IDENTITY_FALLBACK = {
+    s1: '#e89f2e', s2: '#3890c0', s3: '#c96b41',
+    s4: '#bc9cf5', s5: '#b0dc78', s6: '#68c8c8'
+  };
+  // Names, for screen readers and for anywhere a colour has to be said out loud.
+  const IDENTITY_LABEL = {
+    s1: 'Brass', s2: 'Instrument blue', s3: 'Rust',
+    s4: 'Violet', s5: 'Tracer', s6: 'Steel teal'
+  };
+  // Retired identity palette -> the series slot that replaces it, hue-nearest.
+  // The retired orange #cf7c00 moves to rust on purpose: it sat on the GO hue,
+  // which the palette reserves. Anything not in this table is a colour the user
+  // (or a newer client) chose and passes through untouched.
+  const RETIRED_IDENTITY = {
+    '#2ca350': 's5',   // green   -> tracer
+    '#0a84ff': 's2',   // blue    -> instrument blue
+    '#cf7c00': 's3',   // orange  -> rust  (off the GO hue)
+    '#bf5af2': 's4',   // purple  -> violet
+    '#ff375f': 's1',   // pink    -> brass
+    '#3399cc': 's6'    // cyan    -> steel teal
+  };
+
+  /* ---------- per-profile themes -----------------------------------------
+     ONE look, several palettes. A theme is a colour-only override — the
+     geometry, type scale, spacing and markup are universal — so the slug is
+     the whole record: `user.settings.theme`, absent meaning the default.
+
+     FORWARD COMPAT (the same discipline mergeSettings applies to every
+     unknown settings key, and the reason this is a slug and not a palette):
+       * `theme` is NOT in defaultSettings, so it rides the settings object
+         through mergeSettings' pass-through clause exactly as any key from a
+         newer build does. A P1-era client round-trips it untouched.
+       * READS coerce to the list this build knows (themeSlug below). WRITES
+         never rewrite what is stored. A family member whose newer phone
+         picked a theme this build has never heard of renders the default
+         here and still has their choice waiting when they open that phone —
+         the value is preserved verbatim, not normalised away.
+     The label is here rather than in app.js because it is data, not chrome;
+     the COLOURS are nowhere in JS at all — the picker paints its swatches
+     with var(--accent) / var(--s1) under [data-theme-preview], so a palette
+     can never be frozen into a constant.                                   */
+  const DEFAULT_THEME = 'field-issued';
+  const THEMES = [
+    {
+      slug: 'field-issued',
+      label: 'Field / Issued',
+      note: 'Olive drab and one signal orange. Issued kit.'
+    },
+    {
+      slug: 'classic',
+      label: 'Classic Green',
+      note: 'The original IronLog look, cool and near-black.'
+    },
+    {
+      slug: 'slate',
+      label: 'Slate',
+      note: 'Cold-rolled steel. Quiet, blue-grey, indigo.'
+    },
+    {
+      slug: 'ember',
+      label: 'Ember',
+      note: 'Warm charcoal, lit by the work.'
+    }
+  ];
+  const THEME_SLUGS = THEMES.map(function (t) { return t.slug; });
 
   const Store = {};
   Store.uid = U.uid;
+
+  // The palettes this build ships, in picker order.
+  Store.themes = function () {
+    return THEMES.map(function (t) { return { slug: t.slug, label: t.label, note: t.note }; });
+  };
+
+  Store.defaultTheme = function () { return DEFAULT_THEME; };
+
+  Store.isKnownTheme = function (slug) {
+    return typeof slug === 'string' && THEME_SLUGS.indexOf(slug) !== -1;
+  };
+
+  // READ-side coercion: what this build should actually paint for a user.
+  // Never writes, never normalises the stored value.
+  Store.themeSlug = function (user) {
+    const raw = user && user.settings ? user.settings.theme : null;
+    return Store.isKnownTheme(raw) ? raw : DEFAULT_THEME;
+  };
+
+  // What is actually on the record, verbatim — '' when there is nothing.
+  // Used only to tell "chose the default" apart from "chose something this
+  // build cannot render", which the picker says out loud instead of hiding.
+  Store.storedTheme = function (user) {
+    const raw = user && user.settings ? user.settings.theme : null;
+    return typeof raw === 'string' ? raw : '';
+  };
+
+  Store.setTheme = function (userId, slug) {
+    if (!Store.isKnownTheme(slug)) return null;
+    return Store.updateUser(userId, { settings: { theme: slug } });
+  };
 
   let state = null;
   const subscribers = [];
@@ -20,6 +137,78 @@
     get: function () { return state; },
     enumerable: true
   });
+
+  /* ---------- palette access ----------
+     Read a design token off :root at CALL time, never at module load — the
+     theme can change while the app is open, and a value captured once would be
+     frozen against it. The cache is per paint pass in practice and is thrown
+     away whenever the theme marker on <html> changes; a theme switcher that
+     changes the palette some other way calls Store.flushPalette(). Falls back
+     to a literal so nothing ever renders colourless (and so the node suites,
+     which have no document, still get a real colour). */
+  let tokenCache = null;
+  let tokenCacheKey = null;
+
+  function themeSignature() {
+    if (typeof document === 'undefined' || !document.documentElement) return null;
+    return (document.documentElement.getAttribute('data-theme') || '') + '|' +
+      (document.documentElement.className || '');
+  }
+
+  function paletteToken(name, fallback) {
+    if (typeof document === 'undefined' || !document.documentElement ||
+        typeof getComputedStyle !== 'function') return fallback;
+    const sig = themeSignature();
+    if (tokenCache === null || tokenCacheKey !== sig) { tokenCache = {}; tokenCacheKey = sig; }
+    if (!Object.prototype.hasOwnProperty.call(tokenCache, name)) {
+      let v = '';
+      try { v = String(getComputedStyle(document.documentElement).getPropertyValue(name) || '').trim(); }
+      catch (e) { v = ''; }
+      tokenCache[name] = v;
+    }
+    return tokenCache[name] || fallback;
+  }
+
+  Store.flushPalette = function () { tokenCache = null; tokenCacheKey = null; };
+
+  function identityKeyOf(u) {
+    if (!u || typeof u.colorKey !== 'string') return null;
+    return IDENTITY_KEYS.indexOf(u.colorKey) === -1 ? null : u.colorKey;
+  }
+
+  // The six identity slots, in assignment order.
+  Store.identityKeys = function () { return IDENTITY_KEYS.slice(); };
+
+  Store.identityLabel = function (key) { return IDENTITY_LABEL[key] || ''; };
+
+  // A CSS colour EXPRESSION for a slot — this is what belongs in an inline
+  // style or a custom property, because the browser re-resolves it on every
+  // paint and therefore follows the active theme.
+  Store.identityVar = function (key) {
+    return IDENTITY_KEYS.indexOf(key) === -1 ? ''
+      : 'var(--' + key + ', ' + IDENTITY_FALLBACK[key] + ')';
+  };
+
+  // A resolved literal for a slot — for canvas and anywhere var() cannot go.
+  Store.identityHex = function (key) {
+    return IDENTITY_KEYS.indexOf(key) === -1 ? '' : paletteToken('--' + key, IDENTITY_FALLBACK[key]);
+  };
+
+  // Identity colour of a user as a CSS expression (avatars, rings, chips).
+  Store.userColorVar = function (u) {
+    const key = identityKeyOf(u);
+    if (key) return Store.identityVar(key);
+    if (u && typeof u.color === 'string' && u.color) return u.color;   // custom: untouched
+    return Store.identityVar(IDENTITY_KEYS[0]);
+  };
+
+  // Identity colour of a user as a literal (canvas series, sparklines).
+  Store.userColorHex = function (u) {
+    const key = identityKeyOf(u);
+    if (key) return Store.identityHex(key);
+    if (u && typeof u.color === 'string' && u.color) return u.color;   // custom: untouched
+    return Store.identityHex(IDENTITY_KEYS[0]);
+  };
 
   /* ---------- defaults & normalization ---------- */
 
@@ -139,6 +328,32 @@
     };
   }
 
+  // Read-time invariant (permanent, never a one-shot migration — it runs on
+  // every load and on every pulled remote state, and is idempotent):
+  //   * a user still wearing a RETIRED identity colour gains the --s slot that
+  //     replaces it, and .color is refreshed to that slot's base hex so an
+  //     old client stops painting an off-palette ring too;
+  //   * a colorKey that is already set WINS and is never rewritten — including
+  //     a slot name this version does not know, which a newer client may have
+  //     written (forward-compatible: unknown values pass through);
+  //   * any other colour is a colour someone chose. It passes through untouched
+  //     and gets no key.
+  // Nothing here bumps updatedAt, so the re-key never fabricates a sync write
+  // or wins a last-write-wins merge against another device.
+  function normalizeUserRead(u) {
+    const copy = shallowCopy(u);
+    copy.settings = mergeSettings(u.settings, null);
+    if (typeof copy.colorKey !== 'string' || !copy.colorKey) {
+      const key = typeof copy.color === 'string'
+        ? RETIRED_IDENTITY[copy.color.trim().toLowerCase()] : null;
+      if (key) {
+        copy.colorKey = key;
+        copy.color = IDENTITY_FALLBACK[key];
+      }
+    }
+    return copy;
+  }
+
   // Builds a valid state from arbitrary parsed JSON without throwing.
   function normalizeState(raw) {
     const st = defaultState();
@@ -168,11 +383,7 @@
     }
     // Users are shallow-copied (like workouts below) so normalizeState never
     // mutates the caller's objects — mergeRemote feeds caller-owned data here.
-    st.users = st.users.map(function (u) {
-      const copy = shallowCopy(u);
-      copy.settings = mergeSettings(u.settings, null);
-      return copy;
-    });
+    st.users = st.users.map(normalizeUserRead);
     // Read-time invariant (permanent, never a one-shot migration): every workout
     // entry is normalized by its type on every read — entry.type absent => the
     // existing lift normalizer (byte-for-byte for already-normal entries),
@@ -258,25 +469,43 @@
 
   /* ---------- users ---------- */
 
-  function pickColor() {
-    const used = state.users.map(function (u) { return u.color; });
-    for (const c of SERIES) if (used.indexOf(c) < 0) return c;
-    return SERIES[state.users.length % SERIES.length];
+  function pickIdentityKey() {
+    const used = state.users.map(identityKeyOf);
+    for (const k of IDENTITY_KEYS) if (used.indexOf(k) < 0) return k;
+    return IDENTITY_KEYS[state.users.length % IDENTITY_KEYS.length];
+  }
+
+  // Resolve {colorKey, color} from whatever a caller supplied: an explicit slot,
+  // a retired identity colour (re-keyed), a custom colour (kept verbatim, no
+  // key), or nothing at all (next free slot).
+  function resolveIdentity(opts) {
+    if (typeof opts.colorKey === 'string' && IDENTITY_KEYS.indexOf(opts.colorKey) !== -1) {
+      return { colorKey: opts.colorKey, color: IDENTITY_FALLBACK[opts.colorKey] };
+    }
+    if (typeof opts.color === 'string' && opts.color) {
+      const mapped = RETIRED_IDENTITY[opts.color.trim().toLowerCase()];
+      if (mapped) return { colorKey: mapped, color: IDENTITY_FALLBACK[mapped] };
+      return { colorKey: null, color: opts.color };
+    }
+    const key = pickIdentityKey();
+    return { colorKey: key, color: IDENTITY_FALLBACK[key] };
   }
 
   Store.addUser = function (opts) {
     ensureLoaded();
     opts = opts || {};
+    const ident = resolveIdentity(opts);
     const now = Date.now();
     const user = {
       id: U.uid('u'),
       name: String(opts.name || '').trim() || 'Athlete',
       emoji: opts.emoji || '💪',
-      color: opts.color || pickColor(),
+      color: ident.color,
       createdAt: now,
       updatedAt: now,
       settings: mergeSettings(null, opts.settings)
     };
+    if (ident.colorKey) user.colorKey = ident.colorKey;
     state.users.push(user);
     if (!state.currentUserId) state.currentUserId = user.id;
     Store.save();
@@ -291,6 +520,19 @@
     for (const k in patch) {
       if (k === 'id' || k === 'createdAt' || k === 'settings') continue;
       u[k] = patch[k];
+    }
+    // Identity: a patch naming a slot this version knows wins (and refreshes
+    // .color for old clients); a slot it does NOT know is a newer client's and
+    // passes through exactly as the generic copy above left it; a patch naming
+    // only a colour re-keys retired identity colours and otherwise takes over
+    // as a custom colour, dropping any stale slot.
+    const patchKey = typeof patch.colorKey === 'string' ? patch.colorKey : '';
+    const patchColor = typeof patch.color === 'string' ? patch.color : '';
+    if (IDENTITY_KEYS.indexOf(patchKey) !== -1 || (!patchKey && patchColor)) {
+      const ident = resolveIdentity({ colorKey: patchKey, color: patchColor });
+      u.color = ident.color;
+      if (ident.colorKey) u.colorKey = ident.colorKey;
+      else delete u.colorKey;
     }
     if (patch.settings) u.settings = mergeSettings(u.settings, patch.settings);
     u.updatedAt = Date.now();
@@ -1412,17 +1654,20 @@
     const start = U.addDays(today, -DAYS);
     const startMs = U.strToDate(start).getTime();
 
+    // Identity slots, not literals — the seeded family follows the theme like
+    // every other profile (Dana's retired orange moved off the GO hue to rust).
     const userDefs = [
-      { name: 'Erfan', emoji: '🦍', color: '#2ca350' },
-      { name: 'Amu Reza', emoji: '🐻', color: '#0a84ff' },
-      { name: 'Dana', emoji: '🐆', color: '#cf7c00' }
+      { name: 'Erfan', emoji: '🦍', colorKey: 's5' },
+      { name: 'Amu Reza', emoji: '🐻', colorKey: 's2' },
+      { name: 'Dana', emoji: '🐆', colorKey: 's3' }
     ];
     const users = userDefs.map(function (d) {
       return {
         id: U.uid('u'),
         name: d.name,
         emoji: d.emoji,
-        color: d.color,
+        colorKey: d.colorKey,
+        color: IDENTITY_FALLBACK[d.colorKey],
         createdAt: startMs,
         updatedAt: startMs,
         settings: mergeSettings(null, { units: 'lb' })

@@ -2753,6 +2753,12 @@
 
   /* ---------- the set peek strip (tap a set — the clock keeps running) ---------- */
 
+  // A peek chip is the same three states as a builder set row, so it spends the
+  // same palette tokens: DONE is the accent tint (the completed-set colour the
+  // manual log already uses — one meaning, one hue), RUNNING is the --blue
+  // tint (the machine is driving this set), pending is the plain card. The
+  // values are read from the stylesheet at paint time via var(), so a per-user
+  // theme moves the chips with everything else — no colour is frozen here.
   function peekHTML(d, at) {
     const sets = (at.entry.sets || []);
     const t = d._timer;
@@ -2764,11 +2770,14 @@
       const cls = done ? 'done' : (running ? 'cur' : '');
       html += '<button type="button" data-peek="' + U.esc(sid) + '" ' +
         'style="display:inline-flex;align-items:center;gap:6px;padding:7px 11px;border-radius:999px;' +
-        'border:1px solid ' + (running ? 'var(--blue)' : 'var(--border)') + ';background:' +
-        (done ? 'rgba(48,209,88,.12)' : (running ? 'rgba(10,132,255,.14)' : 'var(--card)')) + ';' +
+        'border:1px solid ' + (running ? 'var(--blue)' : (done ? 'var(--accent-tint-strong)' : 'var(--border)')) + ';background:' +
+        (done ? 'var(--accent-tint)' : (running ? 'var(--blue-tint)' : 'var(--card)')) + ';' +
         'color:var(--text);font-size:13px;font-variant-numeric:tabular-nums;min-height:36px" ' +
         'class="' + cls + '" aria-label="Set ' + (i + 1) + '">' +
-        '<span style="color:var(--text-muted);font-size:11px;font-weight:700">' + (i + 1) + '</span>' +
+        // secondary ink on a TINTED chip is --text-2, never --text-muted: the
+        // composited tint drops muted under 4.5:1 (see §11 in css/styles.css).
+        '<span style="color:' + (done || running ? 'var(--text-2)' : 'var(--text-muted)') +
+        ';font-size:11px;font-weight:700">' + (i + 1) + '</span>' +
         U.esc(setTargetLabel(at.entry, s) || '—') + (done ? ' ✓' : '') + '</button>';
     });
     html += '<button type="button" data-peekadd="1" style="padding:7px 11px;border-radius:999px;' +
