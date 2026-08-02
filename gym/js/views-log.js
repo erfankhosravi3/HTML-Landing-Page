@@ -81,6 +81,9 @@
 
   /* ======================================================================
      Active workout draft — localStorage IO
+
+     A draft that cannot be written is a session that vanishes on reload, so
+     the failure is reported rather than swallowed (see Store.onSaveError).
      ====================================================================== */
 
   let draft = null;
@@ -126,7 +129,8 @@
       // render, so an unpersisted _sid would be regenerated and orphan a
       // running timer.
       if (minted) {
-        try { localStorage.setItem(DRAFT_KEY, JSON.stringify(d)); } catch (e) { /* storage full */ }
+        try { localStorage.setItem(DRAFT_KEY, JSON.stringify(d)); reportSave(false); }
+        catch (e) { reportSave(true); }
       }
       return d;
     } catch (e) {
@@ -159,10 +163,18 @@
 
   let reconciling = false;
 
+  // Storage failures are the Store's to announce; it owns the one banner.
+  function reportSave(broken) {
+    if (window.Store && typeof Store.reportSaveFailure === 'function') {
+      Store.reportSaveFailure(broken);
+    }
+  }
+
   function saveDraft() {
     if (!draft) return;
     draftRev++;
-    try { localStorage.setItem(DRAFT_KEY, JSON.stringify(draft)); } catch (e) { /* storage full */ }
+    try { localStorage.setItem(DRAFT_KEY, JSON.stringify(draft)); reportSave(false); }
+    catch (e) { reportSave(true); }
     // A reconcile that expires a timer WRITES, and that write must not
     // re-enter this function — the localStorage line above still runs for it.
     if (reconciling) return;

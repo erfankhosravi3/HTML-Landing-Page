@@ -1891,6 +1891,45 @@
   let reloadingForUpdate = false;
   let onUpdateDismissed = null;
 
+  /* ---------- storage is full ----------------------------------------------
+     The one failure mode where the screen lies to you: the workout is in
+     memory and rendered, but the write was refused, so closing the app loses
+     it. This is not dismissable — dismissing it would restore exactly the
+     silence that made it dangerous — and it leads with the action that still
+     works, because export reads from memory and therefore succeeds. */
+  let storageBarEl = null;
+
+  function showStorageBar() {
+    if (storageBarEl) return;
+    storageBarEl = U.el('<div class="storage-bar" role="alert">' +
+      '<span class="sb-icon">' + icons.alert + '</span>' +
+      '<div class="sb-body">' +
+        '<strong>Out of storage — recent changes are not being saved.</strong>' +
+        '<span>What is on screen is in memory only. Export a backup now, then free ' +
+        'space (delete other sites’ data, or old photos) and import it back.</span>' +
+      '</div>' +
+      '<button type="button" class="btn primary small" data-act="sb-export">Export backup</button>' +
+      '</div>');
+    document.body.appendChild(storageBarEl);
+    U.on(storageBarEl, 'click', '[data-act="sb-export"]', function () {
+      try {
+        U.download('ironlog-emergency-backup-' + U.todayStr() + '.json', Store.exportJSON(),
+          'application/json');
+        App.toast('Backup downloaded — keep it safe', 'ok');
+      } catch (e) {
+        App.toast('Could not build the backup: ' + ((e && e.message) || e), 'err');
+      }
+    });
+  }
+
+  function hideStorageBar() {
+    if (!storageBarEl) return;
+    storageBarEl.remove();
+    storageBarEl = null;
+  }
+
+  App._showStorageBar = showStorageBar;   // for tests
+
   function showUpdateBar(onAccept) {
     if (updateBarEl) return;
     updateBarEl = U.el('<div class="update-bar" role="status">' +
@@ -2018,6 +2057,12 @@
     Store.subscribe(applyTheme);
     Store.subscribe(scheduleRerender);
     if (window.Sync && Sync.onStatus) Sync.onStatus(refreshSyncDot);
+    // Subscribed before the first render, so a failure during boot is caught.
+    if (typeof Store.onSaveError === 'function') {
+      Store.onSaveError(function (broken) {
+        if (broken) showStorageBar(); else hideStorageBar();
+      });
+    }
     // another tab may start/finish a workout draft (guided or not — one record)
     // — keep the fab dot honest
     window.addEventListener('storage', function (e) {

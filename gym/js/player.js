@@ -833,7 +833,12 @@
       cacheRaw = JSON.stringify(d);
       cacheDraft = d;
       localStorage.setItem(DRAFT_KEY, cacheRaw);
-    } catch (e) { /* storage full — the session keeps running in memory */ }
+      if (window.Store && Store.reportSaveFailure) Store.reportSaveFailure(false);
+    } catch (e) {
+      // The session keeps running in memory, but a reload would lose it — so
+      // say so rather than letting the user find out the hard way.
+      if (window.Store && Store.reportSaveFailure) Store.reportSaveFailure(true);
+    }
   }
 
   // The live draft: the host's object when bound (so the builder and the
