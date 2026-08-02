@@ -44,6 +44,7 @@
   const DEFAULT_HOLD_SEC = 30;
   const DEFAULT_TEMPO_REPS = 8;   // a metronome row with nothing typed yet
   const DEFAULT_REST_SEC = 90;
+  const ENGINE_STALL_MS = 1500;   // no tick for this long => the clock was dead
   const METHODS = ['static', 'dynamic', 'pnf', 'loaded'];
   const KIND_DEFS = [
     { id: 'stretch', label: 'Stretch' },
@@ -434,6 +435,13 @@
     return !!en && en.type === 'cardio' && en.mode === 'circuit';
   }
 
+  // Shapes that legitimately carry a `sets` array. Everything else (cardio,
+  // mobility, test blobs) is a typed entry that saves verbatim — never grow a
+  // `sets` key on one.
+  function isSetBearingEntry(en) {
+    return isLiftEntry(en) || isSetworkEntry(en);
+  }
+
   // Entries the live substrate can drive: lift + setwork. Cardio/mobility/
   // durability/test blobs are logged, never stepped through.
   function isRunnableEntry(en) {
@@ -581,6 +589,10 @@
       };
       en._targetRounds = c.rounds;
       if (c.amrapSec > 0) en._amrapSec = c.amrapSec;
+      // The CIRCUIT's own start. A routine started on top of an open draft
+      // joins it (one live session), so d.startedAt is the whole session and
+      // would charge the whole day's lifting to this circuit's durationMin.
+      en._startedAt = d.startedAt || Date.now();
       d.entries.push(en);
       return d;
     }
@@ -747,6 +759,12 @@
   let reconciling = false;
   let engineIv = null;
   let nowFn = null;
+  // Where the running set / the cursor sat at the PREVIOUS reconcile. reconcile
+  // runs after the mutation, so a deleted set's position has to be memoized
+  // while it is still alive — that is what lets the orphan branches advance
+  // FORWARD instead of rescanning the draft from the top.
+  let lastPos = null;
+  let lastCursorPos = null;
 
   function now() { return nowFn ? nowFn() : Date.now(); }
 
@@ -765,6 +783,7 @@
     // it only asks the host for what the builder's ✓ would have filled in.
     host.prefill = typeof h.prefill === 'function' ? h.prefill : null;
     Player.discardLegacySession();
+    resumeEngine();
     return Session;
   };
 
@@ -882,8 +901,12 @@
     d.entries.forEach(function (en) {
       if (!en || typeof en !== 'object') return;
       if (!en.id) { en.id = U.uid('en'); changed = true; }
-      if (!Array.isArray(en.sets)) { en.sets = []; changed = true; }
-      en.sets.forEach(function (s) {
+      // Only SET-BEARING shapes get an empty sets array. A typed entry (the
+      // cardio circuit) has no sets by design and now saves verbatim, so a
+      // lift-shaped `sets` key normalised on here would be written into the
+      // user's permanent record.
+      if (isSetBearingEntry(en) && !Array.isArray(en.sets)) { en.sets = []; changed = true; }
+      (Array.isArray(en.sets) ? en.sets : []).forEach(function (s) {
         if (s && typeof s === 'object' && !s._sid) { s._sid = U.uid('s'); changed = true; }
       });
     });
@@ -1179,8 +1202,16 @@
     // nearest filled one in the same entry (the P3 builder rule) and then to 8.
     const perRep = Session.tempoSecPerRep(Session.tempoOf(en, d));
     if (!(perRep > 0)) return null; // no driver — ✓ advances
-    const reps = num(set && set.reps) > 0 ? Math.round(num(set.reps)) : ownRepsFallback(en);
-    return { driver: 'metronome', targetSec: Math.round(perRep * reps), autoReps: reps };
+    const own = num(set && set.reps) > 0 ? Math.round(num(set.reps)) : 0;
+    const borrowed = own > 0 ? null : ownRepsFallback(en);
+    const reps = borrowed ? borrowed.reps : own;
+    // DEFAULT_TEMPO_REPS only gives the CLOCK a length. It was never
+    // prescribed and was never counted, so it must not be recorded as an
+    // observation — the row stays empty and is dropped at save, exactly as it
+    // would be with no tempo at all.
+    const drv = { driver: 'metronome', targetSec: Math.round(perRep * reps), autoReps: reps, perRep: perRep };
+    if (borrowed && borrowed.fabricated) drv.repsFabricated = 1;
+    return drv;
   };
 
   /* ---------- timer slot (single, bound to (entryId, _sid)) ---------- */
@@ -1237,6 +1268,19 @@
     engineIv = null;
   }
 
+  // The timer is persisted ON the draft, so it outlives the JS context: a
+  // reload, a PWA relaunch, a discarded tab or a crash rehydrates a live
+  // _timer with no interval behind it. armTimer() is the only other caller of
+  // ensureEngine(), so without this the rehydrated timer is a zombie — it
+  // never ticks, never expires, fires no cue, and is finally reaped by
+  // reconcile() with a wall-clock holdSec. ensureEngine() is idempotent and
+  // Session.tick() stops the interval once the slot is empty.
+  function resumeEngine(d) {
+    const t = timerOf(d || Session.draft());
+    if (t && !t.boundary && !t.pausedAt) ensureEngine();
+    return !!t;
+  }
+
   function armTimer(d, en, set, opts) {
     opts = opts || {};
     const t = {
@@ -1252,9 +1296,15 @@
       pausedMs: 0,
       frozenAt: 0,
       boundary: 0,
-      saidTen: 0
+      saidTen: 0,
+      tickedAt: now()
     };
     if (num(opts.autoReps) > 0) t.autoReps = Math.round(num(opts.autoReps));
+    // seconds per rep — lets an early stop record the reps that were actually
+    // metronomed instead of the whole prescription
+    if (num(opts.perRep) > 0) t.perRep = num(opts.perRep);
+    // the rep count was invented for the clock's length, never prescribed
+    if (opts.repsFabricated) t.repsFabricated = 1;
     d._timer = t;
     ensureEngine();
     return t;
@@ -1262,6 +1312,7 @@
 
   function clearTimer(d) {
     if (d && d._timer) delete d._timer;
+    lastPos = null;   // a stale position must never leak into a later session
     stopEngine();
   }
 
@@ -1294,6 +1345,17 @@
       if (scopeEntryId) return null;
     }
     return null;
+  }
+
+  // Recovery for an orphaned binding: the next pending set AFTER where it sat,
+  // falling back to the first pending one only when nothing is left ahead.
+  // The deleted set/entry took its index with it and everything behind it
+  // shifted down into that slot, so the scan resumes AT the vacated index —
+  // one before where the orphan sat — never at the top of the draft.
+  function pendingAfter(d, pos, entryAlive) {
+    if (!pos) return nextPending(d, 0, -1, null);
+    const si = entryAlive ? pos.si - 1 : -1;
+    return nextPending(d, pos.ei, si, null) || nextPending(d, 0, -1, null);
   }
 
   Session.next = function (d) {
@@ -1392,7 +1454,9 @@
       targetSec: targetSec,
       armedTarget: drv.driver === 'countdown' ? ownTargetSec(set) : 0,
       chain: chain,
-      autoReps: drv.autoReps
+      autoReps: drv.autoReps,
+      perRep: drv.perRep,
+      repsFabricated: drv.repsFabricated
     });
     persist(d);
     cueSetArmed(en, set);
@@ -1400,12 +1464,15 @@
     return true;
   }
 
+  // -> {reps, fabricated}. 'Borrow the sibling row's reps' and 'invent 8 so the
+  // clock has a length' are two different things: only the first is a real
+  // prescription, and only the first may ever be written back to the set.
   function ownRepsFallback(en) {
     const sets = (en && Array.isArray(en.sets)) ? en.sets : [];
     for (let i = 0; i < sets.length; i++) {
-      if (num(sets[i] && sets[i].reps) > 0) return Math.round(num(sets[i].reps));
+      if (num(sets[i] && sets[i].reps) > 0) return { reps: Math.round(num(sets[i].reps)), fabricated: false };
     }
-    return DEFAULT_TEMPO_REPS;
+    return { reps: DEFAULT_TEMPO_REPS, fabricated: true };
   }
 
   // Only the running set's OWN typed target retargets it — editing a sibling
@@ -1421,11 +1488,23 @@
   Session.adjust = function (deltaSec) {
     const d = Session.draft();
     const t = timerOf(d);
-    if (!t || t.boundary || !(t.targetSec > 0)) return false;
-    const el = Math.max(0, Math.round(elapsedMs(t) / 1000));
-    const next = Math.max(5, Math.max(el + 1, t.targetSec + Math.round(num(deltaSec))));
+    if (!t || !(t.targetSec > 0)) return false;
+    let next;
+    if (t.boundary) {
+      // A frozen boundary is asking 'how long was that really?'. Its elapsed
+      // floor is meaningless (the clock stopped), and refusing the adjust is
+      // what forced 'confirm the full target or nothing' — i.e. holdSec became
+      // the plan, which the binding rule forbids. Clamp to the 5s floor only.
+      next = Math.max(5, t.targetSec + Math.round(num(deltaSec)));
+    } else {
+      const el = Math.max(0, Math.round(elapsedMs(t) / 1000));
+      next = Math.max(5, Math.max(el + 1, t.targetSec + Math.round(num(deltaSec))));
+    }
     if (next === t.targetSec) return false;
     t.targetSec = next;
+    // armedTarget tracks the SET's own value, not the timer's — leaving it
+    // alone is what lets reconcile tell 'the row was edited' from 'the pill
+    // was tapped', so an adjust survives the next save.
     persist(d);
     notify();
     return true;
@@ -1502,6 +1581,14 @@
     const d = Session.draft();
     if (!d) return false;
     const t = timerOf(d);
+    if (boundaryOwedElsewhere(t, entryId, sid)) {
+      // An 'expired while the screen was off' answer is still owed. Never
+      // reuse the slot from another row: the chain's rest would overwrite the
+      // boundary and the set the user really held would be silently lost.
+      persist(d);
+      notify();
+      return false;
+    }
     if (t && t.phase === 'work' && t.entryId === entryId && t.sid === sid) {
       clearTimer(d);
     }
@@ -1520,42 +1607,81 @@
     return true;
   };
 
+  // A set that would record NOTHING is dropped by buildFinishedEntries; the
+  // builder's ✓ never does that, so neither may the focus view's Done.
+  function recordableSet(en, set) {
+    if (!set) return false;
+    return isSetworkEntry(en)
+      ? (num(set.reps) > 0 || num(set.holdSec) > 0 || num(set.distanceM) > 0)
+      : num(set.reps) > 0;
+  }
+
+  // Reps that were really metronomed. A full run yields exactly the target (so
+  // the driver table's 'auto-✓ at targetReps' is preserved); an early stop
+  // records the short count, exactly as holdSec records the short time.
+  function metronomedReps(t, actualSec) {
+    const target = Math.round(num(t && t.autoReps));
+    if (!(target > 0)) return 0;
+    const per = num(t && t.perRep);
+    if (!(per > 0) || !(actualSec > 0)) return target;
+    return Math.min(target, Math.max(1, Math.round(actualSec / per)));
+  }
+
   function writeActuals(en, set, t, actualSec, vals) {
     const shape = shapeOfEntry(en);
     vals = vals || {};
+    // t.repsFabricated: the count exists only to give the clock a length — it
+    // was never prescribed and never counted, so it is never written back.
+    const autoReps = (t && num(t.autoReps) > 0 && !t.repsFabricated) ? metronomedReps(t, actualSec) : 0;
     if (isSetworkEntry(en)) {
       if (shape === 'hold' && actualSec > 0) set.holdSec = Math.max(1, Math.round(actualSec));
       if (num(vals.holdSec) > 0) set.holdSec = Math.max(1, Math.round(num(vals.holdSec)));
       if (num(vals.reps) > 0) set.reps = Math.round(num(vals.reps));
-      else if (shape === 'reps' && t && num(t.autoReps) > 0 && !(num(set.reps) > 0)) {
-        set.reps = Math.round(num(t.autoReps));
+      else if (shape === 'reps' && autoReps > 0 && !(num(set.reps) > 0)) {
+        set.reps = autoReps;
       }
       if (num(vals.distanceM) > 0) set.distanceM = Math.round(num(vals.distanceM));
       if (num(vals.weightKg) > 0) set.weightKg = num(vals.weightKg);
       if (num(vals.intensity) > 0) set.intensity = U.clamp(Math.round(num(vals.intensity)), 1, 4);
-      // A carry is an elapsed stopwatch: the clock NEVER measures distance or
-      // load. Stopping one with nothing typed accepts exactly what the ✓ would
-      // have prefilled, via the host's hint (nothing is invented here).
-      if (shape === 'carry' && host.prefill) {
-        try { host.prefill(en, set); } catch (e) { /* a missing hint never blocks a save */ }
-      }
     } else {
       // lift set — exactly {weightKg, reps, type, rpe} survives to Store
       if (num(vals.reps) > 0) set.reps = Math.round(num(vals.reps));
-      else if (t && num(t.autoReps) > 0 && !(num(set.reps) > 0)) set.reps = Math.round(num(t.autoReps));
+      else if (autoReps > 0 && !(num(set.reps) > 0)) set.reps = autoReps;
       if (num(vals.weightKg) > 0) set.weightKg = num(vals.weightKg);
+    }
+    // A carry is an elapsed stopwatch: the clock NEVER measures distance or
+    // load. And the focus view's 'Done ✓' reaches here with vals = null on rows
+    // the user never typed into. Either way, stopping a set with nothing
+    // recordable accepts exactly what the builder's ✓ would have prefilled,
+    // via the host's hint — asked once, at record time; nothing is invented
+    // here, and a row with no hint anywhere still records nothing.
+    if (host.prefill && (shape === 'carry' || !recordableSet(en, set))) {
+      try { host.prefill(en, set); } catch (e) { /* a missing hint never blocks a save */ }
+    }
+    if (!isSetworkEntry(en)) {
+      // after the hint, so a prefilled row still ends up four-key shaped
       if (set.type !== 'warmup') set.type = 'work';
       if (set.rpe === undefined) set.rpe = null;
     }
     set.done = true;
   }
 
+  // A boundary is pending, and it belongs to some OTHER set — the slot is not
+  // free and no unrelated action may take it.
+  function boundaryOwedElsewhere(t, entryId, sid) {
+    return !!(t && t.boundary && !(t.entryId === entryId && t.sid === sid));
+  }
+
   function completeWork(d, en, set, t, actualSec, vals) {
     writeActuals(en, set, t, actualSec, vals);
     const chain = t && isPace(t.chain) ? t.chain : ((d._chain && d._chain.pace) || 'set');
-    clearTimer(d);
+    // Completing an untimed set must not evict a boundary owed on another row
+    // (the focus view's Done, or a ✓ elsewhere): keep the slot and the chain,
+    // and just record this set. The boundary keeps asking until it is answered.
+    const keep = boundaryOwedElsewhere(timerOf(d), en.id, sidOf(set));
+    if (!keep) clearTimer(d);
     d._lastDone = { entryId: en.id, sid: sidOf(set), stretch: entryIsStretch(en), at: now() };
-    afterWork(d, en, set, chain);
+    if (!keep) afterWork(d, en, set, chain);
     persist(d);
     notify();
     return true;
@@ -1638,7 +1764,9 @@
       targetSec: drv.targetSec,
       armedTarget: drv.driver === 'countdown' ? ownTargetSec(nx.set) : 0,
       chain: chain,
-      autoReps: drv.autoReps
+      autoReps: drv.autoReps,
+      perRep: drv.perRep,
+      repsFabricated: drv.repsFabricated
     });
     cueSetArmed(nx.entry, nx.set);
     return true;
@@ -1715,6 +1843,10 @@
     const d = Session.draft();
     const t = timerOf(d);
     if (!t) { stopEngine(); if (d) notify('tick'); return false; }
+    // heartbeat: proof the clock was alive at this instant. reconcile() reads
+    // it to tell 'the target was edited below elapsed' (live, expire now) from
+    // 'this passed zero while nothing was running' (the user never saw it).
+    t.tickedAt = now();
     if (t.boundary || t.pausedAt) { notify('tick'); return false; }
     if (t.driver === 'stopwatch') { notify('tick'); return false; }
     const left = remainMs(t);
@@ -1829,15 +1961,21 @@
       dirty = Session.backfill(d) || dirty;
       const t = timerOf(d);
       if (t) {
+        resumeEngine(d);   // un-zombie a timer that survived a reload/relaunch
         const at = Session.findSet(t.entryId, t.sid, d);
         const en = Session.entryOf(t.entryId, d);
         if (!en || !at) {
           // running set (or its whole entry) deleted
           const cur = d._active;
+          const was = lastPos;          // clearTimer() drops the memo
           clearTimer(d);
           clearChain(d);
           if (cur && cur.entryId === t.entryId && cur.sid === t.sid) {
-            const nx = nextPending(d, 0, -1, null);
+            // 'advance the cursor to the NEXT pending set' — resume from where
+            // the running set actually sat, never from the top of the draft. A
+            // scan from index 0 teleports a user who is deep in a workout back
+            // to exercise 1 whenever anything earlier is still pending.
+            const nx = pendingAfter(d, was, !!Session.entryOf(t.entryId, d));
             if (nx) setCursorRef(d, nx.entry.id, sidOf(nx.set));
             else delete d._active;
           }
@@ -1846,7 +1984,20 @@
           // the set was completed elsewhere (builder ✓) — release the slot
           clearTimer(d);
           dirty = true;
-        } else if (!t.boundary) {
+        } else if (t.boundary) {
+          // A frozen boundary still answers to the same 'editing the RUNNING
+          // set's target retargets it' rule: adopt a typed correction so the
+          // user's number survives confirmBoundary() instead of being
+          // clobbered by the stale plan.
+          lastPos = { ei: at.ei, si: at.si };
+          const own = t.phase === 'work' && t.driver === 'countdown' ? ownTargetSec(at.set) : 0;
+          if (own > 0 && own !== t.armedTarget) {
+            t.armedTarget = own;
+            t.targetSec = own;
+            dirty = true;
+          }
+        } else {
+          lastPos = { ei: at.ei, si: at.si };
           const want = t.phase === 'rest'
             ? Session.restSecFor(at.entry, d)
             : (t.driver === 'countdown' ? ownTargetSec(at.set) : 0);
@@ -1856,8 +2007,19 @@
             dirty = true;
           }
           if (t.driver !== 'stopwatch' && t.targetSec > 0 && !t.pausedAt && remainMs(t) <= 0) {
-            t.overrun = 1;           // 'if already past, expire immediately'
-            expired = t;
+            if (now() - num(t.tickedAt || t.startedAt) > ENGINE_STALL_MS) {
+              // The clock was NOT running when this passed zero (reload, PWA
+              // relaunch, discarded tab). The user did not witness it, so it
+              // must never be recorded — least of all as wall-clock-since-arm,
+              // which grows with idle time. Route it into the boundary flow
+              // the contract prescribes for an expiry nobody saw.
+              t.boundary = 1;
+              t.frozenAt = t.startedAt + (t.pausedMs || 0) + t.targetSec * 1000;
+              dirty = true;
+            } else {
+              t.overrun = 1;         // 'if already past, expire immediately'
+              expired = t;
+            }
           }
         }
       }
@@ -1865,11 +2027,18 @@
         clearChain(d);
         dirty = true;
       }
-      if (d._active && !Session.findSet(d._active.entryId, d._active.sid, d)) {
-        const nx = nextPending(d, 0, -1, null);
-        if (nx) setCursorRef(d, nx.entry.id, sidOf(nx.set));
-        else delete d._active;
-        dirty = true;
+      if (d._active) {
+        const curAt = Session.findSet(d._active.entryId, d._active.sid, d);
+        if (curAt) {
+          lastCursorPos = { ei: curAt.ei, si: curAt.si };
+        } else {
+          // same rule as a deleted running set: forward from where it sat
+          const nx = pendingAfter(d, lastCursorPos, !!Session.entryOf(d._active.entryId, d));
+          if (nx) setCursorRef(d, nx.entry.id, sidOf(nx.set));
+          else delete d._active;
+          lastCursorPos = null;
+          dirty = true;
+        }
       }
       if (dirty) {
         if (host.saveDraft) { try { host.saveDraft(); } catch (e) { lsWrite(d); } }
@@ -1973,6 +2142,7 @@
       };
       if (num(cfg.rounds) > 0) en._targetRounds = Math.round(num(cfg.rounds));
       if (num(cfg.amrapSec) > 0) en._amrapSec = Math.round(num(cfg.amrapSec));
+      en._startedAt = now();   // this circuit's own start, not the session's
       d.entries.push(en);
       persist(d);
     }
@@ -1980,13 +2150,24 @@
     return en;
   };
 
+  // When the circuit itself started. Draft-local ('_'-prefixed), so it never
+  // reaches Store; a missing value degrades to the session's start.
+  function circuitStartedAt(en, d) {
+    if (en && num(en._startedAt) > 0) return num(en._startedAt);
+    if (d && num(d.startedAt) > 0) return num(d.startedAt);
+    return now();
+  }
+
   Session.closeRound = function (entryId) {
     const d = Session.draft();
     const en = entryId ? Session.entryOf(entryId, d) : Session.circuitEntry(d);
     if (!en) return false;
     en.rounds = Math.max(0, Math.round(num(en.rounds))) + 1;
     en._stationIdx = 0;
-    en.durationMin = Math.max(1, Math.round((now() - (d.startedAt || now())) / 60000));
+    // The circuit's OWN elapsed time. Falling back to d.startedAt keeps an
+    // in-flight draft written by an older build working (it just degrades to
+    // the old number rather than throwing).
+    en.durationMin = Math.max(1, Math.round((now() - circuitStartedAt(en, d)) / 60000));
     vibrate([180, 90, 180]);
     beep('work');
     persist(d);
@@ -2014,7 +2195,13 @@
     Object.keys(patch).forEach(function (k) {
       const v = patch[k];
       if (v === null || v === undefined || v === '') { if (k !== 'done') delete s[k]; return; }
-      if (k === 'side') { s.side = v === 'L' || v === 'R' ? v : undefined; if (!s.side) delete s.side; return; }
+      if (k === 'side') {
+        // Lift sets can NEVER carry a side — normalizeSet rebuilds them to
+        // four keys on every client, so accepting one here would show the
+        // user a badge for a distinction that is dropped at save.
+        if (isLiftEntry(at.entry)) { delete s.side; return; }
+        s.side = v === 'L' || v === 'R' ? v : undefined; if (!s.side) delete s.side; return;
+      }
       if (k === 'done') { s.done = !!v; return; }
       const n = num(v);
       if (n > 0) s[k] = k === 'weightKg' ? n : Math.round(n);
@@ -2043,10 +2230,23 @@
         if (num(last[k]) > 0) next[k] = last[k];
       });
     }
-    if (ex && ex.perSide) next.side = last && last.side === 'L' ? 'R' : 'L';
-    else if (last && (last.side === 'L' || last.side === 'R')) next.side = last.side === 'L' ? 'R' : 'L';
-    sidOf(next);
-    en.sets.push(next);
+    if (isLiftEntry(en)) {
+      // A lift set can never carry a side. A perSide LIFT expands to TWO
+      // plain sets, exactly as draftFromRoutine seeds it — the L/R rhythm
+      // lives in the set COUNT, which survives normalizeSet.
+      sidOf(next);
+      en.sets.push(next);
+      if (ex && ex.perSide) {
+        const twin = { weightKg: next.weightKg, reps: next.reps, type: next.type, rpe: null, done: false };
+        sidOf(twin);
+        en.sets.push(twin);
+      }
+    } else {
+      if (ex && ex.perSide) next.side = last && last.side === 'L' ? 'R' : 'L';
+      else if (last && (last.side === 'L' || last.side === 'R')) next.side = last.side === 'L' ? 'R' : 'L';
+      sidOf(next);
+      en.sets.push(next);
+    }
     persist(d);
     notify();
     return next._sid;
@@ -2594,7 +2794,10 @@
         '<input class="input" id="pf-kg" type="number" min="0" step="0.5" inputmode="decimal" value="' +
         (num(s.weightKg) > 0 ? kgToDisplay(s.weightKg) : '') + '"></div>';
     }
-    const perSide = !!(exOf(entryExId(en)) || {}).perSide || s.side === 'L' || s.side === 'R';
+    // never offer L/R on a lift set: the key does not survive normalizeSet, so
+    // showing the chips would imply a distinction that is silently dropped
+    const perSide = !isLiftEntry(en) &&
+      (!!(exOf(entryExId(en)) || {}).perSide || s.side === 'L' || s.side === 'R');
     if (perSide) {
       fields += '<div class="field"><label>Side</label><div class="chip-row" id="pf-side">' +
         ['L', 'R'].map(function (x) {
@@ -2648,13 +2851,32 @@
     return [
       st.view,
       (st.running || st.boundary)
-        ? st.phase + ':' + st.entryId + ':' + st.sid + (st.boundary ? 'b' : '') + (st.paused ? 'p' : '')
+        // a frozen boundary renders its target as text ("Confirm 0:15"), so an
+        // adjust there has to move the signature; a live clock's target is
+        // painted by paintClock and must not rebuild the stage under a finger
+        ? st.phase + ':' + st.entryId + ':' + st.sid + (st.boundary ? 'b' + st.targetSec : '') +
+          (st.paused ? 'p' : '')
         : 'idle',
       at ? at.entry.id + ':' + sidOf(at.set) : 'none',
       (d && d.entries.length) || 0,
       Session.progress(d).done,
-      d && d._lastDone ? d._lastDone.sid : ''
+      d && d._lastDone ? d._lastDone.sid : '',
+      // The focused entry's own CONTENT. updateSet/addSet/removeSet — the three
+      // verbs the fix sheet and the '+' chip call — move set fields or the sets
+      // array of exactly one entry and nothing above. Without this term the
+      // stage and the peek strip keep rendering the pre-edit targets until an
+      // unrelated event moves the signature, i.e. the renderer contradicts the
+      // draft it renders.
+      at ? setsSig(at.entry) : '',
+      at ? (at.entry._depth || '') : ''
     ].join('|');
+  }
+
+  function setsSig(en) {
+    return ((en && en.sets) || []).map(function (s) {
+      return sidOf(s) + '#' + (s.done ? 1 : 0) + '/' + (s.holdSec || '') + '/' + (s.reps || '') +
+        '/' + (s.weightKg || '') + '/' + (s.distanceM || '') + '/' + (s.side || '') + '/' + (s.type || '');
+    }).join(',');
   }
 
   function repaint(force) {
@@ -2863,10 +3085,18 @@
         ? 'Your rest finished while the app was in the background.'
         : 'This ' + U.esc(fmtClock(b ? b.sec : 0)) + ' timer finished while the app was in the background — nothing was recorded yet.') +
       '</div>' +
-      '<div class="player-aim muted">Confirm it, or drop it and keep training.</div>';
+      '<div class="player-aim muted">Confirm it, adjust it, or drop it and keep training.</div>' +
+      // 'let the user confirm OR ADJUST' — without these the only honest
+      // answer to 'I let go after 5 seconds' is to discard the whole set
+      '<div class="player-adjust">' +
+        '<button type="button" class="pm" data-p="minus">−15s</button>' +
+        '<button type="button" class="pm" data-p="plus">+15s</button>' +
+      '</div>';
     foot.innerHTML =
       '<button type="button" class="player-bigbtn" data-p="confirm">Confirm ' + U.esc(fmtClock(b ? b.sec : 0)) + '</button>' +
       '<button type="button" class="player-bigbtn ghost" data-p="drop">Didn’t happen</button>';
+    U.on(stage, 'click', '[data-p="minus"]', function () { Session.adjust(-15); });
+    U.on(stage, 'click', '[data-p="plus"]', function () { Session.adjust(15); });
     U.on(foot, 'click', '[data-p="confirm"]', function () { Session.confirmBoundary(); });
     U.on(foot, 'click', '[data-p="drop"]', function () { Session.discardBoundary(); });
   }
@@ -2982,7 +3212,9 @@
     const circ = root.querySelector('[data-p="circlock"]');
     if (circ) {
       const en = Session.circuitEntry(d);
-      const elapsedSec = Math.round((Date.now() - (d.startedAt || Date.now())) / 1000);
+      // the CIRCUIT's clock — an AMRAP joined onto an hour-old draft must open
+      // with its full time left, not already expired
+      const elapsedSec = Math.round((Date.now() - circuitStartedAt(en, d)) / 1000);
       const amrap = en ? Math.max(0, Math.round(num(en._amrapSec))) : 0;
       if (amrap) {
         const left = amrap - elapsedSec;

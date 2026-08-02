@@ -325,6 +325,50 @@
     return prev.length ? prev[Math.min(i, prev.length - 1)] : null;
   }
 
+  /* ---------- P4.5: a PRESCRIPTION is never an observation ----------
+     A routine's targets must not be seeded into the very fields the finish
+     flow reads as "what happened" (reps/weightKg on a lift set, holdSec/reps/
+     distanceM on a setwork set) — that is how an untouched guided session came
+     to save work nobody did. The seeder (Player.draftFromRoutine) emits BLANK
+     sets carrying the item's targets in draft-local, '_t'-prefixed keys:
+
+       lift    : _tWeightKg, _tReps
+       setwork : _tHoldSec, _tReps, _tDistanceM, _tWeightKg
+
+     and the builder renders them as PLACEHOLDERS, exactly like the template
+     path's _repLow/_repHigh. '_'-prefixed keys never persist (cleanSetworkEntry
+     skips them at entry and set level; the lift save paths build 4-key
+     literals), so nothing here reaches Store or sync.
+
+     Nothing below invents a target: with no '_t' keys present every reader
+     falls straight through to today's last-time hint, so an older seed — or a
+     build whose seeder has not been updated yet — renders and saves exactly as
+     it does now. */
+  function tgtNum(s, key) {
+    const n = Number(s && s['_t' + key]);
+    return n > 0 ? n : 0;
+  }
+
+  // The prescription shaped like a hint set, so every prefill path can consume
+  // it unchanged. null when the set carries no targets.
+  const TARGET_KEYS = [
+    { t: 'HoldSec', k: 'holdSec' }, { t: 'Reps', k: 'reps' },
+    { t: 'DistanceM', k: 'distanceM' }, { t: 'WeightKg', k: 'weightKg' }
+  ];
+
+  function targetSetOf(s) {
+    if (!s) return null;
+    const o = {};
+    let any = false;
+    TARGET_KEYS.forEach(function (d) {
+      const n = tgtNum(s, d.t);
+      if (n <= 0) return;
+      o[d.k] = d.k === 'weightKg' ? n : Math.round(n);
+      any = true;
+    });
+    return any ? o : null;
+  }
+
   /* ======================================================================
      P3 — structured set work ('setwork' entries: holds, carries, stretches).
      FORBIDDEN NAMES (binding, see ARCHITECTURE.md): the entry key is
@@ -459,11 +503,14 @@
   function swFillFromPrev(en, s) {
     if (!en || !s || swValidSet(s) || !draft) return;
     const i = (en.sets || []).indexOf(s);
-    let src = null;
-    for (let j = i - 1; j >= 0; j--) {
-      if (swValidSet(en.sets[j])) { src = en.sets[j]; break; }
+    // the row's own prescribed target outranks the carry-forward and the hint
+    let src = targetSetOf(s);
+    if (!src) {
+      for (let j = i - 1; j >= 0; j--) {
+        if (swValidSet(en.sets[j])) { src = en.sets[j]; break; }
+      }
+      if (!src) src = swHintSetOf(en, prevSetworkFor(draft.userId, en.exerciseRef), i);
     }
-    if (!src) src = swHintSetOf(en, prevSetworkFor(draft.userId, en.exerciseRef), i);
     if (!src) return;
     if ((src.distanceM || 0) > 0 && !((s.distanceM || 0) > 0)) s.distanceM = src.distanceM;
     if ((src.weightKg || 0) > 0 && !((s.weightKg || 0) > 0)) s.weightKg = src.weightKg;
@@ -623,6 +670,11 @@
 
   function startRest(sec) {
     if (!sec || sec <= 0) return;
+    // P4.5 — ONE rest authority. While the live Session is driving a step it
+    // owns the single pill slot; a legacy advisory rest mounted on top of it
+    // would cover the running label AND fire a false 'Rest done' cue mid-rest.
+    // (Session is initialised long before any click can reach this.)
+    if (Session.isRunning()) return;
     stopHold(); // one pill at a time — the hold countdown owns the same slot
     rest.endsAt = Date.now() + sec * 1000;
     rest.totalSec = sec;
@@ -768,6 +820,27 @@
     const src = raw && typeof raw === 'object' ? raw : {};
     const out = {};
     for (const k in PACE_KIND_DEFAULT) out[k] = paceVal(src[k]) || PACE_KIND_DEFAULT[k];
+    return out;
+  }
+
+  /* The map to WRITE BACK. settings.pace is stored with REPLACE semantics
+     (store.js mergeSettings swaps an unknown key wholesale), which is only safe
+     because every writer hands in the COMPLETE map. paceSettingsOf above is the
+     DISPLAY resolver: it emits exactly the kinds this build knows, so using it
+     as the write map silently deletes kinds a newer client stored — and even
+     'mixed', which player.js's own PACE_DEFAULTS has and this table does not.
+     This starts from the RAW stored object so unknown kinds survive verbatim,
+     then backfills the known defaults. */
+  function paceSettingsForWrite(u) {
+    const raw = ((u && u.settings) || {}).pace;
+    const src = raw && typeof raw === 'object' ? raw : {};
+    const out = {};
+    for (const k in src) {
+      if (!Object.prototype.hasOwnProperty.call(src, k)) continue;
+      // known kinds are coerced to a legal pace; unknown kinds pass through
+      out[k] = PACE_KIND_DEFAULT[k] ? (paceVal(src[k]) || PACE_KIND_DEFAULT[k]) : src[k];
+    }
+    for (const k in PACE_KIND_DEFAULT) if (!paceVal(out[k])) out[k] = PACE_KIND_DEFAULT[k];
     return out;
   }
 
@@ -974,6 +1047,33 @@
     S.done();
   };
 
+  /* The pill multiplexes Done / Skip rest / Record it onto ONE node, and the
+     first tap re-labels it synchronously — so a double-tap's second activation
+     silently means something the finger never aimed at (it skipped the driven
+     rest the first tap had just armed). Re-arm the control when its MEANING
+     changes: an activation landing inside the window on a different meaning is
+     the tail of a double-tap and is dropped. A deliberate later tap reads the
+     new label and works. The focus view is immune already (it rebuilds
+     .player-foot per phase), so this guard lives with the pill. */
+  const DONE_REARM_MS = 450;
+  const doneTap = { stamp: '', at: 0 };
+
+  function doneStampOf(st) {
+    return st ? st.kind + ':' + st.entryId + ':' + st.sid + (st.boundary ? ':b' : '') : '';
+  }
+
+  function armDoneTap() {
+    const stamp = doneStampOf(sessionStep());
+    const now = Date.now();
+    if (doneTap.stamp && doneTap.stamp !== stamp && now - doneTap.at < DONE_REARM_MS) {
+      doneTap.at = now; // a whole flurry of taps keeps the guard armed
+      return false;
+    }
+    doneTap.stamp = stamp;
+    doneTap.at = now;
+    return true;
+  }
+
   Session.skipRest = function () {
     const S = playerSession();
     const st = sessionStep();
@@ -1026,6 +1126,8 @@
   function dismissPill() {
     if (pill.el) { pill.el.remove(); pill.el = null; }
     pill.timeEl = pill.fillEl = pill.labelEl = pill.nextEl = pill.doneEl = null;
+    doneTap.stamp = '';
+    doneTap.at = 0;
   }
 
   function buildPill() {
@@ -1050,7 +1152,7 @@
       const a = btn.getAttribute('data-s');
       if (a === 'minus') Session.adjust(-15);
       else if (a === 'plus') Session.adjust(15);
-      else if (a === 'done') Session.doneNow();
+      else if (a === 'done') { if (armDoneTap()) Session.doneNow(); }
       else if (a === 'cancel') Session.cancel();
     });
     document.body.appendChild(pill.el);
@@ -1091,8 +1193,13 @@
       clearRunningRow();
       return;
     }
-    // one pill at a time — the advisory rest / sheet hold pills share the slot
-    if (!pill.el) { stopRest(); stopHold(); buildPill(); }
+    // one pill at a time — the advisory rest / sheet hold pills share the slot.
+    // Evict them on EVERY paint, not just the first: an advisory pill that
+    // mounted AFTER the session pill would otherwise sit on top of it (both are
+    // pinned to the same anchor) and cover the running-step label.
+    stopRest();
+    stopHold();
+    if (!pill.el) buildPill();
     const secs = st.mode === 'countdown' ? st.remainSec : st.elapsedSec;
     const resting = st.kind === 'rest';
     pill.el.classList.toggle('is-rest', resting);
@@ -1267,7 +1374,10 @@
             draft._cadence = st.cadence;
             draft._restSec = st.restSec;
             if (st.remember) {
-              const pace = paceSettingsOf(u);
+              // The COMPLETE map, built from what is actually stored — a kind
+              // this build does not know (a newer client's, or 'mixed') must
+              // survive a Remember tap on some other kind.
+              const pace = paceSettingsForWrite(u);
               pace[kind] = st.pace;
               // mergeSettings replaces an unknown key wholesale, so always
               // hand it the COMPLETE pace map, never a partial patch.
@@ -1433,6 +1543,30 @@
       return ctx.model.entries.find(function (x) { return x.id === eid; }) || null;
     }
 
+    /* ONE rest authority: at exercise/session pace the Session drives the rests
+       (auto-start, skippable, ±15s), so the legacy advisory pill must not fire
+       from a ✓ alongside it. Inert unless this editor IS the live draft and a
+       chain is armed — pace 'off'/'set' (all of simple mode, and today's lift
+       default) keep today's exact advisory rest. */
+    function chainedRest() {
+      if (!ctx.live || !draft) return false;
+      if (Session.isRunning()) return true;
+      const c = draft._chain;
+      return !!(c && (c.pace === 'exercise' || c.pace === 'session'));
+    }
+
+    /* The builder's ✓ is the ONLY control a lift row has (no run affordance),
+       so it is what must continue an armed chain — without this hook a session
+       pace stalls dead on the first lift set it reaches. Guarded on an armed
+       chain as well as ctx.live, so it is a provable no-op at pace 'off'/'set'
+       and in simple mode. */
+    function noteChainDone(en, s) {
+      if (!ctx.live || !s || !s.done || !draft || !draft._chain) return;
+      const S = playerSession();
+      if (!S || typeof S.noteSetDone !== 'function') return;
+      try { S.noteSetDone(en.id, sidOf(s)); } catch (e) { /* the ✓ still stands */ }
+    }
+
     /* ---- P3: setwork row/card renderers (dispatched before the lift branch;
        the lift branch below stays byte-for-byte current behavior) ---- */
 
@@ -1469,9 +1603,15 @@
             'style="width:32px;height:40px;min-height:40px;border:none;color:var(--text-muted)">' + ic().close + '</button>'
           : '') +
         '</div>';
+      // P4.5 — the item's TARGET is a placeholder, never a value: it outranks
+      // the last-time hint for what the empty field SUGGESTS, and contributes
+      // nothing to what gets saved.
+      const tgt = targetSetOf(s);
       if (rowShape === 'carry') {
-        const phW = hs && hs.weightKg > 0 ? dispW(hs.weightKg) : '';
-        const phM = hs && hs.distanceM > 0 ? String(Math.round(hs.distanceM)) : '';
+        const phW = tgt && tgt.weightKg > 0 ? dispW(tgt.weightKg)
+          : (hs && hs.weightKg > 0 ? dispW(hs.weightKg) : '');
+        const phM = tgt && tgt.distanceM > 0 ? String(Math.round(tgt.distanceM))
+          : (hs && hs.distanceM > 0 ? String(Math.round(hs.distanceM)) : '');
         html += '<input class="input set-weight" id="' + aid + '" data-act="sw-kg" type="text" inputmode="decimal" ' +
           'autocomplete="off" enterkeyhint="next" aria-label="Load" placeholder="' + U.esc(phW) + '" ' +
           'value="' + (s.weightKg > 0 ? U.esc(dispW(s.weightKg)) : '') + '">';
@@ -1479,7 +1619,7 @@
           'autocomplete="off" enterkeyhint="next" aria-label="Meters" placeholder="' + U.esc(phM) + '" ' +
           'value="' + (s.distanceM > 0 ? Math.round(s.distanceM) : '') + '">';
       } else if (rowShape === 'reps') {
-        const phR = hs && hs.reps > 0 ? String(hs.reps) : '';
+        const phR = tgt && tgt.reps > 0 ? String(tgt.reps) : (hs && hs.reps > 0 ? String(hs.reps) : '');
         html += '<input class="input" id="' + aid + '" data-act="sw-reps" type="text" inputmode="numeric" ' +
           'autocomplete="off" enterkeyhint="next" aria-label="Reps" placeholder="' + U.esc(phR) + '" ' +
           'value="' + (s.reps > 0 ? s.reps : '') + '">';
@@ -1491,7 +1631,8 @@
         // hold — mm:ss mask shared with parseTimeToSec ('45' = seconds)
         // While the Session drives this row the field shows the live countdown
         // and is read-only; ±15s on the pill retargets instead.
-        const phH = hs && hs.holdSec > 0 ? fmtClock(hs.holdSec) : '0:30';
+        const phH = tgt && tgt.holdSec > 0 ? fmtClock(tgt.holdSec)
+          : (hs && hs.holdSec > 0 ? fmtClock(hs.holdSec) : '0:30');
         const live = run && run.kind === 'work';
         html += '<input class="input" id="' + aid + '" data-act="sw-hold" type="text" inputmode="numeric" ' +
           'autocomplete="off" enterkeyhint="next" aria-label="Hold time" placeholder="' + U.esc(phH) + '" ' +
@@ -1611,11 +1752,17 @@
       const rowShape = swRowShapeOf(en);
       if (!s.done) {
         if (!swValidSet(s)) {
-          let src = null;
-          for (let j = i - 1; j >= 0; j--) {
-            if (swValidSet(en.sets[j])) { src = en.sets[j]; break; }
+          // A ✓ accepts what the row SHOWS: its own prescribed target first
+          // (that is the placeholder the user is looking at), then the
+          // carry-forward, then the last-time hint. An UNTOUCHED set is still
+          // never filled — this only runs on the row the user just ticked.
+          let src = targetSetOf(s);
+          if (!src) {
+            for (let j = i - 1; j >= 0; j--) {
+              if (swValidSet(en.sets[j])) { src = en.sets[j]; break; }
+            }
+            if (!src) src = swHintSetOf(en, prevSwFor(en.exerciseRef), i);
           }
-          if (!src) src = swHintSetOf(en, prevSwFor(en.exerciseRef), i);
           if (src) {
             if (rowShape === 'carry') {
               if (!((s.distanceM || 0) > 0) && (src.distanceM || 0) > 0) s.distanceM = src.distanceM;
@@ -1628,17 +1775,14 @@
           }
         }
         s.done = true;
-        if (!swIsStretch(en)) startRest(settingsOf(user()).restTimerSec);
+        if (!swIsStretch(en) && !chainedRest()) startRest(settingsOf(user()).restTimerSec);
       } else {
         s.done = false;
       }
       rowEl.classList.toggle('done', !!s.done);
       btn.setAttribute('aria-pressed', s.done ? 'true' : 'false');
       // P4.5 — a manual ✓ continues an armed chain (exercise/session pace)
-      if (ctx.live && s.done && s._sid && playerSession() &&
-          typeof playerSession().noteSetDone === 'function') {
-        try { playerSession().noteSetDone(en.id, s._sid); } catch (e) { /* optional */ }
-      }
+      noteChainDone(en, s);
       const aIn = rowEl.querySelector('#swa_' + en.id + '_' + i);
       const bIn = rowEl.querySelector('#swb_' + en.id + '_' + i);
       if (aIn && aIn.value === '') {
@@ -1772,6 +1916,17 @@
 
       if (act === 'sw-depth') {
         en._depth = U.clamp(parseInt(btn.getAttribute('data-depth'), 10) || 2, 1, 4);
+        // An explicit chip tap is a statement about the WHOLE entry, and it is
+        // the only depth control the UI offers. Since P4.5 the save cleaner
+        // lets a set's OWN intensity outrank the card aim — and it writes one
+        // onto every set — so without this write-through the chip goes inert
+        // the moment a workout has been saved once (a silent no-op in the
+        // saved-workout editor). Rows already completed in a LIVE draft keep
+        // what was captured for them (the rest-step depth ask).
+        (en.sets || []).forEach(function (s) {
+          if (!s || (ctx.mode === 'draft' && s.done)) return;
+          s.intensity = en._depth;
+        });
         ctx.persist();
         repaint();
         return;
@@ -1850,9 +2005,14 @@
       const hint = hs && hs.reps
         ? (hs.weightKg > 0 ? dispW(hs.weightKg) : 'BW') + ' × ' + hs.reps
         : '';
-      const phW = hs && hs.weightKg > 0 ? dispW(hs.weightKg) : '';
-      const phR = hs && hs.reps ? String(hs.reps)
-        : (en._repLow && en._repHigh ? en._repLow + '–' + en._repHigh : '');
+      // P4.5 — a routine target renders as a placeholder (see targetSetOf);
+      // with none present this is byte-for-byte the previous behavior.
+      const tgt = targetSetOf(s);
+      const phW = tgt && tgt.weightKg > 0 ? dispW(tgt.weightKg)
+        : (hs && hs.weightKg > 0 ? dispW(hs.weightKg) : '');
+      const phR = tgt && tgt.reps > 0 ? String(tgt.reps)
+        : (hs && hs.reps ? String(hs.reps)
+          : (en._repLow && en._repHigh ? en._repLow + '–' + en._repHigh : ''));
       const cls = 'set-row' + (showRpe ? '' : ' no-rpe') +
         (done ? ' done' : '') + (s.type === 'warmup' ? ' warmup' : '');
       const wid = 'sw_' + en.id + '_' + i;
@@ -1941,13 +2101,43 @@
       return html;
     }
 
+    /* P4.5 — NEVER rebuild under the caret. Every session-step transition
+       repaints the whole builder (root.innerHTML), which replaces the node the
+       user is typing into: focus is lost, the rest of the word goes nowhere and
+       the half-parsed prefix ('1' of '1:15') is what survives to the draft.
+       Every editable field carries a stable id, so save the RAW in-progress
+       string plus the selection and put them back. Restoring the raw string
+       matters as much as the focus: otherwise the formatter rewrites '1:' to
+       '0:01' the moment the step moves. Timer-written cells (the running row's
+       readonly countdown) are deliberately excluded — they must keep updating. */
+    function keepCaret() {
+      const a = document.activeElement;
+      if (!a || !a.id || !root.contains(a)) return null;
+      if (typeof a.value !== 'string' || a.hasAttribute('readonly')) return null;
+      const k = { id: a.id, value: a.value, s: null, e: null };
+      try { k.s = a.selectionStart; k.e = a.selectionEnd; } catch (err) { /* not text-shaped */ }
+      return k;
+    }
+
+    function restoreCaret(k) {
+      if (!k) return;
+      const el = document.getElementById(k.id);
+      if (!el || !root.contains(el) || el.hasAttribute('readonly')) return;
+      el.value = k.value;
+      try { el.focus({ preventScroll: true }); } catch (err) { el.focus(); }
+      if (k.s === null) return;
+      try { el.setSelectionRange(k.s, k.e); } catch (err) { /* not text-shaped */ }
+    }
+
     function repaint() {
+      const keep = keepCaret();
       if (!ctx.model.entries.length) {
         root.innerHTML = '<div class="empty" style="padding:32px 24px">' + ic().log +
           '<h3>No exercises yet</h3><p>Add an exercise to start logging sets.</p></div>';
       } else {
         root.innerHTML = ctx.model.entries.map(entryCardHTML).join('');
       }
+      restoreCaret(keep);
       if (ctx.onStats) ctx.onStats();
     }
 
@@ -1956,24 +2146,30 @@
       if (!s) return;
       if (!s.done) {
         if (!s.weightKg || !s.reps) {
-          let src = null;
-          for (let j = i - 1; j >= 0; j--) {
-            const p = en.sets[j];
-            if ((p.weightKg || 0) > 0 || (p.reps || 0) > 0) { src = p; break; }
+          // the ✓ accepts what the row SHOWS — prescribed target, then the
+          // carry-forward, then last time (null target => today's exact path)
+          let src = targetSetOf(s);
+          if (!src) {
+            for (let j = i - 1; j >= 0; j--) {
+              const p = en.sets[j];
+              if ((p.weightKg || 0) > 0 || (p.reps || 0) > 0) { src = p; break; }
+            }
+            if (!src) src = hintSetOf(prevFor(en.exerciseId), i);
           }
-          if (!src) src = hintSetOf(prevFor(en.exerciseId), i);
           if (src) {
             if (!s.weightKg) s.weightKg = src.weightKg || 0;
             if (!s.reps) s.reps = src.reps || 0;
           }
         }
         s.done = true;
-        if (s.type !== 'warmup') startRest(settingsOf(user()).restTimerSec);
+        if (s.type !== 'warmup' && !chainedRest()) startRest(settingsOf(user()).restTimerSec);
       } else {
         s.done = false;
       }
       rowEl.classList.toggle('done', !!s.done);
       btn.setAttribute('aria-pressed', s.done ? 'true' : 'false');
+      // P4.5 — a manual ✓ continues an armed chain (exercise/session pace)
+      noteChainDone(en, s);
       const wIn = rowEl.querySelector('[data-act="w"]');
       const rIn = rowEl.querySelector('[data-act="r"]');
       if (wIn && s.weightKg > 0 && wIn.value === '') wIn.value = dispW(s.weightKg);
@@ -4911,6 +5107,14 @@
     // P4.5 — two presentations, one state. The focus view is a RENDERER over
     // the same draft (js/player.js, loaded after this file); when it is not
     // available the session simply stays in the builder.
+    // Mode gate (binding): the focus presentation is Performance-mode only. A
+    // draft that reached simple mode still carrying _view:'focus' (a mid-draft
+    // profile switch) falls back to the builder rather than rendering pace UI a
+    // family user must never see.
+    if (draft && draft._view === 'focus' && !perfMode(u)) {
+      draft._view = 'builder';
+      saveDraft();
+    }
     if (draft && draft._view === 'focus') {
       const render = focusRenderer();
       if (render) {
@@ -5075,6 +5279,14 @@
     const perf = perfMode(u);
     const focusOk = perf && !!focusRenderer();
     const pace = perf ? resolvePace(null, draft) : 'off';
+    // Mode gate (binding): simple mode is BYTE-IDENTICAL. A draft that reached
+    // it carrying setwork entries (via Repeat, a sync, or a mid-session switch)
+    // must not keep the live layer — and a timer already on the clock when the
+    // switch happened is cancelled here, recording nothing, which also unmounts
+    // the pill. ctx.live below is the single gate for _sid minting, the set-run
+    // buttons, the card stopwatch's 'run this exercise' meaning and every run
+    // dispatch, so one flag restores exact P4 behavior.
+    if (!perf && Session.isRunning()) Session.cancel();
 
     container.innerHTML =
       '<div class="card" style="position:sticky;top:calc(var(--topbar-h) + env(safe-area-inset-top, 0px) + 8px);z-index:20">' +
@@ -5108,7 +5320,7 @@
 
     const editor = mountEditor(U.$('#lg-entries', container), {
       mode: 'draft',
-      live: true,          // P4.5 — this editor renders THE live session record
+      live: perf,          // P4.5 — THE live session record, Performance mode only
       model: draft,
       persist: saveDraft,
       prev: function (exId) { return prevSetsFor(u.id, exId); },
