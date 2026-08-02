@@ -23,6 +23,51 @@
 
   /* ---------- defaults & normalization ---------- */
 
+  // P4.5 — pace is a SCOPE ('what the app drives'), keyed by workout kind, with
+  // cadence (the tempo metronome inside a timed set) as an orthogonal modifier.
+  // The defaults table is binding (ARCHITECTURE.md P4.5): lift 'off' is today's
+  // exact behavior, which is what keeps the family lift flow byte-identical.
+  const PACE_VALUES = ['off', 'set', 'exercise', 'session'];
+  const PACE_KIND_DEFAULTS = {
+    durability: 'set',
+    stretch: 'set',
+    lift: 'off',
+    circuit: 'session',
+    interval: 'set',   // run / swim intervals
+    cardio: 'off'      // steady cardio is NOT in the live substrate
+  };
+  const DEFAULT_DRIVEN_REST_SEC = 60;
+
+  function defaultPaceMap() {
+    const out = {};
+    for (const k in PACE_KIND_DEFAULTS) out[k] = PACE_KIND_DEFAULTS[k];
+    return out;
+  }
+
+  // Coerce a stored pace map. REPLACE semantics, deliberately: writers hand in
+  // the COMPLETE map (Session.setPaceDefault rebuilds it every time), and a
+  // missing kind must fall back to the defaults table at read time rather than
+  // being frozen at whatever it was — otherwise `pace: {}` could never clear an
+  // override. Values outside the enum are dropped for known kinds; UNKNOWN
+  // KINDS pass through verbatim so a newer client's workout kind is never
+  // erased by this one (the same asymmetry rule the P3 normalizers follow).
+  // Returns null when there is nothing usable, meaning "leave the default".
+  function coercePaceMap(src) {
+    if (typeof src === 'string') {
+      if (PACE_VALUES.indexOf(src) < 0) return null;
+      const all = {};
+      for (const k in PACE_KIND_DEFAULTS) all[k] = src;
+      return all;
+    }
+    if (!src || typeof src !== 'object' || Array.isArray(src)) return null;
+    const out = {};
+    for (const k in src) {
+      if (PACE_VALUES.indexOf(src[k]) >= 0) out[k] = src[k];
+      else if (!(k in PACE_KIND_DEFAULTS)) out[k] = src[k];
+    }
+    return out;
+  }
+
   function defaultSettings() {
     return {
       units: 'lb',
@@ -31,7 +76,13 @@
       weeklySetGoal: 15,
       barWeightKg: 20.4,
       plateWeightsKg: [20.4, 15.9, 11.3, 4.5, 2.3, 1.1],
-      trainingProfile: 'simple'
+      trainingProfile: 'simple',
+      // P4.5 live-session settings. restTimerSec (the advisory lift rest pill)
+      // and playerVoice keep their existing meanings — restSec is the DRIVEN
+      // rest between paced sets.
+      pace: defaultPaceMap(),
+      cadence: false,
+      restSec: DEFAULT_DRIVEN_REST_SEC
     };
   }
 
@@ -41,6 +92,19 @@
       if (!src || typeof src !== 'object') continue;
       for (const k in out) {
         if (src[k] === undefined) continue;
+        // Typed settings get their own coercion so a partial patch (or junk
+        // from another client) can never replace a whole map with a scalar.
+        if (k === 'pace') {
+          const p = coercePaceMap(src.pace);
+          if (p) out.pace = p;
+          continue;
+        }
+        if (k === 'cadence') { out.cadence = src.cadence === true; continue; }
+        if (k === 'restSec') {
+          const n = Number(src.restSec);
+          if (isFinite(n) && n >= 0) out.restSec = Math.round(n);
+          continue;
+        }
         out[k] = Array.isArray(out[k]) ? (Array.isArray(src[k]) ? src[k].slice() : out[k]) : src[k];
       }
       // Forward-compat: settings keys from newer app versions pass through untouched.

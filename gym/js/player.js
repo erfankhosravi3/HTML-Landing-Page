@@ -1,17 +1,30 @@
-/* IronLog — P3.5: guided session player + routine planner. Attaches window.Player.
-   The player is a full-screen overlay OWNED OUTSIDE the view system: appended to
-   <body>, chrome hidden while it runs, never destroyed by navigation (hash
-   changes pause the countdown instead). It WRITES ordinary lift/setwork/cardio
-   entries per the P3 shapes — no analytics semantics change anywhere.
-   Player.compile is PURE and unit-testable in Node with a window stub: nothing
-   at the top level of this file touches document, localStorage or timers.
+/* IronLog — P4.5: ONE LIVE SESSION. Attaches window.Player.
 
-   Compiled step shapes (contract):
+   THE INVERSION (P4.5 corrects P3.5): there is exactly ONE session record —
+   the draft at localStorage 'ironlog/activeWorkout'. The timing engine
+   (Player.Session) drives draft.entries[i].sets[j] DIRECTLY; the full-screen
+   focus view is a RENDERER over that draft, never an owner. The P3.5 shadow
+   state ('ironlog/activeSession', S.compiled, S.actuals and the player's
+   private save path) is DELETED — a stale key left by a shipped P3.5 client is
+   discarded on boot (Player.discardLegacySession, called from resumePending).
+
+   Player.compile survives ONLY as a derived projection, recomputed on demand
+   for 'what's next' and time-left (Player.projectDraft). It is never stored.
+
+   Timers bind to (entryId, set._sid) — never to an array index or an object
+   reference, because a repaint rebuilds innerHTML and destroys identity.
+   `_sid` is draft-local and provably unpersisted: every save path strips
+   '_'-prefixed keys (cleanSetworkEntry) or enumerates its fields
+   (buildFinishedEntries builds lift sets as 4-key literals).
+
+   Player.compile / stepEstimateSec / builtinRoutine / routineFromWorkout stay
+   PURE and unit-testable in Node with a bare window stub: nothing at the top
+   level of this file touches document, localStorage or timers.
+
+   Compiled step shapes (contract, unchanged):
      { type:'work', shape:'hold'|'reps'|'carry'|'weight_reps', exerciseId,
        side?, setIdx, targetSec?, targetReps?, targetM?, targetKg?, entryIdx }
      { type:'rest', sec, afterEntryIdx }
-   (entryIdx/afterEntryIdx = index of the source routine item; the runtime maps
-   steps back onto the entries it accumulates.)
    Circuit-kind routines compile to a rounds structure instead:
      { kind:'circuit', rounds, amrapSec|null, stations:[{exerciseId?, name?,
        reps?, durationSec?, weightKg?}], restSec } */
@@ -19,8 +32,10 @@
   'use strict';
 
   const Player = {};
-  const LS_KEY = 'ironlog/activeSession';
+  const DRAFT_KEY = 'ironlog/activeWorkout';
+  const LEGACY_SESSION_KEY = 'ironlog/activeSession'; // P3.5 shadow state — DELETED
   const DEFAULT_HOLD_SEC = 30;
+  const DEFAULT_REST_SEC = 90;
   const METHODS = ['static', 'dynamic', 'pnf', 'loaded'];
   const KIND_DEFS = [
     { id: 'stretch', label: 'Stretch' },
@@ -35,6 +50,21 @@
     { n: 3, label: 'Deep', aim: 'end range, deliberate exhales' },
     { n: 4, label: 'Limit', aim: 'guarding — back off' }
   ];
+
+  // P4.5 pace: what the app DRIVES. cadence (tempo metronome inside a timed
+  // set) is an ORTHOGONAL modifier, never a value of this enum.
+  const PACES = ['off', 'set', 'exercise', 'session'];
+  const PACE_LABELS = { off: 'Off', set: 'This set', exercise: 'This exercise', session: 'Whole session' };
+  // Binding defaults table (P4.5): lift 'off' keeps today's flow byte-identical.
+  const PACE_DEFAULTS = {
+    durability: 'set',
+    stretch: 'set',
+    lift: 'off',
+    circuit: 'session',
+    interval: 'set',
+    cardio: 'off',   // steady cardio is NOT in the live substrate
+    mixed: 'off'
+  };
 
   /* ======================================================================
      Small shared helpers (lazy on window.* so Node stubs stay tiny)
@@ -121,6 +151,21 @@
 
   function toast(msg, kind) {
     if (window.App && App.toast) App.toast(msg, kind);
+  }
+
+  // Runtime-only environment probes — never evaluated at load time.
+  function hasLS() {
+    try { return typeof localStorage !== 'undefined' && !!localStorage; } catch (e) { return false; }
+  }
+
+  function hasDoc() {
+    try { return typeof document !== 'undefined' && !!document && !!document.body; } catch (e) { return false; }
+  }
+
+  function isHidden() {
+    try {
+      return typeof document !== 'undefined' && document && document.visibilityState === 'hidden';
+    } catch (e) { return false; }
   }
 
   /* ======================================================================
@@ -365,6 +410,216 @@
   };
 
   /* ======================================================================
+     Draft projection — Player.compile's live counterpart.
+
+     The draft is the session record; this recomputes the SAME step shapes
+     from it on demand (next-up, 'n of m', time left). Never stored.
+     ====================================================================== */
+
+  function isSetworkEntry(en) { return !!en && en.type === 'setwork'; }
+
+  function isLiftEntry(en) {
+    return !!en && (en.type === undefined || en.type === null || en.type === 'lift');
+  }
+
+  function isCircuitEntry(en) {
+    return !!en && en.type === 'cardio' && en.mode === 'circuit';
+  }
+
+  // Entries the live substrate can drive: lift + setwork. Cardio/mobility/
+  // durability/test blobs are logged, never stepped through.
+  function isRunnableEntry(en) {
+    return isLiftEntry(en) ? !!en.exerciseId : isSetworkEntry(en) && !!en.exerciseRef;
+  }
+
+  function entryExId(en) {
+    if (!en) return '';
+    return isSetworkEntry(en) ? en.exerciseRef : en.exerciseId;
+  }
+
+  function entryMethod(en) {
+    const ex = exOf(entryExId(en));
+    if (en && METHODS.indexOf(en.method) >= 0) return en.method;
+    return (ex && ex.defaultMethod) || 'static';
+  }
+
+  // Which driver shape a DRAFT set has. Mirrors views-log's swRowShapeOf for
+  // setwork; lift entries are always weight_reps.
+  function shapeOfEntry(en) {
+    if (!en) return null;
+    if (isLiftEntry(en)) return 'weight_reps';
+    if (!isSetworkEntry(en)) return null;
+    const shape = setShapeOf(exOf(en.exerciseRef));
+    if (shape === 'carry') return 'carry';
+    if (shape === 'stretch') return entryMethod(en) === 'dynamic' ? 'reps' : 'hold';
+    if (shape === 'weight_reps') return 'weight_reps';
+    return 'hold';
+  }
+
+  function entryIsStretch(en) {
+    return isSetworkEntry(en) && setShapeOf(exOf(en.exerciseRef)) === 'stretch';
+  }
+
+  function setIsDone(s) { return !!(s && s.done); }
+
+  // A step-shaped projection of one draft set (same keys Player.compile emits).
+  function stepOfSet(en, s, si, ei) {
+    const shape = shapeOfEntry(en);
+    const step = {
+      type: 'work',
+      shape: shape || 'weight_reps',
+      exerciseId: entryExId(en),
+      setIdx: si,
+      entryIdx: ei
+    };
+    if (s && (s.side === 'L' || s.side === 'R')) step.side = s.side;
+    if (num(s && s.holdSec) > 0) step.targetSec = Math.round(num(s.holdSec));
+    if (num(s && s.reps) > 0) step.targetReps = Math.round(num(s.reps));
+    if (num(s && s.distanceM) > 0) step.targetM = Math.round(num(s.distanceM));
+    if (num(s && s.weightKg) > 0) step.targetKg = num(s.weightKg);
+    return step;
+  }
+
+  // Live projection over a draft: pending steps (+ the rests a driven pace
+  // would insert), how much is done, and a time-left estimate.
+  Player.projectDraft = function (d, opts) {
+    opts = opts || {};
+    const out = { kind: 'steps', steps: [], workCount: 0, doneCount: 0, estSec: 0, remainSec: 0 };
+    const entries = (d && Array.isArray(d.entries)) ? d.entries : [];
+    entries.forEach(function (en, ei) {
+      if (!isRunnableEntry(en)) return;
+      const sets = Array.isArray(en.sets) ? en.sets : [];
+      const restSec = opts.restSec === undefined ? Session.restSecFor(en, d) : Math.max(0, Math.round(num(opts.restSec)));
+      sets.forEach(function (s, si) {
+        const step = stepOfSet(en, s, si, ei);
+        out.workCount++;
+        if (setIsDone(s)) { out.doneCount++; step.done = true; }
+        out.steps.push(step);
+        if (restSec > 0) out.steps.push({ type: 'rest', sec: restSec, afterEntryIdx: ei });
+      });
+    });
+    while (out.steps.length && out.steps[out.steps.length - 1].type === 'rest') out.steps.pop();
+    out.steps.forEach(function (st) {
+      const sec = stepEstimateSec(st);
+      out.estSec += sec;
+      if (!st.done) out.remainSec += sec;
+    });
+    return out;
+  };
+
+  /* ======================================================================
+     Routine -> DRAFT (the session record). Pure: no storage, no DOM.
+     ====================================================================== */
+
+  function blankLiftSet(item) {
+    const s = { weightKg: num(item && item.targetWeightKg) > 0 ? num(item.targetWeightKg) : 0,
+      reps: num(item && item.targetReps) > 0 ? Math.round(num(item.targetReps)) : 0,
+      type: 'work', rpe: null, done: false };
+    return s;
+  }
+
+  function blankSetworkSet(item, shape, side) {
+    const s = { done: false };
+    if (side) s.side = side;
+    if (shape === 'hold' && num(item.targetHoldSec) > 0) s.holdSec = Math.round(num(item.targetHoldSec));
+    if (shape === 'reps' && num(item.targetReps) > 0) s.reps = Math.round(num(item.targetReps));
+    if (shape === 'carry') {
+      if (num(item.targetDistanceM) > 0) s.distanceM = Math.round(num(item.targetDistanceM));
+      if (num(item.targetWeightKg) > 0) s.weightKg = num(item.targetWeightKg);
+    } else if (shape !== 'reps' && num(item.targetWeightKg) > 0) {
+      s.weightKg = num(item.targetWeightKg);
+    }
+    return s;
+  }
+
+  // Routine -> a draft-shaped session record. Draft-local keys ('_'-prefixed)
+  // carry the routine/item layer of the pace precedence chain; they never
+  // reach Store (every save path strips or enumerates).
+  Player.draftFromRoutine = function (routine, opts) {
+    opts = opts || {};
+    routine = routine || {};
+    const items = Array.isArray(routine.items) ? routine.items : [];
+    const d = {
+      userId: opts.userId || null,
+      date: (window.U && U.todayStr) ? U.todayStr() : '',
+      name: opts.name || routine.name || 'Session',
+      startedAt: opts.startedAt || (Date.now()),
+      entries: [],
+      notes: '',
+      fromTemplateId: null,
+      _routine: {
+        id: opts.routineRef || routine.id || null,
+        kind: routine.kind || 'custom',
+        restSec: num(routine.restSec) > 0 ? Math.round(num(routine.restSec)) : 0
+      },
+      _view: routine.kind === 'circuit' ? 'focus' : 'builder'
+    };
+    if (PACES.indexOf(routine.pace) >= 0) d._routine.pace = routine.pace;
+    if (routine.tempo) d._routine.tempo = String(routine.tempo);
+
+    if (routine.kind === 'circuit') {
+      const c = Player.compile(routine);
+      const en = {
+        id: U.uid('en'),
+        type: 'cardio',
+        mode: 'circuit',
+        durationMin: 0,
+        rounds: 0,
+        stations: c.stations.map(function (st) {
+          const o = {};
+          for (const k in st) o[k] = st[k];
+          return o;
+        })
+      };
+      en._targetRounds = c.rounds;
+      if (c.amrapSec > 0) en._amrapSec = c.amrapSec;
+      d.entries.push(en);
+      return d;
+    }
+
+    items.forEach(function (item) {
+      if (!item || typeof item !== 'object' || !item.exerciseId) return;
+      const ex = exOf(item.exerciseId);
+      const perSide = !!(ex && ex.perSide);
+      const nSets = clampInt(item.sets, 1, 20, 1);
+      const shape = itemShape(item);
+      let en;
+      if (shape === 'weight_reps') {
+        en = { id: U.uid('en'), exerciseId: String(item.exerciseId), notes: '', sets: [] };
+        for (let i = 0; i < nSets; i++) {
+          // lift sets can never carry a side (normalizeSet rebuilds them to
+          // four keys on every client) — a perSide lift item expands to two
+          // plain sets per prescribed set, exactly as P3.5 compiled it.
+          en.sets.push(blankLiftSet(item));
+          if (perSide) en.sets.push(blankLiftSet(item));
+        }
+      } else {
+        en = { id: U.uid('en'), type: 'setwork', exerciseRef: String(item.exerciseId), notes: '', sets: [] };
+        if (setShapeOf(ex) === 'stretch') {
+          en.method = itemMethod(item, ex);
+          en._depth = 2;
+        }
+        for (let i = 0; i < nSets; i++) {
+          if (perSide) {
+            en.sets.push(blankSetworkSet(item, shape, 'L'));
+            en.sets.push(blankSetworkSet(item, shape, 'R'));
+          } else {
+            en.sets.push(blankSetworkSet(item, shape, null));
+          }
+        }
+      }
+      if (item.restSec !== undefined && item.restSec !== null) {
+        en._itemRestSec = Math.max(0, Math.round(num(item.restSec)));
+      }
+      if (PACES.indexOf(item.pace) >= 0) en._itemPace = item.pace;
+      if (item.tempo) en._tempo = String(item.tempo);
+      if (item.note) en._note = String(item.note);
+      d.entries.push(en);
+    });
+    return d;
+  };
+
+  /* ======================================================================
      Hardware — every capability optional, feature-detected, try/catch
      ====================================================================== */
 
@@ -457,135 +712,1570 @@
   }
 
   /* ======================================================================
-     Session persistence — localStorage 'ironlog/activeSession'
+     Player.Session — the live session substrate.
+
+     ONE session record: the draft ('ironlog/activeWorkout'). Session owns the
+     single timer slot, the pace resolution chain and the reconcile choke
+     point; it NEVER owns workout data. Everything it mutates lives on the
+     draft, so the builder and the focus view are two presentations of one
+     state.
+
+     Host binding (views-log calls this once — see the API notes at the bottom
+     of this file):
+       Player.Session.bind({ getDraft, saveDraft, setDraft?, clearDraft?,
+                             rerender? })
+     Unbound, Session falls back to reading/writing DRAFT_KEY directly, so the
+     engine works in Node tests and before the log view has ever rendered.
      ====================================================================== */
 
-  function readPending() {
+  const Session = {};
+  Player.Session = Session;
+
+  const host = { getDraft: null, saveDraft: null, setDraft: null, clearDraft: null, rerender: null };
+  const subs = [];
+  let cacheRaw = null;
+  let cacheDraft = null;
+  let draftFromHost = false;
+  let reconciling = false;
+  let engineIv = null;
+  let nowFn = null;
+
+  function now() { return nowFn ? nowFn() : Date.now(); }
+
+  Session.__setNow = function (fn) { nowFn = typeof fn === 'function' ? fn : null; };
+
+  Session.bind = function (h) {
+    h = h || {};
+    host.getDraft = typeof h.getDraft === 'function' ? h.getDraft : null;
+    host.saveDraft = typeof h.saveDraft === 'function' ? h.saveDraft : null;
+    host.setDraft = typeof h.setDraft === 'function' ? h.setDraft : null;
+    host.clearDraft = typeof h.clearDraft === 'function' ? h.clearDraft : null;
+    host.rerender = typeof h.rerender === 'function' ? h.rerender : null;
+    Player.discardLegacySession();
+    return Session;
+  };
+
+  Session.unbind = function () {
+    host.getDraft = host.saveDraft = host.setDraft = host.clearDraft = host.rerender = null;
+    cacheRaw = null;
+    cacheDraft = null;
+  };
+
+  /* ---------- external engine interop (single clock, always) ----------
+     views-log.js ships the same live-session engine as window.ViewsLog.Session
+     and renders this file's focus view through Player.renderFocus(container,
+     live). When that engine is present it OWNS the single timer slot — two
+     clocks driving one draft would be exactly the P3.5 bug again — so every
+     driving verb below delegates to it and the renderer reads its state
+     through the same normalized snapshot. With no host (Node tests, or a
+     views-log without the engine) the local engine runs instead. */
+
+  function VLAPI() { return window.ViewsLog || null; }
+
+  function EXT() {
+    const VL = VLAPI();
+    const X = VL && VL.Session;
+    if (X && typeof X.runSet === 'function' && typeof X.state === 'function' &&
+        typeof X.reconcile === 'function') return X;
+    return null;
+  }
+
+  Session.external = function () { return !!EXT(); };
+
+  // Only pass a scope when the caller actually named one — otherwise the
+  // external engine resolves the pace chain itself (the tapped button wins
+  // for that one action, nothing else does).
+  function extScope(opts) {
+    opts = opts || {};
+    if (isPace(opts.scope)) return opts.scope;
+    if (isPace(opts.pace)) return opts.pace;
+    return undefined;
+  }
+
+  /* ---------- draft IO ---------- */
+
+  function lsRead() {
+    if (!hasLS()) return null;
+    let raw = null;
+    try { raw = localStorage.getItem(DRAFT_KEY); } catch (e) { return null; }
+    if (!raw) { cacheRaw = null; cacheDraft = null; return null; }
+    if (raw === cacheRaw && cacheDraft) return cacheDraft;
     try {
-      const raw = localStorage.getItem(LS_KEY);
-      if (!raw) return null;
-      const p = JSON.parse(raw);
-      if (!p || typeof p !== 'object' || !p.routine || typeof p.startedAt !== 'number') return null;
-      return p;
+      const d = JSON.parse(raw);
+      if (!d || typeof d !== 'object' || !Array.isArray(d.entries)) return null;
+      cacheRaw = raw;
+      cacheDraft = d;
+      return d;
     } catch (e) { return null; }
   }
 
-  function writePending(S) {
+  function lsWrite(d) {
+    if (!hasLS()) return;
     try {
-      localStorage.setItem(LS_KEY, JSON.stringify({
-        v: 1,
-        userId: S.userId,
-        name: S.name,
-        routineRef: S.routineRef || null,
-        routine: S.routine,
-        stepIdx: S.stepIdx,
-        actuals: S.actuals,
-        stickyDepth: S.stickyDepth,
-        lastDone: S.lastDone || null,
-        roundsDone: S.roundsDone,
-        stationIdx: S.stationIdx,
-        startedAt: S.startedAt,
-        updatedAt: Date.now()
-      }));
-    } catch (e) { /* storage full/unavailable — session keeps running in memory */ }
+      cacheRaw = JSON.stringify(d);
+      cacheDraft = d;
+      localStorage.setItem(DRAFT_KEY, cacheRaw);
+    } catch (e) { /* storage full — the session keeps running in memory */ }
   }
 
-  function clearPending() {
-    try { localStorage.removeItem(LS_KEY); } catch (e) { /* ignore */ }
-  }
-
-  // Does a persisted pending session hold any recorded work worth protecting?
-  function pendingHasWork(p) {
-    if (!p) return false;
-    if (Math.round(num(p.roundsDone)) > 0) return true;
-    return Array.isArray(p.actuals) && p.actuals.some(function (a) {
-      return a && Array.isArray(a.sets) && a.sets.length > 0;
-    });
-  }
-
-  // Resolve the profile that owns a pending session (falls back to current).
-  function pendingOwner(p) {
-    const users = window.Store && Store.state && Array.isArray(Store.state.users)
-      ? Store.state.users : [];
-    let owner = null;
-    if (p && p.userId) {
-      owner = users.find(function (x) { return x && x.id === p.userId; }) || null;
+  // The live draft: the host's object when bound (so the builder and the
+  // engine mutate the SAME object), else the localStorage copy.
+  Session.draft = function () {
+    let d = null;
+    const getter = host.getDraft || (VLAPI() && VLAPI().getDraft) || null;
+    if (getter) {
+      try { d = getter(); } catch (e) { d = null; }
     }
-    return owner || user();
+    if (d && typeof d === 'object' && Array.isArray(d.entries)) {
+      cacheDraft = d;
+      cacheRaw = null; // host object is authoritative; don't trust the string cache
+      draftFromHost = true;
+      return d;
+    }
+    draftFromHost = false;
+    return lsRead();
+  };
+
+  // Replace the whole session record (routine seeding / tests).
+  Session.setDraft = function (d) {
+    if (host.setDraft) {
+      try { host.setDraft(d); } catch (e) { /* fall through to LS */ }
+    }
+    if (d) Session.backfill(d);
+    lsWrite(d);
+    if (!host.setDraft && host.rerender) { try { host.rerender(); } catch (e) { /* ignore */ } }
+    Session.reconcile();
+    return d;
+  };
+
+  Session.clearDraft = function () {
+    if (host.clearDraft) { try { host.clearDraft(); } catch (e) { /* ignore */ } }
+    if (hasLS()) { try { localStorage.removeItem(DRAFT_KEY); } catch (e) { /* ignore */ } }
+    cacheRaw = null;
+    cacheDraft = null;
+    stopEngine();
+    notify();
+  };
+
+  // Persist a mutation. When views-log is bound its saveDraft() is the choke
+  // point and calls Session.reconcile() itself; the reentrancy guard keeps
+  // that from looping.
+  // Persist a mutation. When the host owns the live object its saveDraft() is
+  // THE choke point (it writes, reconciles and notifies). When it does not —
+  // the log view has not rendered yet, so the host's own draft variable is
+  // still null — write the key directly instead of asking the host to
+  // serialize a draft it does not have.
+  function persist(d) {
+    const live = Session.draft();
+    d = d || live;
+    const saver = host.saveDraft || (VLAPI() && VLAPI().saveDraft) || null;
+    if (saver && draftFromHost && live === d) {
+      try { saver(); return; } catch (e) { /* fall through */ }
+    }
+    lsWrite(d);
+    if (!reconciling) Session.reconcile();
   }
 
-  // App-boot hook: pending session info (or null). The boot wiring offers
-  // Resume/Discard and calls Player.resume() / Player.discardPending().
-  Player.resumePending = function () {
-    const p = readPending();
-    if (!p) return null;
-    return {
-      userId: p.userId || null,
-      name: p.name || (p.routine && p.routine.name) || 'Guided session',
-      startedAt: p.startedAt,
-      stepIdx: p.stepIdx || 0,
-      updatedAt: p.updatedAt || p.startedAt
+  Session.save = function () { persist(Session.draft()); };
+
+  /* ---------- set identity: (entryId, _sid), draft-local ---------- */
+
+  function sidOf(set) {
+    if (!set || typeof set !== 'object') return null;
+    return set._sid || (set._sid = U.uid('s'));
+  }
+
+  Session.sidOf = sidOf;
+
+  // Backfill entry ids + set sids. loadDraft() should call this alongside its
+  // existing `if (!en.id)` loop. Returns true when anything was assigned.
+  Session.backfill = function (d) {
+    let changed = false;
+    if (!d || !Array.isArray(d.entries)) return false;
+    d.entries.forEach(function (en) {
+      if (!en || typeof en !== 'object') return;
+      if (!en.id) { en.id = U.uid('en'); changed = true; }
+      if (!Array.isArray(en.sets)) { en.sets = []; changed = true; }
+      en.sets.forEach(function (s) {
+        if (s && typeof s === 'object' && !s._sid) { s._sid = U.uid('s'); changed = true; }
+      });
+    });
+    return changed;
+  };
+
+  Session.entryOf = function (entryId, d) {
+    d = d || Session.draft();
+    if (!d || !entryId) return null;
+    return d.entries.find(function (en) { return en && en.id === entryId; }) || null;
+  };
+
+  // -> {entry, set, ei, si} | null
+  Session.findSet = function (entryId, sid, d) {
+    d = d || Session.draft();
+    if (!d) return null;
+    for (let ei = 0; ei < d.entries.length; ei++) {
+      const en = d.entries[ei];
+      if (!en || (entryId && en.id !== entryId)) continue;
+      const sets = Array.isArray(en.sets) ? en.sets : [];
+      for (let si = 0; si < sets.length; si++) {
+        if (sets[si] && sets[si]._sid === sid) return { entry: en, set: sets[si], ei: ei, si: si };
+      }
+      if (entryId) return null;
+    }
+    return null;
+  };
+
+  /* ---------- subscriptions ---------- */
+
+  Session.subscribe = function (fn) {
+    if (typeof fn !== 'function') return function () { /* noop */ };
+    subs.push(fn);
+    return function () {
+      const i = subs.indexOf(fn);
+      if (i >= 0) subs.splice(i, 1);
     };
   };
 
-  Player.discardPending = function () { clearPending(); };
+  // reason: 'change' (structure/values moved — safe to repaint) | 'tick'
+  // (clock only — subscribers MUST NOT rebuild DOM that holds focus/caret).
+  function notify(reason) {
+    const st = Session.state();
+    st.reason = reason || 'change';
+    for (let i = 0; i < subs.length; i++) {
+      try { subs[i](st); } catch (e) { /* a bad subscriber never breaks the clock */ }
+    }
+  }
 
-  Player.resume = function () {
-    const p = readPending();
-    if (!p) return false;
-    if (S) return false;
-    // Mode gate parity with Player.start, resolved against the pending
-    // session's OWNER (the boot flow switches currentUser to the owner before
-    // resuming; a bare resume call falls back to the current user). A
-    // simple-mode profile must never see the player. Refuse WITHOUT clearing
-    // the pending, so switching back to Performance mode can still resume it.
-    const owner = pendingOwner(p);
-    if (!perfMode(owner)) {
-      toast('Guided sessions live in Performance mode', 'err');
+  Session.notify = notify;
+
+  /* ---------- kinds + pace resolution ---------- */
+
+  function isPace(v) { return PACES.indexOf(v) >= 0; }
+
+  Session.PACES = PACES;
+  Session.PACE_LABELS = PACE_LABELS;
+  Session.PACE_DEFAULTS = PACE_DEFAULTS;
+  Session.isPace = isPace;
+
+  // Pace kind of ONE entry (what the defaults table is keyed by).
+  Session.kindOfEntry = function (en) {
+    if (!en) return 'mixed';
+    if (isLiftEntry(en)) return 'lift';
+    if (isSetworkEntry(en)) return entryIsStretch(en) ? 'stretch' : 'durability';
+    if (en.type === 'cardio') {
+      if (en.mode === 'circuit') return 'circuit';
+      if (en.intervals && num(en.intervals.reps) > 0) return 'interval';
+      return 'cardio';
+    }
+    return 'mixed';
+  };
+
+  Session.kindOfDraft = function (d) {
+    d = d || Session.draft();
+    const kinds = [];
+    ((d && d.entries) || []).forEach(function (en) {
+      const k = Session.kindOfEntry(en);
+      if (kinds.indexOf(k) < 0) kinds.push(k);
+    });
+    if (!kinds.length) return 'lift';
+    return kinds.length === 1 ? kinds[0] : 'mixed';
+  };
+
+  function paceSettings(u) {
+    const s = (u || user() || {}).settings || {};
+    const p = s.pace;
+    if (p && typeof p === 'object') return p;
+    if (isPace(p)) {
+      // tolerate a scalar written by a future/other client
+      const map = {};
+      Object.keys(PACE_DEFAULTS).forEach(function (k) { map[k] = p; });
+      return map;
+    }
+    return {};
+  }
+
+  Session.defaultPaceFor = function (kind) {
+    const stored = paceSettings()[kind];
+    if (isPace(stored)) return stored;
+    return PACE_DEFAULTS[kind] || 'off';
+  };
+
+  // Precedence (lowest -> highest), binding:
+  //   user.settings.pace[kind] -> routine.pace -> item.pace -> draft._pace
+  //   -> entry._pace -> the button just tapped
+  Session.resolvePace = function (entryOrId, action, d) {
+    d = d || Session.draft();
+    const en = typeof entryOrId === 'string' ? Session.entryOf(entryOrId, d) : entryOrId;
+    const VL = VLAPI();
+    if (EXT() && VL && typeof VL.resolvePace === 'function') {
+      const p0 = VL.resolvePace(en, d);
+      return isPace(action) ? action : (isPace(p0) ? p0 : 'off');
+    }
+    const kind = en ? Session.kindOfEntry(en) : Session.kindOfDraft(d);
+    let p = Session.defaultPaceFor(kind);
+    if (d && d._routine && isPace(d._routine.pace)) p = d._routine.pace;
+    if (en && isPace(en._itemPace)) p = en._itemPace;
+    if (d && isPace(d._pace)) p = d._pace;
+    if (en && isPace(en._pace)) p = en._pace;
+    if (isPace(action)) p = action;
+    return p;
+  };
+
+  // cadence — the tempo metronome INSIDE a timed set; orthogonal to pace.
+  Session.resolveCadence = function (entryOrId, d) {
+    d = d || Session.draft();
+    const VL0 = VLAPI();
+    if (EXT() && VL0 && typeof VL0.resolveCadence === 'function') return !!VL0.resolveCadence(d);
+    const en = typeof entryOrId === 'string' ? Session.entryOf(entryOrId, d) : entryOrId;
+    const u = user();
+    let c = !!(u && u.settings && u.settings.cadence);
+    if (d && typeof d._cadence === 'boolean') c = d._cadence;
+    if (en && typeof en._cadence === 'boolean') c = en._cadence;
+    return c;
+  };
+
+  // Tempo is a PRESCRIPTION, never an observation: it lives on the routine
+  // item (mirrored to entry._tempo) and can physically never be recorded on a
+  // lift set (normalizeSet rebuilds them to four keys everywhere).
+  Session.tempoOf = function (entryOrId, d) {
+    d = d || Session.draft();
+    const en = typeof entryOrId === 'string' ? Session.entryOf(entryOrId, d) : entryOrId;
+    const raw = (en && en._tempo) || (d && d._routine && d._routine.tempo) || null;
+    return raw ? String(raw) : null;
+  };
+
+  // '3-1-3' / '3-0-1-0' -> seconds per rep (0 when unusable).
+  Session.tempoSecPerRep = function (tempo) {
+    if (!tempo) return 0;
+    const parts = String(tempo).split(/[^0-9.]+/).filter(function (x) { return x !== ''; });
+    if (!parts.length) return 0;
+    let sum = 0;
+    parts.forEach(function (p) { sum += num(p); });
+    return sum > 0 ? sum : 0;
+  };
+
+  // Rest chain mirrors the pace chain:
+  //   user.settings.restSec (or restTimerSec) -> routine.restSec
+  //   -> item restSec -> draft._restSec -> entry._restSec
+  Session.restSecFor = function (entryOrId, d) {
+    d = d || Session.draft();
+    const en = typeof entryOrId === 'string' ? Session.entryOf(entryOrId, d) : entryOrId;
+    const VL = VLAPI();
+    if (EXT() && VL && typeof VL.resolveRestSec === 'function') {
+      return Math.max(0, Math.round(num(VL.resolveRestSec(en, d))));
+    }
+    const s = (user() || {}).settings || {};
+    let sec = num(s.restSec) > 0 ? Math.round(num(s.restSec))
+      : (num(s.restTimerSec) > 0 ? Math.round(num(s.restTimerSec)) : DEFAULT_REST_SEC);
+    if (d && d._routine && d._routine.restSec !== undefined && d._routine.restSec !== null) {
+      sec = Math.max(0, Math.round(num(d._routine.restSec)));
+    }
+    if (en && en._itemRestSec !== undefined && en._itemRestSec !== null) {
+      sec = Math.max(0, Math.round(num(en._itemRestSec)));
+    }
+    if (d && d._restSec !== undefined && d._restSec !== null) {
+      sec = Math.max(0, Math.round(num(d._restSec)));
+    }
+    if (en && en._restSec !== undefined && en._restSec !== null) {
+      sec = Math.max(0, Math.round(num(en._restSec)));
+    }
+    return Math.max(0, sec);
+  };
+
+  /* ---------- pace / cadence writers ---------- */
+
+  Session.setSessionPace = function (p) {
+    const d = Session.draft();
+    if (!d) return false;
+    if (isPace(p)) d._pace = p; else delete d._pace;
+    persist(d);
+    return true;
+  };
+
+  Session.setEntryPace = function (entryId, p) {
+    const d = Session.draft();
+    const en = Session.entryOf(entryId, d);
+    if (!en) return false;
+    if (isPace(p)) en._pace = p; else delete en._pace;
+    persist(d);
+    return true;
+  };
+
+  Session.setCadence = function (on) {
+    const d = Session.draft();
+    if (!d) return false;
+    d._cadence = !!on;
+    persist(d);
+    return true;
+  };
+
+  Session.setRestSec = function (sec) {
+    const d = Session.draft();
+    if (!d) return false;
+    d._restSec = Math.max(0, Math.round(num(sec)));
+    persist(d);
+    return true;
+  };
+
+  // Remember a pace as this user's default for a kind. mergeSettings carries
+  // unknown settings keys through untouched (P0 forward-compat clause), so
+  // old clients preserve `settings.pace` — but it REPLACES the object, so the
+  // whole map is written every time.
+  Session.setPaceDefault = function (kind, p) {
+    const u = user();
+    if (!u || !isPace(p) || !kind) return false;
+    const map = {};
+    const cur = paceSettings(u);
+    Object.keys(cur).forEach(function (k) { if (isPace(cur[k])) map[k] = cur[k]; });
+    map[kind] = p;
+    if (window.Store && Store.updateUser) Store.updateUser(u.id, { settings: { pace: map } });
+    return true;
+  };
+
+  Session.setCadenceDefault = function (on) {
+    const u = user();
+    if (!u) return false;
+    if (window.Store && Store.updateUser) Store.updateUser(u.id, { settings: { cadence: !!on } });
+    return true;
+  };
+
+  /* ---------- drivers ---------- */
+
+  Session.shapeOf = function (entryOrId, d) {
+    const en = typeof entryOrId === 'string' ? Session.entryOf(entryOrId, d) : entryOrId;
+    return shapeOfEntry(en);
+  };
+
+  // Target seconds for a hold-shaped set: its own value, else the nearest
+  // filled value in the same entry, else 30s (P3 builder rule).
+  Session.targetSecOf = function (en, set) {
+    const VL = VLAPI();
+    if (EXT() && VL && typeof VL.targetSecFor === 'function' && en && set) {
+      const i = (en.sets || []).indexOf(set);
+      const v = num(VL.targetSecFor(en, set, i < 0 ? 0 : i));
+      if (v > 0) return Math.round(v);
+    }
+    if (num(set && set.holdSec) > 0) return Math.round(num(set.holdSec));
+    const sets = (en && Array.isArray(en.sets)) ? en.sets : [];
+    for (let i = 0; i < sets.length; i++) {
+      if (num(sets[i] && sets[i].holdSec) > 0) return Math.round(num(sets[i].holdSec));
+    }
+    return DEFAULT_HOLD_SEC;
+  };
+
+  // Per-shape set drivers (binding table):
+  //   hold, stretch(static|pnf|loaded) -> countdown(target)
+  //   stretch(dynamic), weight_reps    -> metronome ONLY with a tempo
+  //   carry                            -> elapsed stopwatch
+  // 'The app drives every step it can time deterministically; the user
+  //  triggers every step it cannot.'
+  Session.driverFor = function (en, set, d) {
+    const shape = shapeOfEntry(en);
+    if (!shape) return null;
+    const VL = VLAPI();
+    if (EXT() && VL && typeof VL.driverFor === 'function') {
+      const kind = VL.driverFor(en, set, d || Session.draft());
+      if (!kind) return null;
+      if (kind === 'stopwatch') return { driver: 'stopwatch', targetSec: 0 };
+      return {
+        driver: kind === 'tempo' ? 'metronome' : 'countdown',
+        targetSec: Session.targetSecOf(en, set),
+        autoReps: num(set && set.reps) > 0 ? Math.round(num(set.reps)) : 0
+      };
+    }
+    if (shape === 'hold') {
+      return { driver: 'countdown', targetSec: Session.targetSecOf(en, set) };
+    }
+    if (shape === 'carry') return { driver: 'stopwatch', targetSec: 0 };
+    const perRep = Session.tempoSecPerRep(Session.tempoOf(en, d));
+    const reps = num(set && set.reps) > 0 ? Math.round(num(set.reps)) : 0;
+    if (perRep > 0 && reps > 0) {
+      return { driver: 'metronome', targetSec: Math.round(perRep * reps), autoReps: reps };
+    }
+    return null; // no driver — ✓ advances
+  };
+
+  /* ---------- timer slot (single, bound to (entryId, _sid)) ---------- */
+
+  function timerOf(d) { return (d && d._timer) || null; }
+
+  Session.timer = function () { return timerOf(Session.draft()); };
+
+  Session.isRunning = function () {
+    const X0 = EXT();
+    if (X0) { const x = X0.state(); return !!x && !x.boundary; }
+    const t = timerOf(Session.draft());
+    return !!t && !t.boundary;
+  };
+
+  function elapsedMs(t) {
+    if (!t) return 0;
+    const end = t.frozenAt || t.pausedAt || now();
+    return Math.max(0, end - t.startedAt - (t.pausedMs || 0));
+  }
+
+  function remainMs(t) {
+    if (!t || !(t.targetSec > 0)) return Infinity;
+    return t.targetSec * 1000 - elapsedMs(t);
+  }
+
+  Session.elapsedSec = function () { return Math.round(elapsedMs(timerOf(Session.draft())) / 1000); };
+
+  function setCursorRef(d, entryId, sid) {
+    if (!d) return;
+    if (!entryId) { delete d._active; return; }
+    d._active = { entryId: entryId, sid: sid || null };
+  }
+
+  Session.cursor = function () {
+    const d = Session.draft();
+    return (d && d._active) || null;
+  };
+
+  // The cursor is ADVISORY, never modal — editing any other row never moves it.
+  Session.setCursor = function (entryId, sid) {
+    const d = Session.draft();
+    if (!d) return false;
+    setCursorRef(d, entryId, sid);
+    persist(d);
+    return true;
+  };
+
+  function ensureEngine() {
+    if (engineIv || typeof setInterval !== 'function') return;
+    engineIv = setInterval(function () { Session.tick(); }, 250);
+  }
+
+  function stopEngine() {
+    if (engineIv && typeof clearInterval === 'function') clearInterval(engineIv);
+    engineIv = null;
+  }
+
+  function armTimer(d, en, set, opts) {
+    if (EXT()) return null;   // the external engine owns the single timer slot
+    opts = opts || {};
+    const t = {
+      entryId: en.id,
+      sid: set ? sidOf(set) : null,
+      phase: opts.phase === 'rest' ? 'rest' : 'work',
+      driver: opts.driver || 'countdown',
+      targetSec: Math.max(0, Math.round(num(opts.targetSec))),
+      armedTarget: Math.max(0, Math.round(num(opts.armedTarget !== undefined ? opts.armedTarget : opts.targetSec))),
+      chain: isPace(opts.chain) ? opts.chain : 'set',
+      startedAt: now(),
+      pausedAt: 0,
+      pausedMs: 0,
+      frozenAt: 0,
+      boundary: 0,
+      saidTen: 0
+    };
+    if (num(opts.autoReps) > 0) t.autoReps = Math.round(num(opts.autoReps));
+    d._timer = t;
+    ensureEngine();
+    return t;
+  }
+
+  function clearTimer(d) {
+    if (d && d._timer) delete d._timer;
+    stopEngine();
+  }
+
+  function clearChain(d) {
+    if (d && d._chain) delete d._chain;
+  }
+
+  /* ---------- pending-set walk ---------- */
+
+  function refAt(d, ei, si) {
+    const en = d.entries[ei];
+    const set = en && Array.isArray(en.sets) ? en.sets[si] : null;
+    if (!en || !set) return null;
+    return { entry: en, set: set, ei: ei, si: si };
+  }
+
+  // Next set that is not done, in draft order, strictly after (ei, si).
+  // scopeEntryId limits the walk to one entry ('exercise' pace).
+  function nextPending(d, ei, si, scopeEntryId) {
+    if (!d) return null;
+    for (let e = ei < 0 ? 0 : ei; e < d.entries.length; e++) {
+      const en = d.entries[e];
+      if (!isRunnableEntry(en)) continue;
+      if (scopeEntryId && en.id !== scopeEntryId) continue;
+      const sets = Array.isArray(en.sets) ? en.sets : [];
+      for (let s = 0; s < sets.length; s++) {
+        if (e === ei && s <= si) continue;
+        if (!setIsDone(sets[s])) return refAt(d, e, s);
+      }
+      if (scopeEntryId) return null;
+    }
+    return null;
+  }
+
+  Session.next = function (d) {
+    d = d || Session.draft();
+    const cur = Session.cursor();
+    let ei = -1;
+    let si = -1;
+    if (cur) {
+      const at = Session.findSet(cur.entryId, cur.sid, d);
+      if (at) { ei = at.ei; si = at.si; }
+    }
+    const ref = nextPending(d, ei < 0 ? 0 : ei, si, null);
+    if (!ref) return null;
+    return { entryId: ref.entry.id, sid: sidOf(ref.set), entry: ref.entry, set: ref.set };
+  };
+
+  // First pending set of the whole draft (or of one entry).
+  Session.firstPending = function (entryId, d) {
+    d = d || Session.draft();
+    const ref = nextPending(d, 0, -1, entryId || null);
+    if (!ref) return null;
+    return { entryId: ref.entry.id, sid: sidOf(ref.set), entry: ref.entry, set: ref.set };
+  };
+
+  Session.progress = function (d) {
+    d = d || Session.draft();
+    const p = Player.projectDraft(d);
+    return { done: p.doneCount, total: p.workCount, remainSec: p.remainSec, estSec: p.estSec };
+  };
+
+  /* ---------- public run verbs ---------- */
+
+  // Tap a set's NUMBER -> run exactly that set, whatever the resolved pace.
+  Session.runSet = function (entryId, sid, opts) {
+    opts = opts || {};
+    const X0 = EXT();
+    if (X0) {
+      const sc = extScope(opts);
+      return X0.runSet(entryId, sid, sc ? { scope: sc } : {}) !== false;
+    }
+    const d = Session.draft();
+    if (!d) return false;
+    Session.backfill(d);
+    const at = Session.findSet(entryId, sid, d);
+    if (!at) return false;
+    const pace = Session.resolvePace(at.entry, opts.pace, d);
+    const chain = pace === 'off' ? 'set' : pace;
+    return startWork(d, at.entry, at.set, chain, opts);
+  };
+
+  // Tap a card's STOPWATCH -> run that exercise (its sets + rests), then STOP.
+  Session.runExercise = function (entryId, opts) {
+    opts = opts || {};
+    const X0 = EXT();
+    if (X0 && typeof X0.runEntry === 'function') return X0.runEntry(entryId) !== false;
+    const d = Session.draft();
+    if (!d) return false;
+    Session.backfill(d);
+    const first = Session.firstPending(entryId, d);
+    if (!first) { toast('Every set here is done'); return false; }
+    return startWork(d, first.entry, first.set, 'exercise', opts);
+  };
+
+  Session.runSession = function (opts) {
+    opts = opts || {};
+    const X0 = EXT();
+    if (X0 && typeof X0.runSession === 'function') return X0.runSession() !== false;
+    const d = Session.draft();
+    if (!d) return false;
+    Session.backfill(d);
+    const cur = Session.cursor();
+    let first = null;
+    if (cur) {
+      const at = Session.findSet(cur.entryId, cur.sid, d);
+      if (at && !setIsDone(at.set)) first = { entry: at.entry, set: at.set };
+    }
+    if (!first) first = Session.firstPending(null, d);
+    if (!first) { toast('Every set is done'); return false; }
+    return startWork(d, first.entry, first.set, 'session', opts);
+  };
+
+  // Low-level arm: the tapped button always wins for that one action.
+  function startWork(d, en, set, chain, opts) {
+    opts = opts || {};
+    const drv = Session.driverFor(en, set, d);
+    setCursorRef(d, en.id, sidOf(set));
+    if (chain === 'exercise' || chain === 'session') {
+      d._chain = { pace: chain, entryId: en.id };
+    } else {
+      clearChain(d);
+    }
+    if (!drv) {
+      // nothing to time (reps without a tempo) — hand back to the user; ✓
+      // continues the chain via Session.noteSetDone().
+      clearTimer(d);
+      persist(d);
+      cueSetArmed(en, set);
+      notify();
+      return true;   // handled — Session.isRunning() reports whether a clock ticks
+    }
+    const targetSec = num(opts.targetSec) > 0 ? Math.round(num(opts.targetSec)) : drv.targetSec;
+    armTimer(d, en, set, {
+      phase: 'work',
+      driver: drv.driver,
+      targetSec: targetSec,
+      armedTarget: drv.driver === 'countdown' ? ownTargetSec(set) : 0,
+      chain: chain,
+      autoReps: drv.autoReps
+    });
+    persist(d);
+    cueSetArmed(en, set);
+    notify();
+    return true;
+  }
+
+  // Only the running set's OWN typed target retargets it — editing a sibling
+  // row must never move the running clock (nor the cursor).
+  function ownTargetSec(set) {
+    return num(set && set.holdSec) > 0 ? Math.round(num(set.holdSec)) : 0;
+  }
+
+  Session.arm = function (entryId, sid, opts) { return Session.runSet(entryId, sid, opts); };
+
+  // −15s / +15s adjusts the CURRENT target; never below 5s total or 1s left.
+  // Re-deriving from REAL elapsed keeps 'seconds actually held' honest.
+  Session.adjust = function (deltaSec) {
+    const X0 = EXT();
+    if (X0) { X0.adjust(Math.round(num(deltaSec))); return true; }
+    const d = Session.draft();
+    const t = timerOf(d);
+    if (!t || t.boundary || !(t.targetSec > 0)) return false;
+    const el = Math.max(0, Math.round(elapsedMs(t) / 1000));
+    const next = Math.max(5, Math.max(el + 1, t.targetSec + Math.round(num(deltaSec))));
+    if (next === t.targetSec) return false;
+    t.targetSec = next;
+    persist(d);
+    notify();
+    return true;
+  };
+
+  Session.pause = function () { return setPaused(true); };
+  Session.resume = function () { return setPaused(false); };
+  Session.togglePause = function () {
+    const t = timerOf(Session.draft());
+    return setPaused(!(t && t.pausedAt));
+  };
+
+  function setPaused(want) {
+    const X0 = EXT();
+    if (X0) {
+      const x = X0.state();
+      if (!x) return false;
+      if (want && !x.paused) X0.pause();
+      else if (!want && x.paused) X0.resume();
+      else return false;
+      return true;
+    }
+    const d = Session.draft();
+    const t = timerOf(d);
+    if (!t || t.boundary) return false;
+    if (want && !t.pausedAt) t.pausedAt = now();
+    else if (!want && t.pausedAt) {
+      t.pausedMs = (t.pausedMs || 0) + Math.max(0, now() - t.pausedAt);
+      t.pausedAt = 0;
+    } else return false;
+    persist(d);
+    notify();
+    return true;
+  }
+
+  Session.isPaused = function () {
+    const X0 = EXT();
+    if (X0) { const x = X0.state(); return !!(x && x.paused); }
+    const t = timerOf(Session.draft());
+    return !!(t && t.pausedAt);
+  };
+
+  // Cancel the timer cleanly: keep the session, record NOTHING for it.
+  Session.cancel = function (opts) {
+    opts = opts || {};
+    const X0 = EXT();
+    if (X0) { X0.cancel(); return true; }
+    const d = Session.draft();
+    if (!d) return false;
+    const had = !!d._timer;
+    clearTimer(d);
+    if (!opts.keepChain) clearChain(d);
+    if (had || !opts.keepChain) persist(d);
+    notify();
+    return had;
+  };
+
+  // Early finish (or the driver expiring) — records what ACTUALLY happened.
+  // ONE RULE EVERYWHERE: holdSec is the seconds actually held; an early stop
+  // records the short time and overtime records the long one.
+  Session.done = function (vals) {
+    const X0 = EXT();
+    if (X0 && typeof X0.doneNow === 'function') { X0.doneNow(); return true; }
+    const d = Session.draft();
+    const t = timerOf(d);
+    if (!d || !t) return false;
+    if (t.phase === 'rest') return Session.skipRest();
+    const at = Session.findSet(t.entryId, t.sid, d);
+    if (!at) { clearTimer(d); persist(d); notify(); return false; }
+    const actualSec = Math.max(1, Math.round(elapsedMs(t) / 1000));
+    return completeWork(d, at.entry, at.set, t, actualSec, vals || null);
+  };
+
+  // The builder's ✓ (or the focus 'Done' on an untimed set): record + chain.
+  Session.completeSet = function (entryId, sid, vals) {
+    const X0 = EXT();
+    if (X0) {
+      const x = X0.state();
+      if (x && x.kind === 'work' && x.entryId === entryId && x.sid === sid) { X0.doneNow(); return true; }
+    }
+    const d = Session.draft();
+    if (!d) return false;
+    const at = Session.findSet(entryId, sid, d);
+    if (!at) return false;
+    const t = timerOf(d);
+    const mine = t && t.phase === 'work' && t.entryId === entryId && t.sid === sid;
+    const actualSec = mine ? Math.max(1, Math.round(elapsedMs(t) / 1000)) : 0;
+    return completeWork(d, at.entry, at.set, mine ? t : null, actualSec, vals || null);
+  };
+
+  // Hook for the builder's own ✓ handler: it already wrote the values and
+  // set.done — this only continues an armed chain (no-op when idle).
+  Session.noteSetDone = function (entryId, sid) {
+    if (EXT()) return false;   // the external engine chains inside its own completeStep
+    const d = Session.draft();
+    if (!d) return false;
+    const t = timerOf(d);
+    if (t && t.phase === 'work' && t.entryId === entryId && t.sid === sid) {
+      clearTimer(d);
+    }
+    const chain = d._chain;
+    if (!chain || (chain.pace !== 'exercise' && chain.pace !== 'session')) {
+      persist(d);
+      notify();
       return false;
     }
-    return startSession(p.routine, {
-      routineRef: p.routineRef,
-      name: p.name,
-      resume: p
+    const at = Session.findSet(entryId, sid, d);
+    if (!at) { persist(d); notify(); return false; }
+    if (chain.pace === 'exercise' && chain.entryId !== entryId) { persist(d); notify(); return false; }
+    afterWork(d, at.entry, at.set, chain.pace);
+    persist(d);
+    notify();
+    return true;
+  };
+
+  function writeActuals(en, set, t, actualSec, vals) {
+    const shape = shapeOfEntry(en);
+    vals = vals || {};
+    if (isSetworkEntry(en)) {
+      if (shape === 'hold' && actualSec > 0) set.holdSec = Math.max(1, Math.round(actualSec));
+      if (num(vals.holdSec) > 0) set.holdSec = Math.max(1, Math.round(num(vals.holdSec)));
+      if (num(vals.reps) > 0) set.reps = Math.round(num(vals.reps));
+      else if (shape === 'reps' && t && num(t.autoReps) > 0 && !(num(set.reps) > 0)) {
+        set.reps = Math.round(num(t.autoReps));
+      }
+      if (num(vals.distanceM) > 0) set.distanceM = Math.round(num(vals.distanceM));
+      if (num(vals.weightKg) > 0) set.weightKg = num(vals.weightKg);
+      if (num(vals.intensity) > 0) set.intensity = U.clamp(Math.round(num(vals.intensity)), 1, 4);
+    } else {
+      // lift set — exactly {weightKg, reps, type, rpe} survives to Store
+      if (num(vals.reps) > 0) set.reps = Math.round(num(vals.reps));
+      else if (t && num(t.autoReps) > 0 && !(num(set.reps) > 0)) set.reps = Math.round(num(t.autoReps));
+      if (num(vals.weightKg) > 0) set.weightKg = num(vals.weightKg);
+      if (set.type !== 'warmup') set.type = 'work';
+      if (set.rpe === undefined) set.rpe = null;
+    }
+    set.done = true;
+  }
+
+  function completeWork(d, en, set, t, actualSec, vals) {
+    writeActuals(en, set, t, actualSec, vals);
+    const chain = t && isPace(t.chain) ? t.chain : ((d._chain && d._chain.pace) || 'set');
+    clearTimer(d);
+    d._lastDone = { entryId: en.id, sid: sidOf(set), stretch: entryIsStretch(en), at: now() };
+    afterWork(d, en, set, chain);
+    persist(d);
+    notify();
+    return true;
+  }
+
+  // Chain semantics: 'set' hands back after that set; 'exercise' drives
+  // work->rest->next inside ONE entry and stops at its end; 'session' chains
+  // across entries (incl. the inter-exercise transition). Never a trailing
+  // rest: the session is over when the work is.
+  function afterWork(d, en, set, chain) {
+    if (chain !== 'exercise' && chain !== 'session') {
+      clearChain(d);
+      const nx = nextPending(d, indexOfEntry(d, en.id), indexOfSet(en, set), null);
+      if (nx) setCursorRef(d, nx.entry.id, sidOf(nx.set));
+      advisoryRest(d, en);
+      return;
+    }
+    const scope = chain === 'exercise' ? en.id : null;
+    const nx = nextPending(d, indexOfEntry(d, en.id), indexOfSet(en, set), scope);
+    if (!nx) {
+      clearTimer(d);
+      clearChain(d);
+      const after = nextPending(d, indexOfEntry(d, en.id), indexOfSet(en, set), null);
+      if (after) setCursorRef(d, after.entry.id, sidOf(after.set));
+      cueDone(!after);
+      return;
+    }
+    setCursorRef(d, nx.entry.id, sidOf(nx.set));
+    d._chain = { pace: chain, entryId: chain === 'exercise' ? en.id : nx.entry.id };
+    const restSec = Session.restSecFor(en, d);
+    if (restSec > 0) {
+      armTimer(d, en, set, { phase: 'rest', driver: 'countdown', targetSec: restSec, armedTarget: restSec, chain: chain });
+      cueRestStart();
+      return;
+    }
+    armNext(d, chain, nx);
+  }
+
+  function indexOfEntry(d, entryId) {
+    for (let i = 0; i < d.entries.length; i++) {
+      if (d.entries[i] && d.entries[i].id === entryId) return i;
+    }
+    return -1;
+  }
+
+  function indexOfSet(en, set) {
+    const sets = (en && Array.isArray(en.sets)) ? en.sets : [];
+    return sets.indexOf(set);
+  }
+
+  // Rest is over -> arm the next set if it has a driver, else hand back (the
+  // chain stays armed so the user's ✓ resumes it).
+  function armNext(d, chain, ref) {
+    const nx = ref || nextPendingFromCursor(d, chain);
+    if (!nx) {
+      clearTimer(d);
+      clearChain(d);
+      cueDone(true);
+      return false;
+    }
+    setCursorRef(d, nx.entry.id, sidOf(nx.set));
+    const drv = Session.driverFor(nx.entry, nx.set, d);
+    if (!drv) {
+      clearTimer(d);
+      d._chain = { pace: chain, entryId: nx.entry.id };
+      cueSetArmed(nx.entry, nx.set);
+      return false;
+    }
+    d._chain = { pace: chain, entryId: nx.entry.id };
+    armTimer(d, nx.entry, nx.set, {
+      phase: 'work',
+      driver: drv.driver,
+      targetSec: drv.targetSec,
+      armedTarget: drv.driver === 'countdown' ? ownTargetSec(nx.set) : 0,
+      chain: chain,
+      autoReps: drv.autoReps
     });
+    cueSetArmed(nx.entry, nx.set);
+    return true;
+  }
+
+  function nextPendingFromCursor(d, chain) {
+    const cur = d._active;
+    const scope = chain === 'exercise' ? (d._chain && d._chain.entryId) : null;
+    if (cur) {
+      const at = Session.findSet(cur.entryId, cur.sid, d);
+      if (at && !setIsDone(at.set) && (!scope || at.entry.id === scope)) return at;
+      if (at) return nextPending(d, at.ei, at.si, scope);
+    }
+    return nextPending(d, 0, -1, scope);
+  }
+
+  Session.skipRest = function () {
+    const X0 = EXT();
+    if (X0) { X0.skipRest(); return true; }
+    const d = Session.draft();
+    const t = timerOf(d);
+    if (!t || t.phase !== 'rest') return false;
+    const chain = isPace(t.chain) ? t.chain : 'set';
+    clearTimer(d);
+    armNext(d, chain, null);
+    persist(d);
+    notify();
+    return true;
+  };
+
+  // Advisory rest (pace off/set): the app does NOT drive it — it just tells
+  // the builder to show today's rest pill, unchanged.
+  function advisoryRest(d, en) {
+    if (entryIsStretch(en)) return;
+    const sec = Session.restSecFor(en, d);
+    if (!(sec > 0)) return;
+    const VL = window.ViewsLog;
+    if (VL && typeof VL.startRestPill === 'function') {
+      try { VL.startRestPill(sec); return; } catch (e) { /* fall through */ }
+    }
+    try {
+      if (hasDoc() && typeof CustomEvent === 'function') {
+        document.dispatchEvent(new CustomEvent('ironlog:advisory-rest', { detail: { sec: sec } }));
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  /* ---------- cues ---------- */
+
+  function cueSetArmed(en, set) {
+    const shape = shapeOfEntry(en);
+    if (set && (set.side === 'L' || set.side === 'R')) {
+      speak(set.side === 'L' ? 'left side' : 'right side');
+    } else {
+      speak(exName(entryExId(en)));
+    }
+    if (shape === 'hold') vibrate(40);
+  }
+
+  function cueRestStart() { vibrate(30); }
+
+  function cueDone(sessionOver) {
+    vibrate([180, 90, 180]);
+    beep(sessionOver ? 'finish' : 'work');
+    if (sessionOver) speak('all done');
+  }
+
+  /* ---------- tick / expiry / boundary ---------- */
+
+  Session.tick = function (nowMs) {
+    if (typeof nowMs === 'number') {
+      const prev = nowFn;
+      nowFn = function () { return nowMs; };
+      try { return Session.tick(); } finally { nowFn = prev; }
+    }
+    const d = Session.draft();
+    const t = timerOf(d);
+    if (!t) { stopEngine(); if (d) notify('tick'); return false; }
+    if (t.boundary || t.pausedAt) { notify('tick'); return false; }
+    if (t.driver === 'stopwatch') { notify('tick'); return false; }
+    const left = remainMs(t);
+    if (t.phase === 'work' && !t.saidTen && t.targetSec >= 20 && left <= 10400 && left > 8000) {
+      t.saidTen = 1;
+      speak('last ten seconds');
+    }
+    if (left > 0) { notify('tick'); return false; }
+    expire(d, t);
+    return true;
+  };
+
+  // Expired while the tab is hidden -> MARK a boundary, never silently
+  // record. On return the UI shows what expired and the user confirms or
+  // adjusts.
+  function expire(d, t) {
+    if (isHidden()) {
+      t.boundary = 1;
+      t.frozenAt = t.startedAt + (t.pausedMs || 0) + t.targetSec * 1000;
+      persist(d);
+      notify();
+      return;
+    }
+    resolveExpiry(d, t);
+  }
+
+  function resolveExpiry(d, t) {
+    const at = Session.findSet(t.entryId, t.sid, d);
+    if (!at) { clearTimer(d); persist(d); notify(); return; }
+    if (t.phase === 'rest') {
+      const chain = isPace(t.chain) ? t.chain : 'set';
+      clearTimer(d);
+      vibrate([90]);
+      beep('rest');
+      armNext(d, chain, null);
+      persist(d);
+      notify();
+      return;
+    }
+    // A countdown that RAN to zero records the seconds it ran (its target) —
+    // that is what actually happened. A target edited BELOW the seconds
+    // already held expires immediately and records the real elapsed time
+    // instead; either way holdSec is never the plan when the plan is a lie.
+    const actual = t.overrun
+      ? Math.max(1, Math.round(elapsedMs(t) / 1000))
+      : Math.max(1, Math.round(t.targetSec));
+    vibrate([180, 90, 180]);
+    beep('work');
+    completeWork(d, at.entry, at.set, t, actual, null);
+  }
+
+  Session.boundary = function () {
+    const d0 = Session.draft();
+    const X0 = EXT();
+    if (X0) {
+      const x = X0.state();
+      if (!x || !x.boundary) return null;
+      const ref = Session.findSet(x.entryId, x.sid, d0);
+      return {
+        entryId: x.entryId, sid: x.sid, phase: x.kind, sec: x.targetSec,
+        exerciseId: ref ? entryExId(ref.entry) : null, expiredAt: 0
+      };
+    }
+    const t = timerOf(Session.draft());
+    if (!t || !t.boundary) return null;
+    const d = Session.draft();
+    const at = Session.findSet(t.entryId, t.sid, d);
+    return {
+      entryId: t.entryId,
+      sid: t.sid,
+      phase: t.phase,
+      sec: t.targetSec,
+      exerciseId: at ? entryExId(at.entry) : null,
+      expiredAt: t.frozenAt || 0
+    };
+  };
+
+  // Confirm what expired while hidden (optionally with an adjusted actual).
+  Session.confirmBoundary = function (opts) {
+    opts = opts || {};
+    const X0 = EXT();
+    if (X0 && typeof X0.doneNow === 'function') { X0.doneNow(); return true; }
+    const d = Session.draft();
+    const t = timerOf(d);
+    if (!t || !t.boundary) return false;
+    t.boundary = 0;
+    if (num(opts.sec) > 0) t.targetSec = Math.round(num(opts.sec));
+    resolveExpiry(d, t);
+    return true;
+  };
+
+  // Throw away what expired while hidden — records nothing, keeps the session.
+  Session.discardBoundary = function () {
+    const X0 = EXT();
+    if (X0) { X0.cancel(); return true; }
+    const d = Session.draft();
+    const t = timerOf(d);
+    if (!t || !t.boundary) return false;
+    clearTimer(d);
+    clearChain(d);
+    persist(d);
+    notify();
+    return true;
+  };
+
+  /* ---------- reconcile: THE choke point ----------
+     Every draft mutation funnels through saveDraft(); this retargets or
+     orphan-checks the running timer. Authoritative rules (binding):
+       - editing the RUNNING set's target -> retarget live, preserving elapsed
+         (remain = newTarget − elapsed; already past -> expire immediately)
+       - deleting the running SET, or its ENTRY -> cancel cleanly, keep the
+         session, record nothing, advance the cursor to the next pending set
+       - reordering around the running set -> binding is by _sid, so it follows
+       - starting a second timer -> the first is cancelled (single slot)
+       - backgrounded/expired while hidden -> mark boundary, never record
+       - the cursor is ADVISORY: editing any other row never moves it
+  */
+
+  Session.reconcile = function () {
+    const X0 = EXT();
+    if (X0) { X0.reconcile(); notify(); return false; }
+    if (reconciling) return false;
+    const d = Session.draft();
+    if (!d) { stopEngine(); return false; }
+    reconciling = true;
+    let dirty = false;
+    let expired = null;
+    try {
+      dirty = Session.backfill(d) || dirty;
+      const t = timerOf(d);
+      if (t) {
+        const at = Session.findSet(t.entryId, t.sid, d);
+        const en = Session.entryOf(t.entryId, d);
+        if (!en || !at) {
+          // running set (or its whole entry) deleted
+          const cur = d._active;
+          clearTimer(d);
+          clearChain(d);
+          if (cur && cur.entryId === t.entryId && cur.sid === t.sid) {
+            const nx = nextPending(d, 0, -1, null);
+            if (nx) setCursorRef(d, nx.entry.id, sidOf(nx.set));
+            else delete d._active;
+          }
+          dirty = true;
+        } else if (t.phase === 'work' && setIsDone(at.set) && !t.boundary) {
+          // the set was completed elsewhere (builder ✓) — release the slot
+          clearTimer(d);
+          dirty = true;
+        } else if (!t.boundary) {
+          const want = t.phase === 'rest'
+            ? Session.restSecFor(at.entry, d)
+            : (t.driver === 'countdown' ? ownTargetSec(at.set) : 0);
+          if (t.driver !== 'stopwatch' && want > 0 && want !== t.armedTarget) {
+            t.armedTarget = want;
+            t.targetSec = want;      // elapsed is preserved by construction
+            dirty = true;
+          }
+          if (t.driver !== 'stopwatch' && t.targetSec > 0 && !t.pausedAt && remainMs(t) <= 0) {
+            t.overrun = 1;           // 'if already past, expire immediately'
+            expired = t;
+          }
+        }
+      }
+      if (d._chain && !Session.entryOf(d._chain.entryId, d)) {
+        clearChain(d);
+        dirty = true;
+      }
+      if (d._active && !Session.findSet(d._active.entryId, d._active.sid, d)) {
+        const nx = nextPending(d, 0, -1, null);
+        if (nx) setCursorRef(d, nx.entry.id, sidOf(nx.set));
+        else delete d._active;
+        dirty = true;
+      }
+      if (dirty) {
+        if (host.saveDraft) { try { host.saveDraft(); } catch (e) { lsWrite(d); } }
+        else lsWrite(d);
+      }
+    } finally {
+      reconciling = false;
+    }
+    if (expired) expire(d, expired);
+    notify();
+    return dirty;
+  };
+
+  /* ---------- renderer-facing snapshot ---------- */
+
+  Session.state = function () {
+    const d = Session.draft();
+    const t = timerOf(d);
+    const st = {
+      hasDraft: !!d,
+      view: (d && d._view) || 'builder',
+      pace: d ? Session.resolvePace(null, null, d) : 'off',
+      cadence: d ? Session.resolveCadence(null, d) : false,
+      running: false,
+      phase: null,
+      driver: null,
+      chain: (d && d._chain && d._chain.pace) || null,
+      entryId: null,
+      sid: null,
+      targetSec: 0,
+      elapsedSec: 0,
+      remainSec: 0,
+      frac: 0,
+      paused: false,
+      boundary: false,
+      cursor: (d && d._active) || null,
+      lastDone: (d && d._lastDone) || null
+    };
+    const X0 = EXT();
+    if (X0) {
+      const x = X0.state();
+      if (!x) return st;
+      st.running = !x.boundary;
+      st.phase = x.kind;
+      st.driver = x.mode === 'stopwatch' ? 'stopwatch' : 'countdown';
+      st.entryId = x.entryId;
+      st.sid = x.sid;
+      st.targetSec = x.targetSec;
+      st.elapsedSec = x.elapsedSec;
+      st.remainSec = x.remainSec;
+      st.paused = !!x.paused;
+      st.boundary = !!x.boundary;
+      st.chain = x.scope && x.scope !== 'set' ? x.scope : null;
+      st.frac = x.targetSec > 0 ? U.clamp(x.remainSec / x.targetSec, 0, 1) : 0;
+      return st;
+    }
+    if (!t) return st;
+    st.running = !t.boundary;
+    st.phase = t.phase;
+    st.driver = t.driver;
+    st.entryId = t.entryId;
+    st.sid = t.sid;
+    st.targetSec = t.targetSec;
+    st.elapsedSec = Math.round(elapsedMs(t) / 1000);
+    st.paused = !!t.pausedAt;
+    st.boundary = !!t.boundary;
+    if (t.targetSec > 0) {
+      const left = Math.max(0, remainMs(t));
+      st.remainSec = Math.ceil(left / 1000);
+      st.frac = U.clamp(left / (t.targetSec * 1000), 0, 1);
+    } else {
+      st.remainSec = 0;
+      st.frac = 0;
+    }
+    return st;
+  };
+
+  /* ---------- depth (stretch) ---------- */
+
+  // Writes STRETCH DEPTH onto ONE set (per-set actuals stay per-set) and
+  // remembers it as the entry's sticky aim.
+  Session.setDepth = function (entryId, sid, n) {
+    const d = Session.draft();
+    const at = Session.findSet(entryId, sid, d);
+    if (!at) return false;
+    const v = U.clamp(Math.round(num(n)) || 2, 1, 4);
+    at.set.intensity = v;
+    at.entry._depth = v;
+    persist(d);
+    notify();
+    return true;
+  };
+
+  /* ---------- circuit rounds (the draft's cardio circuit entry) ---------- */
+
+  // The circuit's live record. views-log seeds the rounds/stations/AMRAP
+  // config as the draft-local `_circuit` layer (plus one real entry per
+  // station); a draft-local layer can never be saved, so the round player
+  // materializes the ordinary P3 cardio entry that carries rounds + stations
+  // and keeps the two in step. Nothing is compiled and nothing is copied —
+  // both live on the same single record.
+  Session.circuitEntry = function (d) {
+    d = d || Session.draft();
+    if (!d || !Array.isArray(d.entries)) return null;
+    let en = d.entries.find(isCircuitEntry) || null;
+    const cfg = d._circuit && typeof d._circuit === 'object' ? d._circuit : null;
+    if (!en && cfg) {
+      en = {
+        id: U.uid('en'),
+        type: 'cardio',
+        mode: 'circuit',
+        durationMin: 0,
+        rounds: Math.max(0, Math.round(num(cfg.rounds0))),
+        stations: (Array.isArray(cfg.stations) ? cfg.stations : []).map(function (st) {
+          const o = {};
+          for (const k in st) { if (k.charAt(0) !== '_') o[k] = st[k]; }
+          return o;
+        })
+      };
+      if (num(cfg.rounds) > 0) en._targetRounds = Math.round(num(cfg.rounds));
+      if (num(cfg.amrapSec) > 0) en._amrapSec = Math.round(num(cfg.amrapSec));
+      d.entries.push(en);
+      persist(d);
+    }
+    if (en && cfg) cfg.rounds0 = Math.max(0, Math.round(num(en.rounds)));
+    return en;
+  };
+
+  Session.closeRound = function (entryId) {
+    const d = Session.draft();
+    const en = entryId ? Session.entryOf(entryId, d) : Session.circuitEntry(d);
+    if (!en) return false;
+    en.rounds = Math.max(0, Math.round(num(en.rounds))) + 1;
+    en._stationIdx = 0;
+    en.durationMin = Math.max(1, Math.round((now() - (d.startedAt || now())) / 60000));
+    vibrate([180, 90, 180]);
+    beep('work');
+    persist(d);
+    notify();
+    return true;
+  };
+
+  Session.setStation = function (entryId, idx) {
+    const d = Session.draft();
+    const en = entryId ? Session.entryOf(entryId, d) : Session.circuitEntry(d);
+    if (!en) return false;
+    en._stationIdx = Math.max(0, Math.round(num(idx)));
+    persist(d);
+    notify();
+    return true;
+  };
+
+  /* ---------- set editing helpers (used by the focus fix-sheet) ---------- */
+
+  Session.updateSet = function (entryId, sid, patch) {
+    const d = Session.draft();
+    const at = Session.findSet(entryId, sid, d);
+    if (!at || !patch) return false;
+    const s = at.set;
+    Object.keys(patch).forEach(function (k) {
+      const v = patch[k];
+      if (v === null || v === undefined || v === '') { if (k !== 'done') delete s[k]; return; }
+      if (k === 'side') { s.side = v === 'L' || v === 'R' ? v : undefined; if (!s.side) delete s.side; return; }
+      if (k === 'done') { s.done = !!v; return; }
+      const n = num(v);
+      if (n > 0) s[k] = k === 'weightKg' ? n : Math.round(n);
+      else delete s[k];
+    });
+    persist(d);
+    notify();
+    return true;
+  };
+
+  Session.addSet = function (entryId, seedSid) {
+    const d = Session.draft();
+    const en = Session.entryOf(entryId, d);
+    if (!en) return null;
+    if (!Array.isArray(en.sets)) en.sets = [];
+    const last = en.sets[en.sets.length - 1] || null;
+    const ex = exOf(entryExId(en));
+    const next = { done: false };
+    if (isLiftEntry(en)) {
+      next.weightKg = last ? num(last.weightKg) : 0;
+      next.reps = last ? Math.round(num(last.reps)) : 0;
+      next.type = last && last.type === 'warmup' ? 'warmup' : 'work';
+      next.rpe = null;
+    } else if (last) {
+      ['reps', 'holdSec', 'distanceM', 'weightKg'].forEach(function (k) {
+        if (num(last[k]) > 0) next[k] = last[k];
+      });
+    }
+    if (ex && ex.perSide) next.side = last && last.side === 'L' ? 'R' : 'L';
+    else if (last && (last.side === 'L' || last.side === 'R')) next.side = last.side === 'L' ? 'R' : 'L';
+    sidOf(next);
+    en.sets.push(next);
+    persist(d);
+    notify();
+    return next._sid;
+  };
+
+  Session.removeSet = function (entryId, sid) {
+    const d = Session.draft();
+    const at = Session.findSet(entryId, sid, d);
+    if (!at) return false;
+    at.entry.sets.splice(at.si, 1);
+    persist(d);   // reconcile cancels the timer if this was the running set
+    notify();
+    return true;
+  };
+
+  Session.removeEntry = function (entryId) {
+    const d = Session.draft();
+    if (!d) return false;
+    const before = d.entries.length;
+    d.entries = d.entries.filter(function (en) { return !en || en.id !== entryId; });
+    if (d.entries.length === before) return false;
+    persist(d);
+    notify();
+    return true;
+  };
+
+  Session.moveEntry = function (entryId, delta) {
+    const d = Session.draft();
+    if (!d) return false;
+    const i = indexOfEntry(d, entryId);
+    const j = i + (num(delta) > 0 ? 1 : -1);
+    if (i < 0 || j < 0 || j >= d.entries.length) return false;
+    const tmp = d.entries[i];
+    d.entries[i] = d.entries[j];
+    d.entries[j] = tmp;
+    persist(d);
+    notify();
+    return true;
+  };
+
+  /* ---------- presentation ---------- */
+
+  Session.view = function () {
+    const d = Session.draft();
+    return (d && d._view) || 'builder';
+  };
+
+  // Switching is one tap in BOTH directions and never interrupts a timer.
+  Session.setView = function (v) {
+    const d = Session.draft();
+    if (!d) return false;
+    d._view = v === 'focus' ? 'focus' : 'builder';
+    const VL = VLAPI();
+    if (d._view === 'focus') {
+      persist(d);
+      Player.openFocus();
+    } else {
+      Player.closeFocus({ navigate: false });
+      const live = VL && typeof VL.live === 'function' ? VL.live() : null;
+      if (live && typeof live.toBuilder === 'function') live.toBuilder();
+      else {
+        persist(d);
+        if (window.App && App.navigate) App.navigate('log');
+        if (window.App && App.rerender) App.rerender();
+      }
+    }
+    notify();
+    return true;
   };
 
   /* ======================================================================
-     Runtime state
+     Legacy P3.5 shadow state — DELETED.
+
+     A stale 'ironlog/activeSession' left by a shipped P3.5 client is
+     discarded safely on boot (app.js still calls Player.resumePending(),
+     which now always answers null after cleaning up).
      ====================================================================== */
 
-  let S = null;         // active session (null = idle)
-  let root = null;      // overlay element
-  let tickIv = null;
-  let chromePrev = null;
+  Player.discardLegacySession = function () {
+    if (!hasLS()) return false;
+    try {
+      if (localStorage.getItem(LEGACY_SESSION_KEY) === null) return false;
+      localStorage.removeItem(LEGACY_SESSION_KEY);
+      return true;
+    } catch (e) { return false; }
+  };
 
-  Player.isActive = function () { return !!S; };
+  Player.resumePending = function () { Player.discardLegacySession(); return null; };
+  Player.discardPending = function () { Player.discardLegacySession(); };
+  Player.resume = function () { Player.discardLegacySession(); return false; };
+
+  /* ======================================================================
+     Session start — seed the ONE session record, then present it
+     ====================================================================== */
+
+  Player.isActive = function () { return !!root; };
+
+  // Start (or extend) the live session from a routine. Performance mode only.
+  Player.start = function (routine, opts) {
+    opts = opts || {};
+    const u = user();
+    if (!u) { toast('Create a profile first', 'err'); return false; }
+    if (!perfMode(u)) { toast('Guided sessions live in Performance mode', 'err'); return false; }
+    Player.discardLegacySession();
+    const seeded = Player.draftFromRoutine(routine, {
+      userId: u.id,
+      name: opts.name || (routine && routine.name),
+      routineRef: opts.routineRef
+    });
+    if (!seeded || !seeded.entries.length) { toast('This routine has nothing to run yet', 'err'); return false; }
+
+    const cur = Session.draft();
+    if (cur && cur.userId && cur.userId !== u.id) {
+      toast('Another profile has a workout in progress', 'err');
+      return false;
+    }
+    let d;
+    if (cur && Array.isArray(cur.entries) && cur.entries.length) {
+      // one live session: a routine started on top of an open draft joins it
+      seeded.entries.forEach(function (en) { cur.entries.push(en); });
+      if (!cur._routine) cur._routine = seeded._routine;
+      d = cur;
+      Session.backfill(d);
+      Session.save();
+      toast('Added to your workout', 'ok');
+    } else {
+      d = Session.setDraft(seeded);
+    }
+    const wantFocus = opts.view === 'focus' ||
+      (opts.view !== 'builder' && Session.kindOfDraft(d) === 'circuit');
+    d._view = wantFocus ? 'focus' : 'builder';
+    Session.save();
+    // Hand the record to the log view: it re-reads the draft and dispatches to
+    // the builder or (via Player.renderFocus) to the focus presentation.
+    if (!wantFocus) Player.closeFocus({ navigate: false });
+    if (window.App && App.navigate) App.navigate('log');
+    if (window.App && App.rerender) App.rerender();
+    if (wantFocus) Player.openFocus();
+    return true;
+  };
+
+  /* ======================================================================
+     Focus view — a RENDERER over the draft. It owns no session data.
+     ====================================================================== */
+
+  let root = null;         // overlay element
+  let paintIv = null;
+  let chromePrev = null;
+  let unsub = null;
+  let lastSig = '';
+  let armedAt = 0;         // re-render-under-pointer guard for the ring
 
   function onVisibility() {
-    if (!S) return;
-    if (document.visibilityState === 'visible') acquireWake(); // re-acquire (iOS drops it)
-    writePending(S);
-  }
-
-  function onHashChange() {
-    // Contract: navigation while a session is active pauses — never destroys.
-    // Rest steps are exempt: rest keeps counting through a glance elsewhere
-    // (pausing recovery time helps no one), and only work steps pause.
-    if (!S || !S.counting || S.paused) return;
-    if (S.compiled && S.compiled.kind === 'steps') {
-      const st = curStep();
-      if (st && st.type === 'rest') return;
+    if (!root) return;
+    if (document.visibilityState === 'visible') {
+      acquireWake();        // re-acquire (iOS drops it)
+      Session.tick();
+      repaint(true);
     }
-    togglePause(true);
   }
 
   function onKeydown(e) {
-    if (!S || e.key !== 'Escape') return;
-    // App overlays (confirm/sheets) sit above the player and own Escape.
-    if (document.querySelector('.modal-backdrop')) return;
+    if (!root || e.key !== 'Escape') return;
+    if (document.querySelector('.modal-backdrop')) return; // sheets own Escape
     e.preventDefault();
-    quitSession();
+    Session.setView('builder');
   }
 
   function hideChrome() {
@@ -614,141 +2304,6 @@
     chromePrev = null;
   }
 
-  /* ======================================================================
-     Start / stop
-     ====================================================================== */
-
-  Player.start = function (routine, opts) {
-    opts = opts || {};
-    if (S) { toast('A guided session is already running'); return false; }
-    const u = user();
-    if (!u) { toast('Create a profile first', 'err'); return false; }
-    if (!perfMode(u)) { toast('Guided sessions live in Performance mode', 'err'); return false; }
-    // Never silently clobber a deferred pending session that holds recorded
-    // work (or belongs to someone else) — mirror the manual draft's
-    // 'Starting this one will discard it' semantics, with a resume-instead
-    // escape hatch. An empty pending owned by the current user is overwritten
-    // silently, matching draft behavior.
-    const pend = readPending();
-    const foreign = !!(pend && pend.userId && pend.userId !== u.id);
-    if (pend && (foreign || pendingHasWork(pend)) && window.App && App.modal) {
-      const owner = pendingOwner(pend);
-      const ownerName = owner && owner.name ? owner.name : 'Someone';
-      const pendName = pend.name || (pend.routine && pend.routine.name) || 'Guided session';
-      App.modal({
-        title: 'Unfinished guided session',
-        content: '<p class="text-2" style="font-size:14px;line-height:1.55;margin:4px 0 8px">' +
-          U.esc(ownerName) + ' has an unfinished guided session — “' + U.esc(pendName) +
-          '”. Starting a new one discards its recorded work.</p>',
-        actions: [
-          { label: 'Cancel', kind: 'ghost' },
-          {
-            label: 'Resume it',
-            kind: 'primary',
-            onClick: function () {
-              if (owner && window.Store && Store.setCurrentUser) {
-                const cur = user();
-                if (!cur || cur.id !== owner.id) Store.setCurrentUser(owner.id);
-              }
-              if (!Player.resume()) toast('Could not resume that session', 'err');
-            }
-          },
-          {
-            label: 'Discard & start new',
-            kind: 'danger',
-            onClick: function () {
-              clearPending();
-              startSession(routine, opts);
-            }
-          }
-        ]
-      });
-      return false; // deferred to the modal — nothing started yet
-    }
-    return startSession(routine, opts);
-  };
-
-  function startSession(routine, opts) {
-    if (!routine) return false;
-    const compiled = Player.compile(routine);
-    if (compiled.kind === 'steps' && !compiled.steps.length) {
-      toast('This routine has nothing to run yet', 'err');
-      return false;
-    }
-    if (compiled.kind === 'circuit' && !compiled.stations.length) {
-      toast('Add at least one station first', 'err');
-      return false;
-    }
-    const resume = opts.resume || null;
-    const u = user();
-    S = {
-      userId: (resume && resume.userId) || (u && u.id) || null,
-      routine: routine,
-      routineRef: opts.routineRef || null,
-      name: opts.name || routine.name || 'Guided session',
-      compiled: compiled,
-      stepIdx: 0,
-      actuals: [],
-      stickyDepth: {},
-      startedAt: (resume && resume.startedAt) || Date.now(),
-      // countdown machinery
-      counting: false, paused: false, endsAt: 0, totalSec: 0, remainMsAtPause: 0,
-      saidTen: false,
-      lastDone: null,          // {itemIdx, setPos} of the just-finished stretch set
-      // circuit machinery
-      roundsDone: 0, stationIdx: 0,
-      finished: false
-    };
-    (Array.isArray(routine.items) ? routine.items : []).forEach(function () {
-      S.actuals.push({ sets: [] });
-    });
-    if (resume) {
-      if (Array.isArray(resume.actuals)) {
-        resume.actuals.forEach(function (a, i) {
-          if (a && Array.isArray(a.sets) && S.actuals[i]) S.actuals[i].sets = a.sets;
-        });
-      }
-      if (resume.stickyDepth && typeof resume.stickyDepth === 'object') S.stickyDepth = resume.stickyDepth;
-      // restore the just-finished-set pointer so a mid-rest reload keeps the
-      // depth ask (validated against the restored actuals before trusting it)
-      if (resume.lastDone && typeof resume.lastDone === 'object' &&
-          S.actuals[resume.lastDone.itemIdx] &&
-          S.actuals[resume.lastDone.itemIdx].sets[resume.lastDone.setPos]) {
-        S.lastDone = resume.lastDone;
-      }
-      if (compiled.kind === 'steps') {
-        S.stepIdx = Math.min(Math.max(0, Math.round(num(resume.stepIdx))), compiled.steps.length);
-      }
-      S.roundsDone = Math.max(0, Math.round(num(resume.roundsDone)));
-      S.stationIdx = Math.max(0, Math.round(num(resume.stationIdx)));
-    }
-    openOverlay();
-    writePending(S);
-    if (compiled.kind === 'circuit') renderCircuit();
-    else if (S.stepIdx >= compiled.steps.length) showSummary();
-    else renderStep();
-    return true;
-  }
-
-  function closePlayer() {
-    if (tickIv) { clearInterval(tickIv); tickIv = null; }
-    document.removeEventListener('visibilitychange', onVisibility);
-    window.removeEventListener('hashchange', onHashChange);
-    document.removeEventListener('keydown', onKeydown, true);
-    releaseWake();
-    try {
-      if ('speechSynthesis' in window) window.speechSynthesis.cancel();
-    } catch (e) { /* ignore */ }
-    if (root) { root.remove(); root = null; }
-    restoreChrome();
-    document.body.style.overflow = '';
-    S = null;
-  }
-
-  /* ======================================================================
-     Overlay skeleton
-     ====================================================================== */
-
   function svgI(inner) {
     return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22" ' +
       'fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" ' +
@@ -757,37 +2312,74 @@
 
   const VOICE_ON_ICON = svgI('<path d="M11 5 6 9H3v6h3l5 4zM15.5 8.5a5 5 0 0 1 0 7M18.4 5.6a9 9 0 0 1 0 12.8"/>');
   const VOICE_OFF_ICON = svgI('<path d="M11 5 6 9H3v6h3l5 4zM16 9.8l4.4 4.4M20.4 9.8 16 14.2"/>');
+  const BUILDER_ICON = svgI('<rect x="4" y="3.5" width="16" height="17" rx="3"/><path d="M8 8.5h8M8 12.5h8M8 16.5h4.5"/>');
 
-  function openOverlay() {
+  /* views-log's renderLog() hands the log view over to the focus
+     presentation with Player.renderFocus(container, live) whenever
+     draft._view === 'focus'. The focus view is a full-screen overlay owned
+     outside the view system (chrome hidden, never destroyed by navigation),
+     so the container only carries a non-blank fallback panel behind it. */
+  Player.renderFocus = function (container, live) {
+    if (!container) return false;
+    Player.discardLegacySession();
+    container.innerHTML =
+      '<div class="card" style="text-align:center;padding:28px 20px">' +
+        '<h3 style="font-size:17px;margin-bottom:6px">Focus view</h3>' +
+        '<p class="muted" style="font-size:14px;max-width:340px;margin:0 auto 16px">' +
+          'Running this session full screen. Everything you log here lands in the same workout.</p>' +
+        '<button type="button" class="btn ghost" id="pl-to-builder">Back to builder</button>' +
+      '</div>';
+    const back = U.$('#pl-to-builder', container);
+    if (back) {
+      back.addEventListener('click', function () {
+        if (live && typeof live.toBuilder === 'function') live.toBuilder();
+        else Session.setView('builder');
+      });
+    }
+    const ok = Player.openFocus({ from: 'view' });
+    if (!ok && live && typeof live.toBuilder === 'function') live.toBuilder();
+    return ok;
+  };
+
+  Player.openFocus = function (opts) {
+    opts = opts || {};
+    if (!hasDoc()) return false;
+    const d = Session.draft();
+    if (!d) { toast('No workout in progress', 'err'); return false; }
+    if (!perfMode()) { toast('The focus view lives in Performance mode', 'err'); return false; }
+    if (root) { repaint(true); return true; }
+    if (d._view !== 'focus') { d._view = 'focus'; Session.save(); }
+
     root = U.el(
-      '<div class="player-overlay" role="dialog" aria-modal="true" aria-label="Guided session">' +
+      '<div class="player-overlay" role="dialog" aria-modal="true" aria-label="Session focus view">' +
         '<div class="player-top">' +
-          '<button type="button" class="player-x" data-p="quit" aria-label="End session">' +
+          '<button type="button" class="player-x" data-p="quit" aria-label="Back to builder">' +
             (ic().close || '✕') + '</button>' +
           '<div class="player-meta">' +
             '<div class="nm"></div>' +
             '<div class="sub" data-p="sub"></div>' +
           '</div>' +
           '<button type="button" class="player-x" data-p="voice" aria-label="Toggle voice cues" aria-pressed="false"></button>' +
+          '<button type="button" class="player-x" data-p="builder" aria-label="Back to builder" ' +
+            'style="width:auto;border-radius:999px;padding:0 12px;gap:6px;color:var(--text)">' +
+            BUILDER_ICON + '<span style="font-size:12.5px;font-weight:700">Builder</span></button>' +
         '</div>' +
         '<div class="player-rail"><div class="fill" data-p="rail"></div></div>' +
         '<div class="player-stage" data-p="stage"></div>' +
         '<div class="player-foot" data-p="foot"></div>' +
       '</div>');
-    root.querySelector('.player-meta .nm').textContent = S.name;
+    root.querySelector('.player-meta .nm').textContent = d.name || 'Session';
     document.body.appendChild(root);
     document.body.style.overflow = 'hidden';
     hideChrome();
     paintVoiceBtn();
 
-    // wire top bar
-    U.on(root, 'click', '[data-p="quit"]', function () { quitSession(); });
+    U.on(root, 'click', '[data-p="quit"]', function () { Session.setView('builder'); });
+    U.on(root, 'click', '[data-p="builder"]', function () { Session.setView('builder'); });
     U.on(root, 'click', '[data-p="voice"]', function () {
       const u = user();
       const next = voiceOn() ? 'off' : 'on';
-      if (u && window.Store && Store.updateUser) {
-        Store.updateUser(u.id, { settings: { playerVoice: next } });
-      }
+      if (u && window.Store && Store.updateUser) Store.updateUser(u.id, { settings: { playerVoice: next } });
       paintVoiceBtn();
       toast(next === 'on' ? 'Voice cues on' : 'Voice cues muted');
     });
@@ -795,12 +2387,49 @@
     root.addEventListener('pointerdown', ensureAudio);
 
     document.addEventListener('visibilitychange', onVisibility);
-    window.addEventListener('hashchange', onHashChange);
     document.addEventListener('keydown', onKeydown, true);
     acquireWake();
-    if (tickIv) clearInterval(tickIv);
-    tickIv = setInterval(tick, 250);
-  }
+    if (paintIv) clearInterval(paintIv);
+    // repaint() is signature-guarded: it only rebuilds the stage when the
+    // screen actually changed and otherwise just moves the clock. Polling it
+    // keeps the focus view honest no matter which engine drives the session
+    // (some publish a draft revision before the next step is armed).
+    paintIv = setInterval(function () { repaint(); }, 250);
+    if (!unsub) {
+      const offA = Session.subscribe(function (st) {
+        if (!root) return;
+        if (st.reason === 'tick') paintClock();
+        else repaint();
+      });
+      // the external engine publishes draft revisions instead
+      const VL = VLAPI();
+      const offB = VL && typeof VL.subscribeDraft === 'function'
+        ? VL.subscribeDraft(function () { if (root) repaint(); })
+        : null;
+      unsub = function () { offA(); if (offB) offB(); };
+    }
+    lastSig = '';
+    repaint(true);
+    return true;
+  };
+
+  Player.closeFocus = function (opts) {
+    opts = opts || {};
+    if (paintIv) { clearInterval(paintIv); paintIv = null; }
+    if (unsub) { unsub(); unsub = null; }
+    if (!root) return false;
+    document.removeEventListener('visibilitychange', onVisibility);
+    document.removeEventListener('keydown', onKeydown, true);
+    releaseWake();
+    try { if ('speechSynthesis' in window) window.speechSynthesis.cancel(); } catch (e) { /* ignore */ }
+    root.remove();
+    root = null;
+    restoreChrome();
+    document.body.style.overflow = '';
+    lastSig = '';
+    if (opts.navigate !== false && window.App && App.navigate) App.navigate('log');
+    return true;
+  };
 
   function paintVoiceBtn() {
     if (!root) return;
@@ -815,10 +2444,8 @@
   function stageEl() { return root ? root.querySelector('[data-p="stage"]') : null; }
   function footEl() { return root ? root.querySelector('[data-p="foot"]') : null; }
 
-  // Every screen render REPLACES the stage/foot nodes so the previous step's
-  // delegated listeners die with them. Without this they accumulate on the
-  // persistent elements and a tap replays stale closures (e.g. a ring tap on
-  // step 3 recording a ghost set for step 1's exercise).
+  // Every structural render REPLACES the stage/foot nodes so the previous
+  // screen's delegated listeners die with them (P3.5 ghost-tap fix).
   function resetStageFoot() {
     if (!root) return;
     ['stage', 'foot'].forEach(function (key) {
@@ -840,94 +2467,63 @@
     el.style.background = blue ? 'var(--blue)' : 'var(--accent)';
   }
 
-  /* ======================================================================
-     Step bookkeeping
-     ====================================================================== */
-
-  function steps() { return S.compiled.steps; }
-
-  function curStep() { return steps()[S.stepIdx] || null; }
-
-  function nextWorkStep(fromIdx) {
-    const st = steps();
-    for (let i = fromIdx; i < st.length; i++) {
-      if (st[i].type === 'work') return st[i];
+  function ringHTML(sizePx, radius, stroke, color, asButton) {
+    const c = 2 * Math.PI * radius;
+    const cx = sizePx / 2;
+    const svg =
+      '<svg width="' + sizePx + '" height="' + sizePx + '" viewBox="0 0 ' + sizePx + ' ' + sizePx + '">' +
+        '<circle cx="' + cx + '" cy="' + cx + '" r="' + radius + '" stroke="rgba(255,255,255,.09)" stroke-width="' + stroke + '" fill="none"/>' +
+        '<circle class="ring-arc" cx="' + cx + '" cy="' + cx + '" r="' + radius + '" stroke="' + color + '" stroke-width="' + stroke + '" fill="none" ' +
+          'stroke-linecap="round" stroke-dasharray="' + c.toFixed(1) + '" stroke-dashoffset="0"/>' +
+      '</svg>';
+    const inner = svg +
+      '<div class="ring-time"><div class="big" data-p="clock">0:00</div><div class="of" data-p="of"></div></div>';
+    if (asButton) {
+      return '<button type="button" class="player-ring" style="width:' + sizePx + 'px;height:' + sizePx + 'px" ' +
+        'data-p="ring" aria-label="Finish this set now">' + inner + '</button>';
     }
-    return null;
+    return '<div class="player-ring" style="width:' + sizePx + 'px;height:' + sizePx + 'px">' + inner + '</div>';
   }
 
-  function workOrdinal() {
-    // 1-based ordinal of the current work step ('n of m'); during rest, the
-    // ordinal of the next one.
-    const st = steps();
-    let n = 0;
-    for (let i = 0; i < S.stepIdx && i < st.length; i++) {
-      if (st[i].type === 'work') n++;
-    }
-    const cur = curStep();
-    if (cur && cur.type === 'work') n++;
-    else n = Math.min(n + 1, S.compiled.workCount);
-    return Math.max(1, n);
+  function sideBadge(set) {
+    if (!set || (set.side !== 'L' && set.side !== 'R')) return '';
+    return '<div class="player-side-badge">' + (set.side === 'L' ? 'LEFT' : 'RIGHT') + '</div>';
   }
 
-  function remainingEstSec() {
-    const st = steps();
-    let sec = 0;
-    for (let i = S.stepIdx; i < st.length; i++) {
-      if (i === S.stepIdx && S.counting) {
-        sec += Math.max(0, Math.round((S.endsAt - Date.now()) / 1000));
-      } else {
-        sec += stepEstimateSec(st[i]);
-      }
-    }
-    return sec;
-  }
-
-  function updateHeader() {
-    if (S.compiled.kind === 'circuit') return;
-    const mins = Math.max(1, Math.round(remainingEstSec() / 60));
-    setSub(workOrdinal() + ' of ' + S.compiled.workCount + ' · ~' + mins + ' min left');
-    const done = S.stepIdx;
-    setRail(steps().length ? done / steps().length : 0, curStep() && curStep().type === 'rest');
-  }
-
-  function itemOf(step) {
-    const items = Array.isArray(S.routine.items) ? S.routine.items : [];
-    return items[step.entryIdx] || null;
-  }
-
-  function targetLabel(step) {
+  function setTargetLabel(en, s) {
+    const shape = shapeOfEntry(en);
     const bits = [];
-    if (step.shape === 'hold') bits.push(fmtClock(step.targetSec > 0 ? step.targetSec : DEFAULT_HOLD_SEC));
-    if (step.targetReps > 0 && step.shape !== 'hold') bits.push('× ' + step.targetReps);
-    if (step.targetM > 0) bits.push(step.targetM + ' m');
-    if (step.targetKg > 0) bits.push('@ ' + fmtWeight(step.targetKg));
+    if (shape === 'hold') bits.push(fmtClock(Session.targetSecOf(en, s)));
+    if (num(s && s.reps) > 0 && shape !== 'hold') bits.push('× ' + Math.round(num(s.reps)));
+    if (num(s && s.distanceM) > 0) bits.push(Math.round(num(s.distanceM)) + ' m');
+    if (num(s && s.weightKg) > 0) bits.push('@ ' + fmtWeight(s.weightKg));
     return bits.join(' ');
   }
 
-  // 'Last time' line from the user's history (setwork first, lifts for
-  // weight_reps items) — mirrors the builder's PREV hints, side-aware.
-  function lastTimeText(step) {
-    if (!window.Store || !Store.workoutsFor || !S.userId) return '';
-    const ws = Store.workoutsFor(S.userId);
+  // 'Last time' line from history — mirrors the builder's PREV hints.
+  function lastTimeText(en, s) {
+    const u = user();
+    if (!window.Store || !Store.workoutsFor || !u) return '';
+    const exId = entryExId(en);
+    const ws = Store.workoutsFor(u.id);
     for (let i = 0; i < ws.length; i++) {
       const w = ws[i];
       const sets = [];
       let lift = false;
-      (w.entries || []).forEach(function (en) {
-        if (!en) return;
-        if (en.type === 'setwork' && en.exerciseRef === step.exerciseId) {
-          (en.sets || []).forEach(function (s) { sets.push(s); });
-        } else if (en.exerciseId === step.exerciseId && (!en.type || en.type === 'lift')) {
+      (w.entries || []).forEach(function (x) {
+        if (!x) return;
+        if (x.type === 'setwork' && x.exerciseRef === exId) {
+          (x.sets || []).forEach(function (y) { sets.push(y); });
+        } else if (x.exerciseId === exId && (!x.type || x.type === 'lift')) {
           lift = true;
-          (en.sets || []).forEach(function (s) { sets.push(s); });
+          (x.sets || []).forEach(function (y) { sets.push(y); });
         }
       });
       if (!sets.length) continue;
       let pick = sets[0];
-      if (step.side) {
+      if (s && (s.side === 'L' || s.side === 'R')) {
         for (let j = 0; j < sets.length; j++) {
-          if (sets[j].side === step.side) { pick = sets[j]; break; }
+          if (sets[j].side === s.side) { pick = sets[j]; break; }
         }
       }
       const bits = [];
@@ -946,438 +2542,453 @@
     return '';
   }
 
-  /* ======================================================================
-     Step renderers
-     ====================================================================== */
-
-  function sideBadge(step) {
-    if (!step.side) return '';
-    return '<div class="player-side-badge">' + (step.side === 'L' ? 'LEFT' : 'RIGHT') + '</div>';
-  }
-
-  function ringHTML(sizePx, radius, stroke, color, asButton) {
-    const c = 2 * Math.PI * radius;
-    const cx = sizePx / 2;
-    const svg =
-      '<svg width="' + sizePx + '" height="' + sizePx + '" viewBox="0 0 ' + sizePx + ' ' + sizePx + '">' +
-        '<circle cx="' + cx + '" cy="' + cx + '" r="' + radius + '" stroke="rgba(255,255,255,.09)" stroke-width="' + stroke + '" fill="none"/>' +
-        '<circle class="ring-arc" cx="' + cx + '" cy="' + cx + '" r="' + radius + '" stroke="' + color + '" stroke-width="' + stroke + '" fill="none" ' +
-          'stroke-linecap="round" stroke-dasharray="' + c.toFixed(1) + '" stroke-dashoffset="0"/>' +
-      '</svg>';
-    const inner =
-      svg +
-      '<div class="ring-time"><div class="big" data-p="clock">0:00</div><div class="of" data-p="of"></div></div>';
-    if (asButton) {
-      return '<button type="button" class="player-ring" style="width:' + sizePx + 'px;height:' + sizePx + 'px" ' +
-        'data-p="ring" aria-label="Complete this hold now">' + inner + '</button>';
+  // The set the focus view is showing: the cursor when it still points at a
+  // pending set, else the first pending one.
+  function focusRef(d, st) {
+    if (st && st.entryId && (st.running || st.boundary)) {
+      const bound = Session.findSet(st.entryId, st.sid, d);
+      if (bound) return bound;
     }
-    return '<div class="player-ring" style="width:' + sizePx + 'px;height:' + sizePx + 'px">' + inner + '</div>';
+    const t = d && d._timer;
+    if (t) {
+      const at = Session.findSet(t.entryId, t.sid, d);
+      if (at) return at;
+    }
+    const cur = d && d._active;
+    if (cur) {
+      const at = Session.findSet(cur.entryId, cur.sid, d);
+      if (at) return at;
+    }
+    const first = Session.firstPending(null, d);
+    return first ? Session.findSet(first.entryId, first.sid, d) : null;
   }
 
-  function nextStripHTML() {
-    const nx = nextWorkStep(S.stepIdx + 1);
+  function nextStripHTML(d, at) {
+    const nx = at ? nextPendingRef(d, at) : null;
     if (!nx) return '<div class="player-next"><span class="lbl">NEXT</span><span>Finish 🎉</span></div>';
-    const cur = curStep();
-    const sameOtherSide = cur && cur.type === 'work' && nx.entryIdx === cur.entryIdx &&
-      nx.setIdx === cur.setIdx && nx.side && cur.side && nx.side !== cur.side;
+    const sameOtherSide = nx.entry.id === at.entry.id && nx.set.side && at.set.side && nx.set.side !== at.set.side;
     const label = sameOtherSide
-      ? exName(nx.exerciseId) + ' — ' + (nx.side === 'L' ? 'left' : 'right') + ' side'
-      : exName(nx.exerciseId);
+      ? exName(entryExId(nx.entry)) + ' — ' + (nx.set.side === 'L' ? 'left' : 'right') + ' side'
+      : exName(entryExId(nx.entry));
     return '<div class="player-next"><span class="lbl">NEXT</span>' +
       '<span class="nm">' + U.esc(label) + '</span>' +
-      '<span class="tg">' + U.esc(targetLabel(nx)) + '</span></div>';
+      '<span class="tg">' + U.esc(setTargetLabel(nx.entry, nx.set)) + '</span></div>';
   }
 
-  function startCountdown(sec) {
-    S.counting = true;
-    S.paused = false;
-    S.totalSec = sec;
-    S.endsAt = Date.now() + sec * 1000;
-    S.saidTen = false;
+  function nextPendingRef(d, at) {
+    for (let e = at.ei; e < d.entries.length; e++) {
+      const en = d.entries[e];
+      if (!isRunnableEntry(en)) continue;
+      const sets = en.sets || [];
+      for (let s = 0; s < sets.length; s++) {
+        if (e === at.ei && s <= at.si) continue;
+        if (!sets[s].done) return { entry: en, set: sets[s], ei: e, si: s };
+      }
+    }
+    return null;
   }
 
-  function stopCountdown() {
-    S.counting = false;
-    S.paused = false;
+  /* ---------- the set peek strip (tap a set — the clock keeps running) ---------- */
+
+  function peekHTML(d, at) {
+    const sets = (at.entry.sets || []);
+    const t = d._timer;
+    let html = '<div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:center;margin-top:14px">';
+    sets.forEach(function (s, i) {
+      const sid = sidOf(s);
+      const running = !!(t && t.phase === 'work' && t.sid === sid);
+      const done = !!s.done;
+      const cls = done ? 'done' : (running ? 'cur' : '');
+      html += '<button type="button" data-peek="' + U.esc(sid) + '" ' +
+        'style="display:inline-flex;align-items:center;gap:6px;padding:7px 11px;border-radius:999px;' +
+        'border:1px solid ' + (running ? 'var(--blue)' : 'var(--border)') + ';background:' +
+        (done ? 'rgba(48,209,88,.12)' : (running ? 'rgba(10,132,255,.14)' : 'var(--card)')) + ';' +
+        'color:var(--text);font-size:13px;font-variant-numeric:tabular-nums;min-height:36px" ' +
+        'class="' + cls + '" aria-label="Set ' + (i + 1) + '">' +
+        '<span style="color:var(--text-muted);font-size:11px;font-weight:700">' + (i + 1) + '</span>' +
+        U.esc(setTargetLabel(at.entry, s) || '—') + (done ? ' ✓' : '') + '</button>';
+    });
+    html += '<button type="button" data-peekadd="1" style="padding:7px 11px;border-radius:999px;' +
+      'border:1px dashed var(--border);background:transparent;color:var(--text-2);min-height:36px">+</button>';
+    html += '</div>' +
+      '<div class="player-aim muted" style="font-size:12px;margin-top:4px">tap a set to fix it — the clock keeps running</div>';
+    return html;
   }
 
-  function renderStep() {
-    const step = curStep();
-    if (!step) { showSummary(); return; }
+  function wirePeek(stage, d, at) {
+    U.on(stage, 'click', '[data-peek]', function (e, b) {
+      openFixSheet(at.entry.id, b.getAttribute('data-peek'));
+    });
+    U.on(stage, 'click', '[data-peekadd]', function () {
+      const sid = Session.addSet(at.entry.id);
+      if (sid) openFixSheet(at.entry.id, sid);
+    });
+  }
+
+  // The contextual escape: fix any set without leaving focus, without pausing.
+  function openFixSheet(entryId, sid) {
+    if (!window.App || !App.sheet) return;
+    const d = Session.draft();
+    const found = Session.findSet(entryId, sid, d);
+    if (!found) return;
+    const en = found.entry;
+    const shape = shapeOfEntry(en);
+    const s = found.set;
+    const unit = U.unitLabel(window.App && App.units ? App.units() : 'kg');
+    const content = document.createElement('div');
+    let fields = '';
+    if (shape === 'hold') {
+      fields += '<div class="field"><label for="pf-hold">Hold (mm:ss)</label>' +
+        '<input class="input" id="pf-hold" inputmode="numeric" autocomplete="off" value="' +
+        (num(s.holdSec) > 0 ? fmtClock(s.holdSec) : '') + '" placeholder="0:45"></div>';
+    }
+    if (shape === 'reps' || shape === 'weight_reps') {
+      fields += '<div class="field"><label for="pf-reps">Reps</label>' +
+        '<input class="input" id="pf-reps" type="number" min="0" step="1" inputmode="numeric" value="' +
+        (num(s.reps) > 0 ? Math.round(num(s.reps)) : '') + '"></div>';
+    }
+    if (shape === 'carry') {
+      fields += '<div class="field"><label for="pf-m">Meters</label>' +
+        '<input class="input" id="pf-m" type="number" min="0" step="5" inputmode="numeric" value="' +
+        (num(s.distanceM) > 0 ? Math.round(num(s.distanceM)) : '') + '"></div>';
+    }
+    if (shape !== 'hold' || num(s.weightKg) > 0) {
+      fields += '<div class="field"><label for="pf-kg">Weight (' + U.esc(unit) + ')</label>' +
+        '<input class="input" id="pf-kg" type="number" min="0" step="0.5" inputmode="decimal" value="' +
+        (num(s.weightKg) > 0 ? kgToDisplay(s.weightKg) : '') + '"></div>';
+    }
+    const perSide = !!(exOf(entryExId(en)) || {}).perSide || s.side === 'L' || s.side === 'R';
+    if (perSide) {
+      fields += '<div class="field"><label>Side</label><div class="chip-row" id="pf-side">' +
+        ['L', 'R'].map(function (x) {
+          return '<button type="button" class="chip' + (s.side === x ? ' active' : '') + '" data-side="' + x + '">' +
+            (x === 'L' ? 'Left' : 'Right') + '</button>';
+        }).join('') + '</div></div>';
+    }
+    content.innerHTML =
+      '<div class="muted" style="font-size:13px;margin-bottom:8px">' +
+        U.esc(exName(entryExId(en))) + ' · set ' + (found.si + 1) + '</div>' + fields;
+
+    const sheet = App.sheet({
+      title: 'Fix this set',
+      content: content,
+      actions: [
+        {
+          label: 'Remove set',
+          kind: 'danger',
+          onClick: function () { Session.removeSet(entryId, sid); }
+        },
+        {
+          label: 'Save',
+          kind: 'primary',
+          onClick: function () {
+            const patch = {};
+            const h = U.$('#pf-hold', content);
+            const r = U.$('#pf-reps', content);
+            const m = U.$('#pf-m', content);
+            const k = U.$('#pf-kg', content);
+            if (h) { const sec = parseSec(h.value); patch.holdSec = sec === null ? null : Math.round(sec); }
+            if (r) patch.reps = r.value === '' ? null : Math.round(num(r.value));
+            if (m) patch.distanceM = m.value === '' ? null : Math.round(num(m.value));
+            if (k) patch.weightKg = k.value === '' ? null : displayToKg(k.value);
+            Session.updateSet(entryId, sid, patch);
+          }
+        }
+      ]
+    });
+    U.on(content, 'click', '[data-side]', function (e, b) {
+      Session.updateSet(entryId, sid, { side: b.getAttribute('data-side') });
+      U.$$('[data-side]', content).forEach(function (c) { c.classList.toggle('active', c === b); });
+    });
+    return sheet;
+  }
+
+  /* ---------- repaint ---------- */
+
+  // What the screen depends on. Built from the NORMALIZED snapshot so it works
+  // whether the local engine or views-log's drives the session.
+  function sigOf(d, st, at) {
+    return [
+      st.view,
+      (st.running || st.boundary)
+        ? st.phase + ':' + st.entryId + ':' + st.sid + (st.boundary ? 'b' : '') + (st.paused ? 'p' : '')
+        : 'idle',
+      at ? at.entry.id + ':' + sidOf(at.set) : 'none',
+      (d && d.entries.length) || 0,
+      Session.progress(d).done,
+      d && d._lastDone ? d._lastDone.sid : ''
+    ].join('|');
+  }
+
+  function repaint(force) {
+    if (!root) return;
+    const d = Session.draft();
+    if (!d) { Player.closeFocus(); return; }
+    const st = Session.state();
+    const nm = root.querySelector('.player-meta .nm');
+    if (nm && nm.textContent !== (d.name || 'Session')) nm.textContent = d.name || 'Session';
+
+    const circuit = Session.circuitEntry(d);
+    const at = circuit ? null : focusRef(d, st);
+    const sig = circuit ? 'circuit|' + circuit.rounds + '|' + (circuit._stationIdx || 0) : sigOf(d, st, at);
+    if (!force && sig === lastSig) { paintClock(); return; }
+    lastSig = sig;
     resetStageFoot();
-    S.lastDoneVisible = false;
-    if (step.type === 'rest') renderRest(step);
-    else if (step.shape === 'hold') renderHold(step);
-    else renderRepsLike(step);
-    updateHeader();
+    if (circuit) { renderCircuit(d, circuit); return; }
+    if (st.boundary) { renderBoundary(d, st); return; }
+    if (!at) { renderNothingPending(d); return; }
+    if (st.running && st.phase === 'rest') renderRest(d, at, st);
+    else renderWork(d, at, st);
   }
 
-  /* ---------- hold ---------- */
+  function headerFor(d, at) {
+    const p = Session.progress(d);
+    const mins = Math.max(1, Math.round(p.remainSec / 60));
+    setSub(Math.min(p.done + 1, Math.max(1, p.total)) + ' of ' + p.total + ' · about ' + mins + ' min left');
+    setRail(p.total ? p.done / p.total : 0, !!(d._timer && d._timer.phase === 'rest'));
+  }
 
-  function renderHold(step) {
+  /* ---------- work screen ---------- */
+
+  function renderWork(d, at, st) {
     const stage = stageEl();
     const foot = footEl();
-    const item = itemOf(step);
-    const stretch = item ? itemIsStretch(item) : false;
-    const target = step.targetSec > 0 ? step.targetSec : DEFAULT_HOLD_SEC;
-    startCountdown(target);
+    const en = at.entry;
+    const s = at.set;
+    const shape = shapeOfEntry(en);
+    const running = st.running && st.phase === 'work';
+    const stretch = entryIsStretch(en);
+    const last = lastTimeText(en, s);
+    const setNo = at.si + 1;
+    const total = (en.sets || []).length;
+    headerFor(d, at);
+    armedAt = Date.now();
 
     let aim = '';
     if (stretch) {
-      const d = DEPTHS[(S.stickyDepth[step.entryIdx] || 2) - 1];
-      aim = 'Aim: <b>' + U.esc(d.label) + ' depth</b> — ' + U.esc(d.aim);
-    } else if (step.targetKg > 0) {
-      aim = 'Load: <b>' + U.esc(fmtWeight(step.targetKg)) + '</b>';
+      const dep = DEPTHS[U.clamp(Math.round(num(en._depth)) || 2, 1, 4) - 1];
+      aim = 'Aim: <b>' + U.esc(dep.label) + ' depth</b> — ' + U.esc(dep.aim);
+    } else if (num(s.weightKg) > 0) {
+      aim = 'Load: <b>' + U.esc(fmtWeight(s.weightKg)) + '</b>';
     }
-    const last = lastTimeText(step);
+
+    let body;
+    if (running && (st.driver === 'countdown' || st.driver === 'metronome')) {
+      body = ringHTML(196, 88, 10, 'var(--accent)', true) +
+        (aim ? '<div class="player-aim">' + aim + '</div>' : '') +
+        (last ? '<div class="player-aim muted">' + U.esc(last) + '</div>' : '') +
+        '<div class="player-adjust">' +
+          '<button type="button" class="pm" data-p="minus">−15s</button>' +
+          '<button type="button" class="pause" data-p="pause" aria-label="' + (st.paused ? 'Resume' : 'Pause') + '">' +
+            (st.paused ? '▶' : '⏸') + '</button>' +
+          '<button type="button" class="pm" data-p="plus">+15s</button>' +
+        '</div>';
+    } else if (running && st.driver === 'stopwatch') {
+      body = ringHTML(196, 88, 10, 'var(--blue)', true) +
+        (aim ? '<div class="player-aim">' + aim + '</div>' : '') +
+        (last ? '<div class="player-aim muted">' + U.esc(last) + '</div>' : '');
+    } else {
+      const tgt = setTargetLabel(en, s) || (shape === 'hold' ? fmtClock(Session.targetSecOf(en, s)) : '—');
+      body = '<div class="player-big-target">' + U.esc(tgt) + '</div>' +
+        (aim ? '<div class="player-aim">' + aim + '</div>' : '') +
+        (last ? '<div class="player-aim muted">' + U.esc(last) + '</div>' : '') +
+        ((en._note) ? '<div class="player-aim muted">' + U.esc(en._note) + '</div>' : '');
+    }
 
     stage.innerHTML =
-      '<div class="player-ex-name">' + U.esc(exName(step.exerciseId)) + '</div>' +
-      sideBadge(step) +
-      ringHTML(208, 94, 10, 'var(--accent)', true) +
-      (aim ? '<div class="player-aim">' + aim + '</div>' : '') +
-      (last ? '<div class="player-aim muted">' + U.esc(last) + '</div>' : '') +
-      '<div class="player-adjust">' +
-        '<button type="button" class="pm" data-p="minus">−15s</button>' +
-        '<button type="button" class="pause" data-p="pause" aria-label="Pause">⏸</button>' +
-        '<button type="button" class="pm" data-p="plus">+15s</button>' +
-      '</div>';
-    foot.innerHTML = nextStripHTML();
+      '<div class="player-ex-name">' + U.esc(exName(entryExId(en))) + '</div>' +
+      '<div class="player-aim muted" style="margin-top:-2px">set ' + setNo + ' of ' + total + '</div>' +
+      sideBadge(s) +
+      body +
+      peekHTML(d, at);
 
-    const armedAt = Date.now(); // when this hold screen rendered
+    const startable = !!Session.driverFor(en, s, d);
+    foot.innerHTML =
+      (running
+        ? '<button type="button" class="player-bigbtn" data-p="done">Done ✓</button>'
+        : (startable
+          ? '<button type="button" class="player-bigbtn" data-p="start">▶ Start ' +
+            U.esc(shape === 'hold' ? fmtClock(Session.targetSecOf(en, s)) : (setTargetLabel(en, s) || 'set')) + '</button>'
+          : '<button type="button" class="player-bigbtn" data-p="done">Done ✓</button>')) +
+      nextStripHTML(d, at);
 
     U.on(stage, 'click', '[data-p="ring"]', function () {
-      // Re-render-under-pointer guard: the second click of a physical
-      // double-tap on the PREVIOUS step's ring lands on this freshly rendered
-      // one (identical coordinates). Ignore taps within ~300ms of render so a
-      // double-tap can't record a ghost ~1s set for a side never shown.
-      if (Date.now() - armedAt < 300) return;
-      // completing early records the ACTUAL elapsed seconds — never the plan
-      const remain = S.paused
-        ? Math.round(S.remainMsAtPause / 1000)
-        : Math.max(0, Math.round((S.endsAt - Date.now()) / 1000));
-      const elapsed = Math.max(1, S.totalSec - remain);
-      completeHold(step, elapsed);
+      if (Date.now() - armedAt < 300) return; // double-tap under a fresh render
+      Session.done();
     });
-    U.on(stage, 'click', '[data-p="pause"]', function () { togglePause(); });
-    U.on(stage, 'click', '[data-p="minus"]', function () { adjustHold(-15); });
-    U.on(stage, 'click', '[data-p="plus"]', function () { adjustHold(15); });
-    paintCountdown();
-  }
-
-  function adjustHold(deltaSec) {
-    if (!S.counting) return;
-    // −15s/+15s adjusts the CURRENT step target; never below 5s total or 1s
-    // left. When the floor clamps, re-derive the new total from the REAL
-    // elapsed time so totalSec − remain always equals seconds actually held —
-    // both completion paths record from totalSec (ACTUAL-elapsed contract).
-    const remainMs = S.paused ? S.remainMsAtPause : Math.max(0, S.endsAt - Date.now());
-    const elapsedSec = Math.max(0, Math.round((S.totalSec * 1000 - remainMs) / 1000));
-    const newTotal = Math.max(5, Math.max(elapsedSec + 1, S.totalSec + deltaSec));
-    if (newTotal === S.totalSec) return;
-    S.totalSec = newTotal;
-    const newRemainMs = Math.max(1000, (newTotal - elapsedSec) * 1000);
-    if (S.paused) S.remainMsAtPause = newRemainMs;
-    else S.endsAt = Date.now() + newRemainMs;
-    paintCountdown();
-  }
-
-  function togglePause(force) {
-    if (!S.counting) return;
-    const wantPause = force === true ? true : !S.paused;
-    if (wantPause === S.paused) return;
-    if (wantPause) {
-      S.remainMsAtPause = Math.max(0, S.endsAt - Date.now());
-      S.paused = true;
-    } else {
-      S.endsAt = Date.now() + S.remainMsAtPause;
-      S.paused = false;
-    }
-    const b = root && root.querySelector('[data-p="pause"]');
-    if (b) {
-      b.textContent = S.paused ? '▶' : '⏸';
-      b.setAttribute('aria-label', S.paused ? 'Resume' : 'Pause');
-    }
-  }
-
-  function completeHold(step, actualSec) {
-    stopCountdown();
-    recordWork(step, { holdSec: actualSec });
-    vibrate([180, 90, 180]);
-    beep('work');
-    cueAfterWork(step);
-    advance();
-  }
-
-  /* ---------- reps / weight_reps / carry ---------- */
-
-  function renderRepsLike(step) {
-    const stage = stageEl();
-    const foot = footEl();
-    stopCountdown();
-    const item = itemOf(step);
-    const last = lastTimeText(step);
-
-    // current editable actuals (start from targets)
-    const cur = {
-      reps: step.targetReps > 0 ? step.targetReps : (step.shape === 'carry' ? 0 : 8),
-      kg: step.targetKg > 0 ? step.targetKg : 0,
-      m: step.targetM > 0 ? step.targetM : (step.shape === 'carry' ? 40 : 0)
-    };
-    S.curVals = cur;
-
-    let big = '';
-    if (step.shape === 'carry') big = '<span data-b="m">' + cur.m + '</span> m';
-    else big = '× <span data-b="reps">' + cur.reps + '</span>';
-
-    function stepperHTML(id, label) {
-      return '<div class="player-stepper">' +
-        '<span class="lb">' + U.esc(label) + '</span>' +
-        '<button type="button" class="btn icon ghost" data-s="' + id + ':-">−</button>' +
-        '<span class="val" data-v="' + id + '"></span>' +
-        '<button type="button" class="btn icon ghost" data-s="' + id + ':+">+</button>' +
-      '</div>';
-    }
-
-    let steppers = '';
-    if (step.shape !== 'carry') steppers += stepperHTML('reps', 'Reps');
-    if (step.shape === 'carry') steppers += stepperHTML('m', 'Meters');
-    if (step.shape === 'weight_reps' || step.shape === 'carry' || cur.kg > 0) {
-      steppers += stepperHTML('kg', 'Weight');
-    }
-
-    stage.innerHTML =
-      '<div class="player-ex-name">' + U.esc(exName(step.exerciseId)) + '</div>' +
-      sideBadge(step) +
-      '<div class="player-big-target">' + big + '</div>' +
-      (step.targetKg > 0 ? '<div class="player-aim">@ <b>' + U.esc(fmtWeight(step.targetKg)) + '</b></div>' : '') +
-      (last ? '<div class="player-aim muted">' + U.esc(last) + '</div>' : '') +
-      ((item && item.note) ? '<div class="player-aim muted">' + U.esc(item.note) + '</div>' : '') +
-      '<div class="player-steppers">' + steppers + '</div>';
-    foot.innerHTML =
-      '<button type="button" class="player-bigbtn" data-p="done">Done ✓</button>' +
-      nextStripHTML();
-
-    function paintVals() {
-      const map = { reps: String(cur.reps), m: cur.m + '', kg: String(kgToDisplay(cur.kg)) };
-      U.$$('[data-v]', stage).forEach(function (el) {
-        el.textContent = map[el.getAttribute('data-v')] || '0';
-      });
-      const bigReps = stage.querySelector('[data-b="reps"]');
-      if (bigReps) bigReps.textContent = String(cur.reps);
-      const bigM = stage.querySelector('[data-b="m"]');
-      if (bigM) bigM.textContent = String(cur.m);
-    }
-
-    U.on(stage, 'click', '[data-s]', function (e, b) {
-      const parts = b.getAttribute('data-s').split(':');
-      const dir = parts[1] === '+' ? 1 : -1;
-      if (parts[0] === 'reps') cur.reps = U.clamp(cur.reps + dir, 1, 200);
-      else if (parts[0] === 'm') cur.m = U.clamp(cur.m + dir * 5, 5, 2000);
-      else if (parts[0] === 'kg') {
-        const stepDisp = 2.5; // display units — familiar plate math in lb or kg
-        const disp = Math.max(0, kgToDisplay(cur.kg) + dir * stepDisp);
-        cur.kg = displayToKg(disp);
-      }
-      paintVals();
-    });
-
+    U.on(stage, 'click', '[data-p="pause"]', function () { Session.togglePause(); });
+    U.on(stage, 'click', '[data-p="minus"]', function () { Session.adjust(-15); });
+    U.on(stage, 'click', '[data-p="plus"]', function () { Session.adjust(15); });
+    U.on(foot, 'click', '[data-p="start"]', function () { Session.runSet(en.id, sidOf(s)); });
     U.on(foot, 'click', '[data-p="done"]', function () {
-      const vals = {};
-      if (step.shape === 'carry') {
-        vals.distanceM = cur.m;
-        if (cur.kg > 0) vals.weightKg = cur.kg;
-      } else {
-        vals.reps = cur.reps;
-        if (cur.kg > 0) vals.weightKg = cur.kg;
-      }
-      recordWork(step, vals);
-      vibrate(60);
-      cueAfterWork(step);
-      advance();
+      if (Session.isRunning() && st.phase === 'work') Session.done();
+      else Session.completeSet(en.id, sidOf(s), null);
     });
-
-    paintVals();
+    wirePeek(stage, d, at);
+    paintClock();
   }
 
-  /* ---------- rest ---------- */
+  /* ---------- rest screen ---------- */
 
-  function renderRest(step) {
+  function renderRest(d, at, st) {
     const stage = stageEl();
     const foot = footEl();
-    startCountdown(step.sec);
-
-    // one-tap stretch-depth ask for the set that just finished
+    headerFor(d, at);
+    const ld = lastDoneRef(d, at);
     let depthAsk = '';
-    if (S.lastDone && S.lastDone.stretch) {
-      const cur = S.actuals[S.lastDone.itemIdx];
-      const s = cur && cur.sets[S.lastDone.setPos];
-      const selected = s && s.intensity >= 1 ? s.intensity : (S.stickyDepth[S.lastDone.itemIdx] || 2);
+    if (ld && ld.stretch) {
+      const ref = Session.findSet(ld.entryId, ld.sid, d);
+      const selected = ref && num(ref.set.intensity) >= 1
+        ? U.clamp(Math.round(num(ref.set.intensity)), 1, 4)
+        : U.clamp(Math.round(num(ref && ref.entry._depth)) || 2, 1, 4);
       depthAsk =
         '<div class="card player-ask">' +
-          '<div class="lbl">THAT ' + U.esc(exName(S.lastDone.exerciseId).toUpperCase()) + ' — HOW DEEP DID IT FEEL?</div>' +
+          '<div class="lbl">THAT ' + U.esc(exName(ref ? entryExId(ref.entry) : '').toUpperCase()) +
+            ' — HOW DEEP DID IT FEEL?</div>' +
           '<div class="segmented block player-depth">' +
-            DEPTHS.map(function (d) {
-              return '<button type="button" data-depth="' + d.n + '"' +
-                (d.n === selected ? ' class="active"' : '') + '>' + d.n + ' · ' + d.label + '</button>';
+            DEPTHS.map(function (dp) {
+              return '<button type="button" data-depth="' + dp.n + '"' +
+                (dp.n === selected ? ' class="active"' : '') + '>' + dp.n + ' · ' + dp.label + '</button>';
             }).join('') +
           '</div>' +
         '</div>';
     }
-
-    const nx = nextWorkStep(S.stepIdx + 1);
-    let nextCard = '';
-    if (nx) {
-      const lt = lastTimeText(nx);
-      nextCard =
-        '<div class="card player-ask">' +
-          '<div class="lbl">NEXT UP</div>' +
-          '<div class="nx">' + U.esc(exName(nx.exerciseId)) +
-            (nx.side ? ' — ' + (nx.side === 'L' ? 'left' : 'right') : '') +
-            (targetLabel(nx) ? ' · ' + U.esc(targetLabel(nx)) : '') + '</div>' +
-          (lt ? '<div class="sub">' + U.esc(lt) + '</div>' : '') +
-        '</div>';
-    }
+    const nx = at;
+    const lt = lastTimeText(nx.entry, nx.set);
+    const nextCard =
+      '<div class="card player-ask">' +
+        '<div class="lbl">NEXT UP</div>' +
+        '<div class="nx">' + U.esc(exName(entryExId(nx.entry))) +
+          (nx.set.side ? ' — ' + (nx.set.side === 'L' ? 'left' : 'right') : '') +
+          (setTargetLabel(nx.entry, nx.set) ? ' · ' + U.esc(setTargetLabel(nx.entry, nx.set)) : '') + '</div>' +
+        (lt ? '<div class="sub">' + U.esc(lt) + '</div>' : '') +
+      '</div>';
 
     stage.innerHTML =
       '<div class="player-phase-lbl">REST</div>' +
       ringHTML(164, 72, 9, 'var(--blue)', false) +
       '<div class="player-adjust">' +
-        '<button type="button" class="pause" data-p="pause" aria-label="Pause">⏸</button>' +
+        '<button type="button" class="pm" data-p="minus">−15s</button>' +
+        '<button type="button" class="pause" data-p="pause" aria-label="Pause">' + (st.paused ? '▶' : '⏸') + '</button>' +
+        '<button type="button" class="pm" data-p="plus">+15s</button>' +
       '</div>' +
       depthAsk + nextCard;
     foot.innerHTML = '<button type="button" class="player-bigbtn ghost" data-p="skip">Skip rest →</button>';
 
     U.on(stage, 'click', '[data-depth]', function (e, b) {
       const n = U.clamp(parseInt(b.getAttribute('data-depth'), 10) || 2, 1, 4);
-      if (S.lastDone) {
-        const a = S.actuals[S.lastDone.itemIdx];
-        const set = a && a.sets[S.lastDone.setPos];
-        if (set) set.intensity = n; // writes intensity onto the just-finished set
-        S.stickyDepth[S.lastDone.itemIdx] = n;
-        writePending(S);
-      }
-      U.$$('[data-depth]', stage).forEach(function (c) {
-        c.classList.toggle('active', c === b);
-      });
+      if (ld) Session.setDepth(ld.entryId, ld.sid, n);
+      U.$$('[data-depth]', stage).forEach(function (c) { c.classList.toggle('active', c === b); });
     });
-    U.on(stage, 'click', '[data-p="pause"]', function () { togglePause(); });
-    U.on(foot, 'click', '[data-p="skip"]', function () { finishRest(true); });
-    paintCountdown();
+    U.on(stage, 'click', '[data-p="pause"]', function () { Session.togglePause(); });
+    U.on(stage, 'click', '[data-p="minus"]', function () { Session.adjust(-15); });
+    U.on(stage, 'click', '[data-p="plus"]', function () { Session.adjust(15); });
+    U.on(foot, 'click', '[data-p="skip"]', function () { Session.skipRest(); });
+    paintClock();
   }
 
-  function finishRest(skipped) {
-    stopCountdown();
-    if (!skipped) {
-      vibrate([90]); // distinct from the end-of-hold pattern
-      beep('rest');
-      const nx = nextWorkStep(S.stepIdx + 1);
-      if (nx) speak(exName(nx.exerciseId));
+  // The set a rest belongs to. The local engine anchors the rest timer on the
+  // set that just finished (d._lastDone); the views-log engine anchors it on
+  // the set the rest precedes — so fall back to the nearest done set before
+  // the cursor, which is the same row in both models.
+  function lastDoneRef(d, at) {
+    if (d && d._lastDone) {
+      const ref = Session.findSet(d._lastDone.entryId, d._lastDone.sid, d);
+      if (ref) {
+        return { entryId: d._lastDone.entryId, sid: d._lastDone.sid, stretch: entryIsStretch(ref.entry) };
+      }
     }
-    advance();
-  }
-
-  /* ---------- shared countdown tick ---------- */
-
-  function paintCountdown() {
-    if (!root || !S || !S.counting) return;
-    const clock = root.querySelector('[data-p="clock"]');
-    const of = root.querySelector('[data-p="of"]');
-    const arc = root.querySelector('.ring-arc');
-    const remainMs = S.paused ? S.remainMsAtPause : S.endsAt - Date.now();
-    const remain = Math.max(0, Math.ceil(remainMs / 1000));
-    if (clock) clock.textContent = fmtClock(remain);
-    if (of) of.textContent = S.totalSec > 0 ? 'of ' + fmtClock(S.totalSec) : '';
-    if (arc) {
-      const c = parseFloat(arc.getAttribute('stroke-dasharray')) || 0;
-      const frac = S.totalSec > 0 ? U.clamp(remainMs / (S.totalSec * 1000), 0, 1) : 0;
-      arc.setAttribute('stroke-dashoffset', String((c * (1 - frac)).toFixed(1)));
+    if (!at) return null;
+    for (let e = at.ei; e >= 0; e--) {
+      const en = d.entries[e];
+      if (!isRunnableEntry(en)) continue;
+      const sets = en.sets || [];
+      for (let i = (e === at.ei ? at.si - 1 : sets.length - 1); i >= 0; i--) {
+        if (sets[i] && sets[i].done) {
+          return { entryId: en.id, sid: sidOf(sets[i]), stretch: entryIsStretch(en) };
+        }
+      }
     }
+    return null;
   }
 
-  function tick() {
-    if (!S || !root) return;
-    if (S.compiled.kind === 'circuit') { tickCircuit(); return; }
-    if (!S.counting || S.paused) return;
-    const remainMs = S.endsAt - Date.now();
-    const step = curStep();
-    if (!step) return;
-    // 'last ten seconds' voice cue — holds long enough for it to mean anything
-    if (!S.saidTen && step.type === 'work' && step.shape === 'hold' &&
-        S.totalSec >= 20 && remainMs <= 10400 && remainMs > 8000) {
-      S.saidTen = true;
-      speak('last ten seconds');
-    }
-    if (remainMs <= 0) {
-      if (step.type === 'rest') { finishRest(false); return; }
-      if (step.shape === 'hold') { completeHold(step, S.totalSec); return; }
-    }
-    paintCountdown();
-    updateHeader();
-  }
+  /* ---------- boundary (expired while hidden) ---------- */
 
-  /* ---------- recording + advancing ---------- */
-
-  function recordWork(step, vals) {
-    const a = S.actuals[step.entryIdx] ||
-      (S.actuals[step.entryIdx] = { sets: [] });
-    const item = itemOf(step);
-    const stretch = item ? itemIsStretch(item) : false;
-    const set = {};
-    if (num(vals.holdSec) > 0) set.holdSec = Math.round(num(vals.holdSec));
-    if (num(vals.reps) > 0) set.reps = Math.round(num(vals.reps));
-    if (num(vals.distanceM) > 0) set.distanceM = Math.round(num(vals.distanceM));
-    if (num(vals.weightKg) > 0) set.weightKg = num(vals.weightKg);
-    else if (step.targetKg > 0 && step.shape === 'hold') set.weightKg = step.targetKg;
-    if (step.side) set.side = step.side;
-    if (stretch) set.intensity = S.stickyDepth[step.entryIdx] || 2;
-    a.sets.push(set);
-    S.lastDone = {
-      itemIdx: step.entryIdx,
-      setPos: a.sets.length - 1,
-      exerciseId: step.exerciseId,
-      stretch: stretch
-    };
-  }
-
-  function cueAfterWork(step) {
-    const nx = nextWorkStep(S.stepIdx + 1);
-    if (!nx) { speak('all done'); return; }
-    const immediate = steps()[S.stepIdx + 1] && steps()[S.stepIdx + 1].type === 'work';
-    const sameOtherSide = nx.entryIdx === step.entryIdx && nx.setIdx === step.setIdx &&
-      nx.side && step.side && nx.side !== step.side;
-    if (sameOtherSide) speak('switch sides');
-    else if (immediate) speak(exName(nx.exerciseId));
-    // otherwise the rest screen stages it and the rest-end cue names it
-  }
-
-  function advance() {
-    S.stepIdx++;
-    S.lastDone = S.lastDone || null;
-    writePending(S);
-    if (S.stepIdx >= steps().length) { showSummary(); return; }
-    renderStep();
-  }
-
-  /* ======================================================================
-     Circuit round player
-     ====================================================================== */
-
-  function renderCircuit() {
-    const c = S.compiled;
-    resetStageFoot();
+  function renderBoundary(d, st) {
     const stage = stageEl();
     const foot = footEl();
-    setSub(c.amrapSec ? 'AMRAP · ' + fmtClock(c.amrapSec) : 'Circuit · ' + c.rounds + ' rounds');
+    const b = Session.boundary();
+    const name = b && b.exerciseId ? exName(b.exerciseId) : 'That set';
+    setSub('While you were away');
+    stage.innerHTML =
+      '<div class="player-ex-name">' + U.esc(name) + '</div>' +
+      '<div class="player-big-target">' + U.esc(fmtClock(b ? b.sec : 0)) + '</div>' +
+      '<div class="player-aim">' + (b && b.phase === 'rest'
+        ? 'Your rest finished while the app was in the background.'
+        : 'This ' + U.esc(fmtClock(b ? b.sec : 0)) + ' timer finished while the app was in the background — nothing was recorded yet.') +
+      '</div>' +
+      '<div class="player-aim muted">Confirm it, or drop it and keep training.</div>';
+    foot.innerHTML =
+      '<button type="button" class="player-bigbtn" data-p="confirm">Confirm ' + U.esc(fmtClock(b ? b.sec : 0)) + '</button>' +
+      '<button type="button" class="player-bigbtn ghost" data-p="drop">Didn’t happen</button>';
+    U.on(foot, 'click', '[data-p="confirm"]', function () { Session.confirmBoundary(); });
+    U.on(foot, 'click', '[data-p="drop"]', function () { Session.discardBoundary(); });
+  }
+
+  /* ---------- nothing pending ---------- */
+
+  function renderNothingPending(d) {
+    const stage = stageEl();
+    const foot = footEl();
+    const p = Session.progress(d);
+    setSub(p.total ? 'All ' + p.total + ' sets done' : 'Nothing to run yet');
+    setRail(1, false);
+    stage.innerHTML =
+      '<div class="player-ex-name" style="font-size:24px">' + (p.total ? 'Nice work 💪' : 'Empty session') + '</div>' +
+      '<div class="player-aim muted">' + (p.total
+        ? 'Every set in this workout is logged. Finish it, or head back and add more.'
+        : 'Add exercises in the builder to get going.') + '</div>';
+    foot.innerHTML =
+      '<button type="button" class="player-bigbtn" data-p="finish">Finish workout</button>' +
+      '<button type="button" class="player-bigbtn ghost" data-p="builder2">Back to builder</button>';
+    U.on(foot, 'click', '[data-p="finish"]', function () { Player.finishSession(); });
+    U.on(foot, 'click', '[data-p="builder2"]', function () { Session.setView('builder'); });
+  }
+
+  // Finishing goes through the ONE finish flow (views-log's finish sheet) —
+  // the player has no private save path any more.
+  Player.finishSession = function () {
+    const VL = window.ViewsLog;
+    Player.closeFocus({ navigate: false });
+    if (window.App && App.navigate) App.navigate('log');
+    const finish = VL && (VL.openFinishSheet || VL.finish);
+    if (typeof finish === 'function') {
+      try { finish(); return true; } catch (e) { /* fall through */ }
+    }
+    toast('Tap Finish to save this workout');
+    return false;
+  };
+
+  /* ---------- circuit rounds ---------- */
+
+  function renderCircuit(d, en) {
+    const stage = stageEl();
+    const foot = footEl();
+    const stations = Array.isArray(en.stations) ? en.stations : [];
+    const rounds = Math.max(0, Math.round(num(en.rounds)));
+    const target = Math.max(0, Math.round(num(en._targetRounds)));
+    const amrap = Math.max(0, Math.round(num(en._amrapSec)));
+    const stationIdx = Math.max(0, Math.round(num(en._stationIdx)));
+    setSub(amrap ? 'AMRAP · ' + fmtClock(amrap) : 'Circuit · ' + (target || '∞') + ' rounds');
 
     function stationRow(st, i) {
       const nm = st.exerciseId ? exName(st.exerciseId) : (st.name || 'Station');
       const bits = [];
-      if (st.reps > 0) bits.push('× ' + st.reps);
-      if (st.durationSec > 0) bits.push(fmtClock(st.durationSec));
-      if (st.weightKg > 0) bits.push('@ ' + fmtWeight(st.weightKg));
-      const done = i < S.stationIdx;
-      const cur = i === S.stationIdx;
+      if (num(st.reps) > 0) bits.push('× ' + st.reps);
+      if (num(st.durationSec) > 0) bits.push(fmtClock(st.durationSec));
+      if (num(st.weightKg) > 0) bits.push('@ ' + fmtWeight(st.weightKg));
+      const done = i < stationIdx;
+      const cur = i === stationIdx;
       return '<button type="button" class="player-station' + (done ? ' done' : '') + (cur ? ' cur' : '') +
         '" data-st="' + i + '">' +
         (done ? '<span class="ck">' + (ic().check || '✓') + '</span>' : (cur ? '<span class="ck">→</span>' : '')) +
@@ -1388,421 +2999,65 @@
 
     stage.innerHTML =
       '<div class="player-phase-lbl">ROUND</div>' +
-      '<div class="player-round-num" data-p="round">' + (S.roundsDone + 1) + '</div>' +
+      '<div class="player-round-num" data-p="round">' + (rounds + 1) + '</div>' +
       '<div class="player-aim muted" data-p="circlock"></div>' +
-      '<div class="player-stations">' + c.stations.map(stationRow).join('') + '</div>';
-    foot.innerHTML = '<button type="button" class="player-bigbtn" data-p="rounddone">Round done ✓</button>';
+      '<div class="player-stations">' + stations.map(stationRow).join('') + '</div>';
+    foot.innerHTML =
+      '<button type="button" class="player-bigbtn" data-p="rounddone">Round done ✓</button>' +
+      '<button type="button" class="player-bigbtn ghost" data-p="finish">Finish workout</button>';
 
-    // Re-render-under-pointer guard: closeRound() synchronously re-renders an
-    // identical armed button at the same coordinates, so the second click of a
-    // physical double-tap would close ANOTHER round. Ignore round-advance taps
-    // for ~400ms after a round closes (covers both the Round-done button and
-    // the last-station tap path).
-    function roundCooling() {
-      return S.lastRoundCloseAt && Date.now() - S.lastRoundCloseAt < 400;
-    }
+    let coolAt = 0;
+    function cooling() { return coolAt && Date.now() - coolAt < 400; }
 
     U.on(stage, 'click', '[data-st]', function (e, b) {
-      if (roundCooling()) return;
+      if (cooling()) return;
       const i = parseInt(b.getAttribute('data-st'), 10) || 0;
-      // tap the current station to advance past it; tap another to jump there
-      if (i === S.stationIdx) S.stationIdx = Math.min(c.stations.length, S.stationIdx + 1);
-      else S.stationIdx = i;
-      if (S.stationIdx >= c.stations.length) { closeRound(); return; }
-      writePending(S);
-      renderCircuit();
+      const next = i === stationIdx ? stationIdx + 1 : i;
+      if (next >= stations.length) { coolAt = Date.now(); Session.closeRound(en.id); return; }
+      Session.setStation(en.id, next);
     });
     U.on(foot, 'click', '[data-p="rounddone"]', function () {
-      if (roundCooling()) return;
-      closeRound();
+      if (cooling()) return;
+      coolAt = Date.now();
+      Session.closeRound(en.id);
     });
-    tickCircuit();
+    U.on(foot, 'click', '[data-p="finish"]', function () { Player.finishSession(); });
+    paintClock();
   }
 
-  function closeRound() {
-    const c = S.compiled;
-    S.roundsDone++;
-    S.stationIdx = 0;
-    S.lastRoundCloseAt = Date.now(); // arms the double-tap cooldown
-    vibrate([180, 90, 180]);
-    beep('work');
-    writePending(S);
-    if (!c.amrapSec && S.roundsDone >= c.rounds) {
-      beep('finish');
-      showSummary();
-      return;
+  /* ---------- clock-only painting (never rebuilds DOM) ---------- */
+
+  function paintClock() {
+    if (!root) return;
+    const d = Session.draft();
+    if (!d) return;
+    const st = Session.state();
+    const clock = root.querySelector('[data-p="clock"]');
+    const of = root.querySelector('[data-p="of"]');
+    const arc = root.querySelector('.ring-arc');
+    if (clock) {
+      clock.textContent = st.driver === 'stopwatch' ? fmtClock(st.elapsedSec) : fmtClock(st.remainSec);
     }
-    speak('round ' + (S.roundsDone + 1));
-    renderCircuit();
-  }
-
-  function tickCircuit() {
-    if (!root || !S) return;
-    // Once the summary is up, the expiry side effects (vibrate/beep/'time'
-    // voice/showSummary) must never re-fire — without this guard an expired
-    // AMRAP re-triggered them every 250ms tick, forever.
-    if (S.finished) return;
-    const c = S.compiled;
-    const el = root.querySelector('[data-p="circlock"]');
-    const elapsedSec = Math.round((Date.now() - S.startedAt) / 1000);
-    if (c.amrapSec) {
-      const left = c.amrapSec - elapsedSec;
-      if (left <= 0) {
-        vibrate([120, 60, 120, 60, 240]);
-        beep('finish');
-        speak('time');
-        showSummary();
-        return;
+    if (of) of.textContent = st.targetSec > 0 ? 'of ' + fmtClock(st.targetSec) : '';
+    if (arc) {
+      const c = parseFloat(arc.getAttribute('stroke-dasharray')) || 0;
+      arc.setAttribute('stroke-dashoffset', String((c * (1 - st.frac)).toFixed(1)));
+    }
+    const circ = root.querySelector('[data-p="circlock"]');
+    if (circ) {
+      const en = Session.circuitEntry(d);
+      const elapsedSec = Math.round((Date.now() - (d.startedAt || Date.now())) / 1000);
+      const amrap = en ? Math.max(0, Math.round(num(en._amrapSec))) : 0;
+      if (amrap) {
+        const left = amrap - elapsedSec;
+        circ.textContent = fmtClock(Math.max(0, left)) + ' left · ' + fmtClock(elapsedSec) + ' in';
+        setRail(U.clamp(elapsedSec / amrap, 0, 1), true);
+      } else {
+        circ.textContent = fmtClock(elapsedSec) + ' in';
+        const target = en ? Math.max(0, Math.round(num(en._targetRounds))) : 0;
+        setRail(target ? U.clamp(Math.round(num(en.rounds)) / target, 0, 1) : 0, true);
       }
-      if (el) el.textContent = fmtClock(left) + ' left · ' + fmtClock(elapsedSec) + ' in';
-      setRail(elapsedSec / c.amrapSec, true);
-    } else {
-      if (el) el.textContent = fmtClock(elapsedSec) + ' in';
-      setRail(c.rounds > 0 ? S.roundsDone / c.rounds : 0, true);
     }
-  }
-
-  /* ======================================================================
-     Summary → save
-     ====================================================================== */
-
-  function completedItemIdxs() {
-    const out = [];
-    S.actuals.forEach(function (a, i) {
-      if (a && a.sets.length) out.push(i);
-    });
-    return out;
-  }
-
-  function showSummary() {
-    S.finished = true;
-    stopCountdown();
-    updateHeaderDone();
-    resetStageFoot();
-    const stage = stageEl();
-    const foot = footEl();
-    const items = Array.isArray(S.routine.items) ? S.routine.items : [];
-    const isCircuit = S.compiled.kind === 'circuit';
-    const durationMin = Math.max(1, Math.round((Date.now() - S.startedAt) / 60000));
-
-    let entriesHTML = '';
-    if (isCircuit) {
-      const c = S.compiled;
-      entriesHTML =
-        '<div class="card player-sum-entry">' +
-          '<div class="ti">Circuit</div>' +
-          '<div class="player-sum-row">' +
-            '<span class="lb">Rounds</span>' +
-            '<input class="input" type="number" min="0" step="1" inputmode="numeric" data-sum="rounds" value="' + S.roundsDone + '">' +
-          '</div>' +
-          '<div class="sub">' + c.stations.map(function (st) {
-            return U.esc(st.exerciseId ? exName(st.exerciseId) : (st.name || 'Station'));
-          }).join(' · ') + '</div>' +
-        '</div>';
-    } else {
-      completedItemIdxs().forEach(function (i) {
-        const item = items[i] || {};
-        const a = S.actuals[i];
-        const stretch = item.exerciseId ? itemIsStretch(item) : false;
-        let rows = '';
-        a.sets.forEach(function (s, si) {
-          let inputs = '';
-          if (num(s.holdSec) > 0) {
-            inputs += '<input class="input" data-sum="hold:' + i + ':' + si + '" value="' + fmtClock(s.holdSec) + '" inputmode="numeric" aria-label="Hold time">';
-          }
-          if (num(s.reps) > 0) {
-            inputs += '<input class="input" type="number" min="0" step="1" inputmode="numeric" data-sum="reps:' + i + ':' + si + '" value="' + s.reps + '" aria-label="Reps">';
-          }
-          if (num(s.distanceM) > 0) {
-            inputs += '<input class="input" type="number" min="0" step="5" inputmode="numeric" data-sum="m:' + i + ':' + si + '" value="' + s.distanceM + '" aria-label="Meters"><span class="un">m</span>';
-          }
-          if (num(s.weightKg) > 0 || itemShape(item) === 'weight_reps') {
-            inputs += '<input class="input" type="number" min="0" step="0.5" inputmode="decimal" data-sum="kg:' + i + ':' + si + '" value="' + kgToDisplay(s.weightKg || 0) + '" aria-label="Weight"><span class="un">' +
-              U.esc(window.App && App.units ? U.unitLabel(App.units()) : 'kg') + '</span>';
-          }
-          rows += '<div class="player-sum-row">' +
-            '<span class="lb">' + (si + 1) + (s.side ? ' · ' + s.side : '') + '</span>' + inputs + '</div>';
-          if (stretch) {
-            // per-set depth control — prefilled from the in-session taps;
-            // each button writes ONLY this set's intensity (never flattens
-            // the per-set actuals recorded during the rests)
-            const curDepth = U.clamp(Math.round(num(s.intensity)) || 2, 1, 4);
-            rows += '<div class="player-sum-row">' +
-              '<span class="lb">Depth</span>' +
-              '<div class="segmented block player-depth" data-sumdepth="' + i + ':' + si + '">' +
-                DEPTHS.map(function (d) {
-                  return '<button type="button" data-depth="' + d.n + '"' +
-                    (d.n === curDepth ? ' class="active"' : '') +
-                    ' aria-label="Depth ' + d.n + ' — ' + U.esc(d.label) + '">' + d.n + '</button>';
-                }).join('') +
-              '</div></div>';
-          }
-        });
-        entriesHTML +=
-          '<div class="card player-sum-entry">' +
-            '<div class="ti">' + U.esc(exName(item.exerciseId)) + '</div>' + rows +
-          '</div>';
-      });
-    }
-
-    const nothing = isCircuit ? S.roundsDone <= 0 : !completedItemIdxs().length;
-    setSub('Session done · ' + U.fmtDuration(durationMin));
-    setRail(1, false);
-
-    stage.innerHTML =
-      '<div class="player-ex-name" style="font-size:24px">' + (nothing ? 'Nothing recorded' : 'Nice work 💪') + '</div>' +
-      '<div class="player-aim muted">' + U.esc(U.fmtDuration(durationMin)) + ' on the clock</div>' +
-      (nothing
-        ? '<div class="player-aim">No completed sets to save.</div>'
-        : '<div class="field player-sum-name"><label for="pl-sum-name">Session name</label>' +
-          '<input class="input" id="pl-sum-name" autocomplete="off" value="' + U.esc(S.name) + '"></div>' +
-          '<div class="player-summary">' + entriesHTML + '</div>');
-    foot.innerHTML = nothing
-      ? '<button type="button" class="player-bigbtn ghost" data-p="close">Close</button>'
-      : '<button type="button" class="player-bigbtn" data-p="save">Save session</button>';
-
-    U.on(stage, 'click', '[data-sumdepth] [data-depth]', function (e, b) {
-      const wrap = b.closest('[data-sumdepth]');
-      const addr = wrap.getAttribute('data-sumdepth').split(':');
-      const i = parseInt(addr[0], 10);
-      const si = parseInt(addr[1], 10);
-      const n = U.clamp(parseInt(b.getAttribute('data-depth'), 10) || 2, 1, 4);
-      const a = S.actuals[i];
-      const set = a && a.sets[si];
-      if (set) set.intensity = n; // this set only — per-set actuals stay per-set
-      U.$$('[data-depth]', wrap).forEach(function (cbtn) { cbtn.classList.toggle('active', cbtn === b); });
-    });
-    U.on(stage, 'input', '[data-sum]', function (e, inp) { readSummaryInput(inp); });
-    U.on(foot, 'click', '[data-p="close"]', function () {
-      clearPending();
-      closePlayer();
-    });
-    U.on(foot, 'click', '[data-p="save"]', function () { saveSession(); });
-  }
-
-  function updateHeaderDone() {
-    setRail(1, false);
-  }
-
-  function readSummaryInput(inp) {
-    const parts = inp.getAttribute('data-sum').split(':');
-    if (parts[0] === 'rounds') {
-      const n = Math.max(0, Math.round(num(inp.value)));
-      S.roundsDone = n;
-      return;
-    }
-    const i = parseInt(parts[1], 10);
-    const si = parseInt(parts[2], 10);
-    const a = S.actuals[i];
-    const set = a && a.sets[si];
-    if (!set) return;
-    if (parts[0] === 'hold') {
-      const sec = parseSec(inp.value);
-      if (sec !== null) set.holdSec = Math.round(sec);
-    } else if (parts[0] === 'reps') {
-      set.reps = Math.max(0, Math.round(num(inp.value)));
-    } else if (parts[0] === 'm') {
-      set.distanceM = Math.max(0, Math.round(num(inp.value)));
-    } else if (parts[0] === 'kg') {
-      set.weightKg = Math.max(0, displayToKg(inp.value));
-    }
-  }
-
-  // Actuals -> P3-shaped workout entries. Lift items become plain lift entries
-  // (volume/PR credit); everything else becomes setwork. Sides only ever land
-  // on setwork sets — lift sets stay exactly {weightKg, reps, type, rpe}.
-  function buildEntries() {
-    const entries = [];
-    const items = Array.isArray(S.routine.items) ? S.routine.items : [];
-    if (S.compiled.kind === 'circuit') {
-      if (S.roundsDone > 0) {
-        const durationMin = Math.max(1, Math.round((Date.now() - S.startedAt) / 60000));
-        const en = {
-          id: U.uid('en'),
-          type: 'cardio',
-          mode: 'circuit',
-          durationMin: durationMin,
-          rounds: S.roundsDone,
-          stations: S.compiled.stations.map(function (st) {
-            const c = {};
-            for (const k in st) c[k] = st[k];
-            return c;
-          })
-        };
-        entries.push(en);
-      }
-      return entries;
-    }
-    completedItemIdxs().forEach(function (i) {
-      const item = items[i];
-      if (!item || !item.exerciseId) return;
-      const a = S.actuals[i];
-      if (itemIsLift(item)) {
-        const sets = [];
-        a.sets.forEach(function (s) {
-          if (!(num(s.reps) > 0)) return;
-          sets.push({
-            weightKg: num(s.weightKg) > 0 ? num(s.weightKg) : 0,
-            reps: Math.round(num(s.reps)),
-            type: 'work',
-            rpe: null
-          });
-        });
-        if (sets.length) {
-          entries.push({ id: U.uid('en'), exerciseId: item.exerciseId, notes: '', sets: sets });
-        }
-        return;
-      }
-      const stretch = itemIsStretch(item);
-      const sets = [];
-      a.sets.forEach(function (s) {
-        if (!(num(s.reps) > 0 || num(s.holdSec) > 0 || num(s.distanceM) > 0)) return;
-        const o = {};
-        if (num(s.reps) > 0) o.reps = Math.round(num(s.reps));
-        if (num(s.holdSec) > 0) o.holdSec = Math.round(num(s.holdSec));
-        if (num(s.distanceM) > 0) o.distanceM = Math.round(num(s.distanceM));
-        if (num(s.weightKg) > 0) o.weightKg = num(s.weightKg);
-        if (s.side === 'L' || s.side === 'R') o.side = s.side;
-        if (stretch) o.intensity = U.clamp(Math.round(num(s.intensity)) || 2, 1, 4);
-        sets.push(o);
-      });
-      if (!sets.length) return;
-      const en = { id: U.uid('en'), type: 'setwork', exerciseRef: item.exerciseId, sets: sets };
-      if (stretch) en.method = itemMethod(item, exOf(item.exerciseId));
-      entries.push(en);
-    });
-    return entries;
-  }
-
-  function guardrailsFor(draftW, u) {
-    if (!u || !perfMode(u)) return [];
-    const G = window.Guardrails;
-    if (!G || typeof G.checkSession !== 'function') return [];
-    try {
-      const pain = window.Store && typeof Store.painFor === 'function' ? (Store.painFor(u.id) || []) : [];
-      return G.checkSession(draftW, Store.workoutsFor(u.id), u, pain) || [];
-    } catch (e) { return []; }
-  }
-
-  function confirmStops(warns) {
-    const stops = warns.filter(function (g) { return g.level === 'stop'; });
-    if (!stops.length) return Promise.resolve(true);
-    if (!window.App || !App.confirm) return Promise.resolve(true);
-    return App.confirm({
-      title: 'Sure about this one?',
-      message: stops.map(function (g) { return g.message; }).join('\n\n'),
-      danger: true,
-      confirmLabel: 'Save anyway'
-    });
-  }
-
-  function saveSession() {
-    const entries = buildEntries();
-    if (!entries.length) {
-      toast('Nothing recorded yet', 'err');
-      return;
-    }
-    const nameEl = root && root.querySelector('#pl-sum-name');
-    const name = nameEl && nameEl.value.trim() ? nameEl.value.trim() : S.name;
-    const startedAt = S.startedAt;
-    const endedAt = Date.now();
-    const dateStr = U.dateToStr(new Date(startedAt));
-    const durationMin = Math.max(1, Math.round((endedAt - startedAt) / 60000));
-    const u = user();
-    const warns = guardrailsFor({ date: dateStr, entries: entries }, u);
-    confirmStops(warns).then(function (ok) {
-      if (!ok) return;
-      const w = Store.addWorkout({
-        userId: S.userId || (u && u.id),
-        date: dateStr,
-        name: name,
-        startedAt: startedAt,
-        endedAt: endedAt,
-        durationMin: durationMin,
-        entries: entries
-      });
-      clearPending();
-      closePlayer();
-      toast('Session saved', 'ok');
-      if (warns.length) toast('⚠️ ' + warns[0].message);
-      if (window.App && App.navigate) App.navigate('history');
-      fireCheckin(w);
-    });
-  }
-
-  // Post-save check-in — the SAME flow every direct-save session type uses.
-  // Preferred hook: views-log exports window.ViewsLog.openSessionCheckin.
-  // Fallback: a document event the shell can route (documented for wiring).
-  function fireCheckin(w) {
-    const VL = window.ViewsLog;
-    if (VL && typeof VL.openSessionCheckin === 'function') {
-      try { VL.openSessionCheckin(w); return; } catch (e) { /* fall through */ }
-    }
-    try {
-      document.dispatchEvent(new CustomEvent('ironlog:session-saved', { detail: { workoutId: w && w.id } }));
-    } catch (e) { /* ignore */ }
-  }
-
-  /* ======================================================================
-     Quit
-     ====================================================================== */
-
-  function quitSession() {
-    if (!S) return;
-    if (S.finished) {
-      // summary screen — quitting = abandoning the unsaved summary
-      if (window.App && App.confirm) {
-        App.confirm({
-          title: 'Leave without saving?',
-          message: 'This session hasn’t been saved yet.',
-          danger: true,
-          confirmLabel: 'Discard'
-        }).then(function (ok) {
-          if (!ok) return;
-          clearPending();
-          closePlayer();
-        });
-      } else { clearPending(); closePlayer(); }
-      return;
-    }
-    togglePause(true);
-    const done = S.compiled.kind === 'circuit' ? S.roundsDone : completedItemIdxs().length;
-    if (!done) {
-      App.confirm({
-        title: 'End session?',
-        message: 'Nothing has been completed yet — this discards the session.',
-        danger: true,
-        confirmLabel: 'End session'
-      }).then(function (ok) {
-        if (!ok) return;
-        clearPending();
-        closePlayer();
-      });
-      return;
-    }
-    // completed work exists: keep going / save what's done / discard
-    App.modal({
-      title: 'End session?',
-      content: '<p class="text-2" style="font-size:14px;line-height:1.55;margin:4px 0 8px">' +
-        'You can save what you’ve completed so far — only finished ' +
-        (S.compiled.kind === 'circuit' ? 'rounds' : 'sets') + ' are kept.</p>',
-      actions: [
-        { label: 'Keep going', kind: 'ghost' },
-        {
-          label: 'Discard',
-          kind: 'danger',
-          onClick: function () {
-            clearPending();
-            closePlayer();
-          }
-        },
-        {
-          label: 'Save & finish',
-          kind: 'primary',
-          onClick: function () { showSummary(); }
-        }
-      ]
-    });
   }
 
   /* ======================================================================
@@ -2235,6 +3490,74 @@
     renderResults();
     sheet = App.sheet({ title: opts.title || 'Add exercise', content: content });
   }
+
+  /* ======================================================================
+     PUBLIC API (P4.5) — stable + additive. Everything else is private.
+
+     Player.compile(routine, opts?)          pure timeline projection (P3.5)
+     Player.stepEstimateSec(step)            pure
+     Player.builtinRoutine(letter)           pure
+     Player.routineFromWorkout(workout)      pure
+     Player.projectDraft(draft, opts?)       LIVE projection over the draft:
+                                             {steps, workCount, doneCount,
+                                              estSec, remainSec}
+     Player.draftFromRoutine(routine, opts)  pure: routine -> draft record
+     Player.start(routine, opts?)            seed/extend the live session
+                                             (perf only). opts: {name,
+                                             routineRef, view:'focus'|'builder'}
+     Player.openFocus() / closeFocus(opts?)  present the draft full-screen
+     Player.finishSession()                  hands to ViewsLog.openFinishSheet()
+     Player.isActive()                       focus overlay is up
+     Player.openPlanner(userId?) / editRoutine(routine, opts?)
+     Player.discardLegacySession()           removes a stale P3.5 key
+     Player.resumePending() -> null          legacy shim (app.js boot)
+
+     Player.Session — the live substrate (see the section header above):
+       bind(host) / unbind()      host: {getDraft, saveDraft, setDraft?,
+                                  clearDraft?, rerender?}
+       draft() setDraft(d) clearDraft() save()
+       backfill(draft) -> bool    assign entry ids + set._sid (loadDraft hook)
+       sidOf(set) entryOf(id) findSet(entryId, sid) firstPending(entryId?)
+       next() progress() cursor() setCursor(entryId, sid)
+       subscribe(fn) -> unsubscribe   fn(state); state.reason 'change'|'tick'
+                                      ('tick' = clock only, NEVER repaint DOM
+                                       that holds focus/caret)
+       reconcile()                THE choke point — call at the end of
+                                  saveDraft(), after the localStorage write
+       resolvePace(entryOrId, action?, draft?) resolveCadence(entryOrId)
+       restSecFor(entryOrId) defaultPaceFor(kind) kindOfEntry(en) kindOfDraft()
+       PACES PACE_LABELS PACE_DEFAULTS isPace(v)
+       setSessionPace(p) setEntryPace(entryId, p) setCadence(bool)
+       setRestSec(sec) setPaceDefault(kind, p) setCadenceDefault(bool)
+       shapeOf(entryOrId) driverFor(entry, set) targetSecOf(entry, set)
+       tempoOf(entryOrId) tempoSecPerRep(str)
+       runSet(entryId, sid, opts?)   opts: {pace, targetSec}
+       runExercise(entryId, opts?) runSession(opts?) arm(...)
+       adjust(±sec) pause() resume() togglePause() isPaused() isRunning()
+       done(vals?)                 early finish -> records ACTUAL
+       completeSet(entryId, sid, vals?)   record + chain (focus 'Done')
+       noteSetDone(entryId, sid)   builder ✓ hook — continues an armed chain
+       skipRest() cancel(opts?) timer() state() elapsedSec()
+       boundary() confirmBoundary(opts?) discardBoundary()
+       setDepth(entryId, sid, 1..4)
+       updateSet(entryId, sid, patch) addSet(entryId) removeSet(entryId, sid)
+       removeEntry(entryId) moveEntry(entryId, ±1)
+       circuitEntry() closeRound(entryId?) setStation(entryId, idx)
+       view() setView('builder'|'focus')
+       tick(nowMs?) __setNow(fn)   test hooks
+
+     views-log wiring (required for the two presentations to share one state):
+       1. loadDraft():  Player.Session.backfill(d)
+       2. saveDraft():  ... localStorage.setItem(...); Player.Session.reconcile();
+       3. once:         Player.Session.bind({getDraft, saveDraft, setDraft,
+                                             clearDraft, rerender})
+       4. export:       window.ViewsLog.openFinishSheet (or .finish) — the
+                        focus view's Finish hands off to the ONE finish flow
+                        window.ViewsLog.startRestPill(sec) (advisory rest)
+       5. the ✓ handler calls Player.Session.noteSetDone(entryId, sid)
+       6. cleanSetworkEntry: prefer a set's OWN `intensity` over the entry aim
+          so per-set depth captured live survives the save.
+     ====================================================================== */
 
   window.Player = Player;
 })();
