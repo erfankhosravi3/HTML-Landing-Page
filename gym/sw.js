@@ -7,7 +7,7 @@
    changes styles.css, store.js and app.js. New shell entries are exactly the
    case where a stale CACHE_NAME is fatal: the old cache has no record of the
    new files, so an installed PWA would keep serving a coachless app forever. */
-const CACHE_NAME = 'ironlog-v2p8';
+const CACHE_NAME = 'ironlog-v2p9';
 
 const SHELL = [
   './',
