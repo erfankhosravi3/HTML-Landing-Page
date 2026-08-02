@@ -511,8 +511,17 @@
   // field names. NOTE: exerciseRef, never exerciseId, and sets never carry a
   // `type` key — those are the forbidden names that keep old-client analytics
   // from mis-reading structured work.
+  /* STRICT SCHEMA RULES — the API rejects the request outright if broken.
+     Every object needs additionalProperties: false, and numeric/string
+     constraints (minimum, maxLength, ...) are not supported. Getting this
+     wrong is not a degraded reply, it is a 400 on every single message:
+     "output_config.format.schema: For 'object' type, 'additionalProperties'
+     must be explicitly set to false" — which is exactly what shipped, because
+     the tests stubbed fetch and a keyless probe 401s before the schema is
+     ever looked at. tests/coach-schema.js now checks these rules directly. */
   Coach.PROPOSAL_SCHEMA = {
     type: 'object',
+    additionalProperties: false,
     properties: {
       reply: {
         type: 'string',
@@ -524,6 +533,7 @@
       },
       proposal: {
         type: 'object',
+        additionalProperties: false,
         description: 'A proposed session. Omit entirely unless you are actually proposing one.',
         properties: {
           name: { type: 'string' },
@@ -538,6 +548,7 @@
             type: 'array',
             items: {
               type: 'object',
+              additionalProperties: false,
               properties: {
                 exerciseRef: { type: 'string', description: 'An exercise id from the athlete\'s library.' },
                 name: { type: 'string', description: 'Human name, in case the id is not recognised.' },
