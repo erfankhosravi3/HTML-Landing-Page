@@ -78,7 +78,9 @@
     // warning triangle
     alert: svg('<path d="M12 4.2 21.2 20H2.8L12 4.2Z"/><path d="M12 10.4v4.2M12 17.2v.2"/>'),
     // notebook
-    journal: svg('<rect x="4.8" y="3.6" width="14.4" height="16.8" rx="2.4"/><path d="M8.8 3.6v16.8M12.4 8.4h3.6M12.4 12h3.6"/>')
+    journal: svg('<rect x="4.8" y="3.6" width="14.4" height="16.8" rx="2.4"/><path d="M8.8 3.6v16.8M12.4 8.4h3.6M12.4 12h3.6"/>'),
+    // painter's palette — the Appearance card (P5 theme picker)
+    palette: svg('<path d="M12 3.4c-4.9 0-8.6 3.6-8.6 8.4 0 4.8 3.7 8.8 8.6 8.8 1.4 0 2.3-.9 2.3-2 0-.6-.2-1-.6-1.4-.3-.4-.5-.8-.5-1.3 0-1.1.9-2 2-2h1.6c2.1 0 3.8-1.7 3.8-3.8 0-3.7-3.7-6.7-8.6-6.7Z"/><path d="M7.6 10.6v.2M11 8v.2M15 9.2v.2"/>')
   };
   // aliases used across modules
   icons.pencil = icons.edit;
@@ -195,9 +197,55 @@
     }
   }
 
+  /* ======================================================================
+     Theme — the active palette as data-theme on <html>
+
+     A theme is COLOUR ONLY: markup, gating, geometry and layout are identical
+     in every one of them, so switching is a single attribute write. Nothing
+     here holds a colour. Everything that paints — charts.js, musclemap.js,
+     views-insights.js, the state tints in player.js and this file, the
+     identity swatches in store.js — resolves its tokens from the document at
+     render time, so the attribute IS the switch: no reload, no re-init, and
+     no stale hex anywhere to go looking for.
+
+     Applied at boot and again on every store change, which is what makes a
+     profile switch live: setCurrentUser publishes, this runs undebounced
+     (ahead of the 60ms rerender), and the repaint that follows already reads
+     the new palette. The slug written is the COERCED one — the attribute is
+     a rendering instruction, so it never carries a slug this build cannot
+     render, while store.js keeps the user's raw choice untouched on the
+     record for the phone that does know it.
+     ====================================================================== */
+
+  function syncThemeColorMeta() {
+    // The PWA status bar is chrome the CSS cannot reach; keep it on --bg.
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (!meta || typeof getComputedStyle !== 'function') return;
+    let v = '';
+    try { v = String(getComputedStyle(document.documentElement).getPropertyValue('--bg') || '').trim(); }
+    catch (e) { v = ''; }
+    if (v) meta.setAttribute('content', v);
+  }
+
+  function applyTheme() {
+    const root = document.documentElement;
+    if (!root) return false;
+    const slug = Store.themeSlug(Store.currentUser());
+    if (root.getAttribute('data-theme') === slug) return false;
+    root.setAttribute('data-theme', slug);
+    // Per-pass token caches key off the theme marker and drop themselves, but
+    // say so explicitly rather than relying on it.
+    if (typeof Store.flushPalette === 'function') Store.flushPalette();
+    syncThemeColorMeta();
+    return true;
+  }
+
+  App.applyTheme = applyTheme;
+
   function render() {
     const content = U.$('#content');
     if (!content) return;
+    applyTheme();
 
     if (!Store.state.users.length) {
       App.current = { view: 'onboarding', params: {} };
@@ -1079,10 +1127,13 @@
       });
     }
 
-    /* ---- 2. Training (v2 mode gate + goals/profile editor) ---- */
+    /* ---- 2. Appearance (theme) — every user, both modes ---- */
+    if (cur) el.appendChild(buildAppearanceCard(cur));
+
+    /* ---- 3. Training (v2 mode gate + goals/profile editor) ---- */
     if (cur) el.appendChild(buildTrainingCard(cur));
 
-    /* ---- 3. Apple Health ---- */
+    /* ---- 4. Apple Health ---- */
     const ahCard = U.el('<div class="card">' +
       cardTitle(icons.apple, 'Apple Health') +
       '<p class="text-2 small-text" style="margin:6px 0 12px">Import weight, daily activity and workouts from your ' +
@@ -1109,7 +1160,7 @@
     el.appendChild(ahCard);
     wireAppleHealth(ahCard);
 
-    /* ---- 4. Family Sync ---- */
+    /* ---- 5. Family Sync ---- */
     const syncState = Store.state.sync || {};
     const st = window.Sync && Sync.status ? Sync.status() : { enabled: false, lastSyncAt: null, lastError: null };
     const syncCard = U.el('<div class="card">' +
@@ -1147,7 +1198,7 @@
     el.appendChild(syncCard);
     wireSync(syncCard);
 
-    /* ---- 5. Data ---- */
+    /* ---- 6. Data ---- */
     const noWorkouts = Store.state.workouts.length === 0;
     const dataCard = U.el('<div class="card">' +
       cardTitle(icons.download, 'Data') +
@@ -1163,7 +1214,7 @@
     el.appendChild(dataCard);
     wireData(dataCard);
 
-    /* ---- 6. Danger zone ---- */
+    /* ---- 7. Danger zone ---- */
     // ONE red, from the token: the rule and the title are both --red (see
     // .card.danger in css/styles.css) instead of two different retired reds.
     const dangerCard = U.el('<div class="card danger">' +
@@ -1173,6 +1224,83 @@
       '</div>');
     el.appendChild(dangerCard);
     U.$('#dz-erase', dangerCard).addEventListener('click', eraseAllData);
+  }
+
+  /* ---------- Appearance card (Settings) ----------
+     The theme picker. Available to EVERY user, simple mode included — a
+     palette is a personal preference, not a performance feature, and it
+     changes nothing but colour.
+
+     No colour is named or held here. Each row's swatch strip carries
+     data-theme-preview="<slug>", which scopes that palette's token block to
+     the strip (css/styles.css §1a/§1c), so the dots spend var(--accent) /
+     var(--blue) / var(--s1) like everything else in the app and show the real
+     palette rather than a copy of it that could drift.
+
+     Structure is identical for every row and every state — the check mark is
+     always in the DOM and only its visibility moves — so the Settings outline
+     does not change with the choice. */
+
+  const THEME_SWATCH_TOKENS = ['--accent', '--blue', '--orange', '--red', '--s1', '--s6'];
+
+  function themeSwatchRow(slug) {
+    return '<span data-theme-preview="' + U.esc(slug) + '" aria-hidden="true" ' +
+      'style="display:inline-flex;gap:5px;padding:6px 8px;border-radius:999px;flex:none;' +
+      'background:var(--card);border:1px solid var(--border)">' +
+      THEME_SWATCH_TOKENS.map(function (t) {
+        return '<span style="width:12px;height:12px;border-radius:50%;background:var(' + t + ')"></span>';
+      }).join('') +
+      '</span>';
+  }
+
+  function buildAppearanceCard(cur) {
+    const stored = Store.storedTheme(cur);
+    const unknown = !!stored && !Store.isKnownTheme(stored);
+    // A slug this build does not know selects nothing rather than silently
+    // showing the default as if it were the choice — and it is NOT rewritten
+    // on the record, so the phone that does know it still has it.
+    const sel = unknown ? '' : Store.themeSlug(cur);
+
+    const rows = Store.themes().map(function (t) {
+      const on = t.slug === sel;
+      return '<button type="button" role="radio" aria-checked="' + (on ? 'true' : 'false') + '" ' +
+        'data-theme-slug="' + U.esc(t.slug) + '" ' +
+        'style="display:flex;align-items:center;gap:12px;width:100%;text-align:left;' +
+        'padding:10px 12px;min-height:56px;border-radius:var(--radius);' +
+        'border:1px solid ' + (on ? 'var(--accent)' : 'var(--border)') + ';' +
+        'background:' + (on ? 'var(--accent-tint)' : 'var(--card-2)') + '">' +
+        themeSwatchRow(t.slug) +
+        '<span style="flex:1;min-width:0">' +
+          '<span style="display:block;font-weight:600;font-size:14px">' + U.esc(t.label) + '</span>' +
+          '<span class="small-text muted" style="display:block">' + U.esc(t.note) + '</span>' +
+        '</span>' +
+        '<span aria-hidden="true" style="display:inline-flex;flex:none;color:var(--accent);' +
+          'visibility:' + (on ? 'visible' : 'hidden') + '">' + icons.check + '</span>' +
+        '</button>';
+    }).join('');
+
+    const card = U.el('<div class="card">' +
+      cardTitle(icons.palette, 'Appearance') +
+      '<p class="text-2 small-text" style="margin:6px 0 12px">Every profile picks its own palette. ' +
+        'Only the colours change — the layout, the numbers and what the app does stay exactly the same.</p>' +
+      (unknown ? '<p class="small-text muted" style="margin:0 0 12px">This profile is set to ' +
+        '“' + U.esc(stored) + '”, which this version doesn’t have. It is showing the default and your ' +
+        'choice is kept — pick one below to change it here.</p>' : '') +
+      '<div id="st-theme" role="radiogroup" aria-label="Colour theme" ' +
+        'style="display:grid;gap:8px">' + rows + '</div>' +
+      '</div>');
+
+    U.on(card, 'click', '[data-theme-slug]', function (e, b) {
+      const slug = b.getAttribute('data-theme-slug');
+      if (!Store.isKnownTheme(slug) || !Store.setTheme(cur.id, slug)) return;
+      // Live, ahead of the debounced rerender: the palette must land on the
+      // tap, not 60ms after it.
+      applyTheme();
+      const t = Store.themes().filter(function (x) { return x.slug === slug; })[0];
+      App.toast('Theme set to ' + (t ? t.label : slug), 'ok');
+    });
+
+    return card;
   }
 
   /* ---------- Training card (Settings) ---------- */
@@ -1659,9 +1787,16 @@
 
   App.init = function () {
     Store.load();
+    // Before anything paints, so the first frame is already in the profile's
+    // own palette rather than flashing the default and correcting itself.
+    applyTheme();
     discardLegacyGuidedSession();
     buildChrome();
     window.addEventListener('hashchange', onHashChange);
+    // Undebounced and ahead of the rerender: a profile switch must change the
+    // palette on the same tick it changes the profile, even when the debounced
+    // rerender is skipped (mid set-entry on the log view).
+    Store.subscribe(applyTheme);
     Store.subscribe(scheduleRerender);
     if (window.Sync && Sync.onStatus) Sync.onStatus(refreshSyncDot);
     // another tab may start/finish a workout draft (guided or not — one record)

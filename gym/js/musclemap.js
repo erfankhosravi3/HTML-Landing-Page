@@ -19,6 +19,13 @@
  *              alba, spine, scapular borders, iliac crest, patella, achilles —
  *              plus a dashed centre axis and drawing-frame corner ticks.
  *
+ * COLOUR
+ * None of it lives here. The heat ramp, the body plate, the separation seam,
+ * the hairline ink and the selection stroke are all read off the CSS custom
+ * properties at render time (--heat-0..5, --plate, --seam, --border, --text),
+ * so a per-profile theme moves the map without touching this file. Geometry is
+ * universal, colour is theme — see "PALETTE" below and the P5 addendum.
+ *
  * PROPORTION
  * Canonical 7.5-head figure. Authored in a 134-wide box on centre line x = 67,
  * then cropped to the 108 units that actually contain ink (CROP..CROP+PANE_W).
@@ -45,37 +52,138 @@
     return (db && db.MUSCLE_LABEL && db.MUSCLE_LABEL[id]) || LABELS[id] || id;
   }
 
-  /* ---------- palette (tied to the Field/Issued tokens) ---------- */
-  const BODY = '#171a0e';         /* the unworked body plate               */
-  const SEAM = '#0e1108';         /* separation stroke between two muscles */
-  const BONE = '233,222,190';     /* hairline / caption ink, rgb triplet   */
-  const REST_TINT = 'rgba(233,222,190,.05)';
+  /* ======================================================================
+     PALETTE — RESOLVED, NEVER FROZEN
 
-  /* Heat ramp: ash -> ember -> bronze -> brass -> amber -> blaze.
-   * One hue family with strictly increasing L*, so it survives protanopia,
-   * deuteranopia and tritanopia as a pure lightness ramp — verified in
-   * color-check.js. Stop 0 is the resting tint already composited over BODY,
-   * so "value 0" and "no data" render identically and the ramp is continuous. */
-  const STOPS = [
-    [0.00, [34, 37, 23]],    /* rgba(bone,.05) over #171a0e */
-    [0.20, [74, 60, 24]],    /* #4a3c18  ember  */
-    [0.40, [125, 86, 21]],   /* #7d5615  bronze */
-    [0.60, [173, 111, 20]],  /* #ad6f14  brass  */
-    [0.80, [220, 143, 34]],  /* #dc8f22  amber  */
-    [1.00, [255, 176, 74]]   /* #ffb04a  blaze  */
-  ];
+     P5 rule (ARCHITECTURE.md, "COLOUR MUST NOT BE FROZEN IN JAVASCRIPT"): a
+     colour captured into a JS constant cannot follow a theme, and this module
+     used to capture eight of them. Every colour below is now read off the CSS
+     custom properties on :root at RENDER TIME — never at module load, because
+     the theme changes while the app is open — and cached only for the duration
+     of one render pass (keyed on the theme marker, dropped when render()
+     starts). The literals are FALLBACKS ONLY: they are the Field/Issued
+     defaults, so a document with no stylesheet in reach (the node suites) and
+     a base :root that has not yet grown --plate/--seam still paint a correct,
+     complete map rather than nothing.
 
-  MuscleMap.RAMP = STOPS.map(function (s) {
-    return 'rgb(' + s[1][0] + ',' + s[1][1] + ',' + s[1][2] + ')';
+     Heat ramp — six stops at fixed positions, one hue family per theme with
+     strictly increasing L*, so the scalar survives protanopia, deuteranopia
+     and tritanopia on lightness alone. Stop 0 is the resting tint already
+     composited over the plate, so "value 0" and "no data" render identically
+     and the ramp stays continuous. The positions are geometry (universal); the
+     colours are theme. --heat-0..5 are the SAME tokens the CSS legend gradient
+     spends (§12 .muscle-legend .ramp), which is what keeps the legend honest:
+     both sides read one source, so neither can drift from the other.
+     ====================================================================== */
+
+  const HEAT_TOKENS = ['--heat-0', '--heat-1', '--heat-2', '--heat-3', '--heat-4', '--heat-5'];
+  const LEVELS = [0.00, 0.20, 0.40, 0.60, 0.80, 1.00];
+
+  const FALLBACK = {
+    '--heat-0': '#222517',   /* ash — rgba(bone,.05) composited over the plate */
+    '--heat-1': '#4a3c18',   /* ember  */
+    '--heat-2': '#7d5615',   /* bronze */
+    '--heat-3': '#ad6f14',   /* brass  */
+    '--heat-4': '#dc8f22',   /* amber  */
+    '--heat-5': '#ffb04a',   /* blaze  */
+    '--plate': '#171a0e',    /* the unworked body plate                     */
+    '--seam': '#0e1108',     /* separation stroke between two muscles       */
+    '--border': 'rgba(233,222,190,.15)',  /* hairline/caption ink source    */
+    '--text': '#f2efe3'      /* selection stroke                            */
+  };
+
+  /* Accepts #rgb / #rrggbb / rgb() / rgba() — a theme authors these, so this
+     must not assume hex. Unparseable input falls back to the shipped literal. */
+  function rgbOf(color, fallback) {
+    const s = String(color || '').trim();
+    if (s.charAt(0) === '#') {
+      const h = s.slice(1);
+      const f = h.length === 3
+        ? h.split('').map(function (c) { return c + c; }).join('')
+        : h;
+      if (/^[0-9a-f]{6}$/i.test(f)) {
+        return [parseInt(f.slice(0, 2), 16), parseInt(f.slice(2, 4), 16), parseInt(f.slice(4, 6), 16)];
+      }
+    }
+    const m = s.match(/^rgba?\(([^)]+)\)$/i);
+    if (m) {
+      const parts = m[1].split(/[,\s/]+/).filter(function (p) { return p.length; });
+      if (parts.length >= 3) {
+        const v = parts.slice(0, 3).map(function (p) {
+          return Math.round(p.indexOf('%') !== -1 ? parseFloat(p) * 2.55 : parseFloat(p));
+        });
+        if (v.every(function (n) { return isFinite(n); })) return v;
+      }
+    }
+    return fallback ? rgbOf(fallback, null) : [0, 0, 0];
+  }
+
+  function readVar(name) {
+    let v = '';
+    try {
+      if (typeof getComputedStyle === 'function' &&
+          typeof document !== 'undefined' && document.documentElement) {
+        v = getComputedStyle(document.documentElement).getPropertyValue(name);
+      }
+    } catch (e) { v = ''; }
+    v = String(v || '').trim();
+    return v || FALLBACK[name] || '';
+  }
+
+  let palCache = null;
+  let palCacheKey = null;
+
+  function themeSignature() {
+    if (typeof document === 'undefined' || !document.documentElement) return '';
+    return (document.documentElement.getAttribute('data-theme') || '') + '|' +
+      (document.documentElement.className || '');
+  }
+
+  /* Drop the cache: called at the top of every render pass, and available to
+     any theme switcher that changes the palette without touching data-theme. */
+  MuscleMap.flushPalette = function () { palCache = null; palCacheKey = null; };
+
+  function palette() {
+    const sig = themeSignature();
+    if (palCache && palCacheKey === sig) return palCache;
+    const stops = HEAT_TOKENS.map(function (t, i) {
+      return [LEVELS[i], rgbOf(readVar(t), FALLBACK[t])];
+    });
+    const bone = rgbOf(readVar('--border'), FALLBACK['--border']).join(',');
+    palCache = {
+      stops: stops,
+      plate: readVar('--plate'),
+      seam: readVar('--seam'),
+      bone: bone,
+      rest: 'rgba(' + bone + ',.05)',
+      sel: readVar('--text')
+    };
+    palCacheKey = sig;
+    return palCache;
+  }
+
+  /* The six ramp colours, live. Read by anything that draws a legend swatch,
+     so it must resolve on access — a snapshot taken at module load would let
+     the legend claim one ramp while the map paints another. */
+  Object.defineProperty(MuscleMap, 'RAMP', {
+    enumerable: true,
+    configurable: true,
+    get: function () {
+      return palette().stops.map(function (s) {
+        return 'rgb(' + s[1][0] + ',' + s[1][1] + ',' + s[1][2] + ')';
+      });
+    }
   });
 
   MuscleMap.heatColor = function (v) {
-    if (v === null || v === undefined || isNaN(v) || v <= 0) return REST_TINT;
+    const p = palette();
+    const stops = p.stops;
+    if (v === null || v === undefined || isNaN(v) || v <= 0) return p.rest;
     v = Math.min(1, Math.max(0, v));
-    for (let i = 1; i < STOPS.length; i++) {
-      if (v <= STOPS[i][0]) {
-        const v0 = STOPS[i - 1][0], c0 = STOPS[i - 1][1];
-        const v1 = STOPS[i][0], c1 = STOPS[i][1];
+    for (let i = 1; i < stops.length; i++) {
+      if (v <= stops[i][0]) {
+        const v0 = stops[i - 1][0], c0 = stops[i - 1][1];
+        const v1 = stops[i][0], c1 = stops[i][1];
         const t = (v - v0) / (v1 - v0);
         return 'rgb(' +
           Math.round(c0[0] + (c1[0] - c0[0]) * t) + ',' +
@@ -83,7 +191,8 @@
           Math.round(c0[2] + (c1[2] - c0[2]) * t) + ')';
       }
     }
-    return 'rgb(255,176,74)';
+    const top = stops[stops.length - 1][1];
+    return 'rgb(' + top[0] + ',' + top[1] + ',' + top[2] + ')';
   };
 
   /* ======================================================================
@@ -394,49 +503,64 @@
       '</svg>';
   };
 
-  /* ---------- styles ---------- */
-  const CSS = [
-    '.mm-root{width:100%;max-width:420px;margin:0 auto}',
-    '.mm-root svg{display:block;width:100%;height:auto}',
-    /* body plate */
-    '.mm-root .mm-base path{fill:' + BODY + ';stroke:rgba(' + BONE + ',.24);',
-    'stroke-width:.8;stroke-linejoin:round}',
-    /* muscle regions — the dark seam is what keeps neighbours readable */
-    '.mm-root .mm-muscles path{stroke:' + SEAM + ';stroke-width:.6;stroke-linejoin:round}',
-    /* landmark hairlines */
-    '.mm-root .mm-plate path{fill:none;stroke:rgba(' + BONE + ',.32);stroke-width:.5;',
-    'stroke-linecap:round;pointer-events:none}',
-    '.mm-root .mm-axis{fill:none;stroke:rgba(' + BONE + ',.10);stroke-width:.5;',
-    'stroke-dasharray:2.5 4.5;pointer-events:none}',
-    '.mm-root .mm-tick path{fill:none;stroke:rgba(' + BONE + ',.22);stroke-width:.9;',
-    'pointer-events:none}',
-    '.mm-root .mm-cap{fill:rgba(' + BONE + ',.55);font-size:8.5px;font-weight:700;',
-    'letter-spacing:.24em;font-family:inherit}',
-    /* interaction */
-    '.mm-root .mm-m{cursor:pointer;transition:filter .15s ease}',
-    '.mm-root .mm-m:hover{filter:brightness(1.45)}',
-    '.mm-root .mm-m:focus{outline:none}',
-    '.mm-root .mm-m:focus-visible{filter:brightness(1.45)}',
-    '.mm-root .mm-m:focus-visible path,.mm-root .mm-m.is-sel path{',
-    'stroke:#f2efe3;stroke-width:1.2}',
-    '@media (prefers-reduced-motion: reduce){.mm-root .mm-m{transition:none}}'
-  ].join('');
+  /* ---------- styles ----------
+     Geometry (every width, dash and radius) is universal; only the four
+     colours are spent from the resolved palette, and the sheet is rewritten
+     when the theme moves so the plate and the seam can never lag the fills. */
+  function cssFor(p) {
+    return [
+      '.mm-root{width:100%;max-width:420px;margin:0 auto}',
+      '.mm-root svg{display:block;width:100%;height:auto}',
+      /* body plate */
+      '.mm-root .mm-base path{fill:' + p.plate + ';stroke:rgba(' + p.bone + ',.24);',
+      'stroke-width:.8;stroke-linejoin:round}',
+      /* muscle regions — the dark seam is what keeps neighbours readable */
+      '.mm-root .mm-muscles path{stroke:' + p.seam + ';stroke-width:.6;stroke-linejoin:round}',
+      /* landmark hairlines */
+      '.mm-root .mm-plate path{fill:none;stroke:rgba(' + p.bone + ',.32);stroke-width:.5;',
+      'stroke-linecap:round;pointer-events:none}',
+      '.mm-root .mm-axis{fill:none;stroke:rgba(' + p.bone + ',.10);stroke-width:.5;',
+      'stroke-dasharray:2.5 4.5;pointer-events:none}',
+      '.mm-root .mm-tick path{fill:none;stroke:rgba(' + p.bone + ',.22);stroke-width:.9;',
+      'pointer-events:none}',
+      '.mm-root .mm-cap{fill:rgba(' + p.bone + ',.55);font-size:8.5px;font-weight:700;',
+      'letter-spacing:.24em;font-family:inherit}',
+      /* interaction */
+      '.mm-root .mm-m{cursor:pointer;transition:filter .15s ease}',
+      '.mm-root .mm-m:hover{filter:brightness(1.45)}',
+      '.mm-root .mm-m:focus{outline:none}',
+      '.mm-root .mm-m:focus-visible{filter:brightness(1.45)}',
+      '.mm-root .mm-m:focus-visible path,.mm-root .mm-m.is-sel path{',
+      'stroke:' + p.sel + ';stroke-width:1.2}',
+      '@media (prefers-reduced-motion: reduce){.mm-root .mm-m{transition:none}}'
+    ].join('');
+  }
 
-  MuscleMap.CSS = CSS;
+  /* Back-compat: a live getter, so a caller that reads MuscleMap.CSS after a
+     theme switch gets that theme's sheet instead of the one at module load. */
+  Object.defineProperty(MuscleMap, 'CSS', {
+    enumerable: true,
+    configurable: true,
+    get: function () { return cssFor(palette()); }
+  });
 
-  function ensureStyle() {
-    if (document.getElementById('mm-style')) return;
-    const st = document.createElement('style');
-    st.id = 'mm-style';
-    st.textContent = CSS;
-    document.head.appendChild(st);
+  function ensureStyle(p) {
+    const css = cssFor(p);
+    let st = document.getElementById('mm-style');
+    if (!st) {
+      st = document.createElement('style');
+      st.id = 'mm-style';
+      document.head.appendChild(st);
+    }
+    if (st.textContent !== css) st.textContent = css;
   }
 
   /* MuscleMap.render(el, {values:{muscleId:0..1}, onSelect?, selected?}) */
   MuscleMap.render = function (el, opts) {
     opts = opts || {};
     const onSelect = opts.onSelect;
-    ensureStyle();
+    MuscleMap.flushPalette();          /* start of a render pass — re-read the theme */
+    ensureStyle(palette());
     el.innerHTML = '';
 
     const wrap = U.el('<div class="mm-root">' +

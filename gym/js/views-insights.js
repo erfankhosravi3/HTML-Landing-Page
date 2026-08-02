@@ -2846,16 +2846,26 @@
       html += '<div class="list">' + rows.map(function (r, i) {
         const isViewer = viewer && r.user.id === viewer.id;
         const rank = i === 0
-          ? '<span class="leading" style="background:rgba(255,214,10,.14);color:var(--yellow);">' +
+          /* The trophy plate and its ink are one token (--yellow = a record),
+             mixed in CSS so both move together under a per-profile theme. The
+             retired literal here was the pre-P5 system yellow and could not. */
+          ? '<span class="leading" style="background:color-mix(in srgb, var(--yellow) 14%, transparent);color:var(--yellow);">' +
             sizedIcon(App.icons.trophy, 20) + '</span>'
           : '<span class="leading" style="font-size:14px;font-weight:700;color:var(--text-muted);">' + (i + 1) + '</span>';
         /* P4: flex-wrap lets the activity-badge row below sit on its own line.
            Every existing child keeps its hypothetical main size (.body is
            flex:1 ⇒ base 0, the others are flex:none), so line 1 is laid out
            exactly as before — proven by p4a4-lb-badges / the geometry probe. */
-        return '<div class="list-row" style="flex-wrap:wrap;' + (isViewer ? 'background:rgba(48,209,88,.07);' : '') + '">' +
+        /* "This is you" is IDENTITY, not GO — the accent is reserved (see the
+           badge rule in css §8), so the row wears the viewer's own identity
+           colour, thinned in CSS. Identity resolves from --s1..--s6 through
+           Store.userColorVar, so the wash and the avatar ring beside it are
+           the same live token and both follow a per-profile theme. The retired
+           literal was the pre-P5 system green: frozen, and on the GO hue. */
+        const youWash = 'background:color-mix(in srgb, ' + U.esc(Store.userColorVar(r.user)) + ' 7%, transparent);';
+        return '<div class="list-row" style="flex-wrap:wrap;' + (isViewer ? youWash : '') + '">' +
           rank +
-          '<span class="avatar sm" style="--c:' + U.esc(r.user.color || '#2ca350') + ';">' + U.esc(r.user.emoji || '🏋️') + '</span>' +
+          '<span class="avatar sm" style="--c:' + U.esc(Store.userColorVar(r.user)) + ';">' + U.esc(r.user.emoji || '🏋️') + '</span>' +
           '<div class="body"><span class="title">' + U.esc(r.user.name) +
           (isViewer ? ' <span class="badge green">You</span>' : '') + '</span>' +
           '<span class="sub">' + r.workouts + (r.workouts === 1 ? ' workout' : ' workouts') +
@@ -2912,8 +2922,15 @@
     const byVol = perUser.slice().sort(function (a, b) { return b.vol12 - a.vol12; });
     const shown = byVol.slice(0, 3);
     const usedColors = [];
+    /* Each line wears its member's IDENTITY colour, so the line, the avatar
+       ring and the leaderboard row agree. Resolve it — Store.userColorHex reads
+       the slot off the stylesheet at call time. Matching the STORED hex against
+       Charts.SERIES (what this did before) is a frozen comparison: under any
+       theme but the default the stored hex is not in the live series, every
+       member misses, and three lines silently fall through to series order —
+       the chart would stop matching the avatars the moment a theme was picked. */
     const series = shown.map(function (p) {
-      let c = p.user.color && Charts.SERIES.indexOf(p.user.color) !== -1 ? p.user.color : null;
+      let c = Store.userColorHex(p.user) || null;
       if (!c || usedColors.indexOf(c) !== -1) {
         c = Charts.SERIES.filter(function (x) { return usedColors.indexOf(x) === -1; })[0] || Charts.SERIES[0];
       }

@@ -52,8 +52,83 @@
     '#3399cc': 's6'    // cyan    -> steel teal
   };
 
+  /* ---------- per-profile themes -----------------------------------------
+     ONE look, several palettes. A theme is a colour-only override — the
+     geometry, type scale, spacing and markup are universal — so the slug is
+     the whole record: `user.settings.theme`, absent meaning the default.
+
+     FORWARD COMPAT (the same discipline mergeSettings applies to every
+     unknown settings key, and the reason this is a slug and not a palette):
+       * `theme` is NOT in defaultSettings, so it rides the settings object
+         through mergeSettings' pass-through clause exactly as any key from a
+         newer build does. A P1-era client round-trips it untouched.
+       * READS coerce to the list this build knows (themeSlug below). WRITES
+         never rewrite what is stored. A family member whose newer phone
+         picked a theme this build has never heard of renders the default
+         here and still has their choice waiting when they open that phone —
+         the value is preserved verbatim, not normalised away.
+     The label is here rather than in app.js because it is data, not chrome;
+     the COLOURS are nowhere in JS at all — the picker paints its swatches
+     with var(--accent) / var(--s1) under [data-theme-preview], so a palette
+     can never be frozen into a constant.                                   */
+  const DEFAULT_THEME = 'field-issued';
+  const THEMES = [
+    {
+      slug: 'field-issued',
+      label: 'Field / Issued',
+      note: 'Olive drab and one signal orange. Issued kit.'
+    },
+    {
+      slug: 'classic',
+      label: 'Classic Green',
+      note: 'The original IronLog look, cool and near-black.'
+    },
+    {
+      slug: 'slate',
+      label: 'Slate',
+      note: 'Cold-rolled steel. Quiet, blue-grey, indigo.'
+    },
+    {
+      slug: 'ember',
+      label: 'Ember',
+      note: 'Warm charcoal, lit by the work.'
+    }
+  ];
+  const THEME_SLUGS = THEMES.map(function (t) { return t.slug; });
+
   const Store = {};
   Store.uid = U.uid;
+
+  // The palettes this build ships, in picker order.
+  Store.themes = function () {
+    return THEMES.map(function (t) { return { slug: t.slug, label: t.label, note: t.note }; });
+  };
+
+  Store.defaultTheme = function () { return DEFAULT_THEME; };
+
+  Store.isKnownTheme = function (slug) {
+    return typeof slug === 'string' && THEME_SLUGS.indexOf(slug) !== -1;
+  };
+
+  // READ-side coercion: what this build should actually paint for a user.
+  // Never writes, never normalises the stored value.
+  Store.themeSlug = function (user) {
+    const raw = user && user.settings ? user.settings.theme : null;
+    return Store.isKnownTheme(raw) ? raw : DEFAULT_THEME;
+  };
+
+  // What is actually on the record, verbatim — '' when there is nothing.
+  // Used only to tell "chose the default" apart from "chose something this
+  // build cannot render", which the picker says out loud instead of hiding.
+  Store.storedTheme = function (user) {
+    const raw = user && user.settings ? user.settings.theme : null;
+    return typeof raw === 'string' ? raw : '';
+  };
+
+  Store.setTheme = function (userId, slug) {
+    if (!Store.isKnownTheme(slug)) return null;
+    return Store.updateUser(userId, { settings: { theme: slug } });
+  };
 
   let state = null;
   const subscribers = [];

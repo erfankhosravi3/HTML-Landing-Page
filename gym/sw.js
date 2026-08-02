@@ -3,7 +3,10 @@
    or installed PWAs keep serving the old cache forever. */
 'use strict';
 
-const CACHE_NAME = 'ironlog-v2p6';
+/* P5 (per-profile themes) changed css/styles.css, js/store.js and js/app.js —
+   all three are cached shell entries, so the name moves or installed PWAs
+   keep serving the pre-theme app forever. */
+const CACHE_NAME = 'ironlog-v2p7';
 
 const SHELL = [
   './',
