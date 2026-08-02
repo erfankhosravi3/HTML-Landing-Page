@@ -3065,3 +3065,169 @@ button.std-row:hover .std-name {
   .player-ring .ring-arc { transition: none; }
   .player-rail .fill { transition: none; }
 }
+
+/* ---- P4: Intelligence ---- */
+
+/* TODAY strip — daily load guidance at the top of the dashboard */
+.p4-today {
+  border-color: rgba(255, 255, 255, .14);
+}
+
+.p4-eyebrow {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.p4-headline {
+  margin: 6px 0 0;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.p4-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+/* ACWR chip: the zone color rides on --zone (a CVD-safe series token) and is
+   never the only signal — the zone word sits next to it. */
+.p4-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--zone, var(--border));
+  background: var(--card-2);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.p4-chip .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--zone, var(--text-muted));
+}
+
+.p4-chip .zn {
+  color: var(--text-2);
+  font-weight: 500;
+}
+
+.p4-advisory {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--orange);
+}
+
+.p4-advisory .ic {
+  flex: none;
+  display: inline-flex;
+  margin-top: 1px;
+}
+
+/* Recovery strip */
+.p4-rec {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+@media (min-width: 560px) {
+  .p4-rec {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr);
+  }
+}
+
+.p4-rec-cells {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
+  gap: 14px;
+  min-width: 0;
+}
+
+.p4-rec .lb,
+.p4-rec-cell .lb {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.p4-rec .v,
+.p4-rec-cell .v {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -.01em;
+  margin-top: 2px;
+}
+
+.p4-rec-cell .v {
+  font-size: 17px;
+}
+
+.p4-rec .v .unit,
+.p4-rec-cell .v .unit {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.p4-rec .sub,
+.p4-rec-cell .sub {
+  font-size: 12px;
+  color: var(--text-2);
+  margin-top: 2px;
+  line-height: 1.45;
+}
+
+.p4-spark {
+  margin-top: 8px;
+  min-height: 36px;
+}
+
+.p4-hint {
+  margin: 14px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+/* Analytics — Performance section */
+.p4-perf {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.p4-sec-head {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin: 6px 2px -4px;
+}
+
+.p4-cap {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  margin-top: 10px;
+}

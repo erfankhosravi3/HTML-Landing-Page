@@ -960,3 +960,291 @@ the existing kept-as-is path. No changes to lift analytics semantics.
 js/player.js added: index.html script tag AFTER views-log.js; sw.js SHELL adds
 './js/player.js'; CACHE_NAME → 'ironlog-v2p4'. Deploy = PR → squash merge →
 verify live cache string.
+
+# V2 ADDENDUM — P4: INTELLIGENCE (load model · recovery · Apple Health v2)
+
+Implements the master plan's "P3 · Intelligence" phase (renumbered P4 after the
+setwork/player insertions) and its Daily/Weekly feedback loops. Deterministic
+arithmetic only — same philosophy as guardrails: auditable thresholds, no ML.
+
+## New module: js/loadmodel.js — namespace LoadModel (pure; after analytics.js)
+
+Per-modality load, NEVER blended into one number:
+- run: km/week (runs incl. treadmill; surface-agnostic)
+- ruck: load-miles/week = Σ(loadKgTotal × km) (per plan, headline ruck number)
+- lift: tonnage kg/week (existing Analytics.workoutVolume over lift entries)
+- engine-other: minutes/week (swim/bike/row/stairs/circuit durationMin)
+
+```js
+LoadModel.weekly(workouts, modality, weekStart) -> number
+LoadModel.acwr(workouts, modality, todayStr) -> { acute, chronic, ratio|null }
+  // acute = trailing 7d sum; chronic = mean of trailing 4 weekly sums (7d
+  // windows ending today); ratio null when chronic < a floor (insufficient
+  // history — never divide by ~0)
+LoadModel.status(workouts, todayStr) -> {
+  perModality: { run:{acute,chronic,ratio,zone}, ruck:{...}, lift:{...},
+                 other:{...} },
+  headline: string|null }        // plain-language daily guidance, worst zone
+  // zones: ratio > 1.4 'ramping-fast' · 1.3–1.4 'ramping' · 0.8–1.3 'steady'
+  //        < 0.8 'detraining' (chronic-established only)
+  // headline example (plan verbatim style): 'Ramping fast — 40% above your
+  // 4-week ruck average. Today should be easy or off.'
+LoadModel.restingHR(healthSamples, todayStr) -> { today|latest, baseline28,
+  spike: bool }                  // spike = latest >= baseline28 × 1.07 for the
+                                 // 2 most recent consecutive sampled days
+LoadModel.greenWeek(workouts, user, weekStart) -> { sessions, restDayTaken,
+  green: bool }                  // green = >=4 sessions AND >=1 full rest day
+                                 // (elapsed-days rule for the current week)
+LoadModel.ruckEconomy(workouts) -> [{ date, km, loadKg, minPerKm }]
+  // rucks with distance+duration; view plots pace vs load
+```
+
+## Surfaces (performance mode only; typeof-guarded everywhere)
+
+- Dashboard: TODAY strip at top — LoadModel.status headline + per-modality
+  ACWR chips (zone-colored, CVD-safe palette); resting-HR spike appends an
+  'easy day' advisory. Green-week chip replaces the streak flame for
+  performance users only (simple-mode streaks byte-identical).
+- Analytics view gains a Performance section: easy/hard weekly split stacked
+  bars (existing classification) · ruck economy scatter (pace vs load, last 12
+  wk highlighted) · benchmark pace trends (2mi/5mi from test entries + best
+  cardio efforts at those distances) · per-modality weekly load bars with
+  chronic line. Max 3 series/chart, direct labels, existing Charts idioms.
+- Recovery strip (dashboard card): resting-HR sparkline w/ baseline + spike
+  flag · sleep hours (7d avg vs 28d) from healthSamples · open pain entries
+  count · rest-day status. Absent data degrades to hints, never crashes.
+- Deload integration: guardrails gains checkWeekly inputs — easy-split
+  collapse and restingHR spike produce 'warn' advisories in weekly status
+  (existing TEMPLATES pattern); red-flag pain rules unchanged and still
+  supreme.
+
+## Apple Health v2 (applehealth.js + views wiring)
+
+- Workout import: parse <Workout> elements for Running/Walking/Hiking (ruck
+  candidate)/Swimming/Cycling/Rowing/StairClimbing → typed cardio entries
+  (distanceKm, durationMin, avgHR when present, source 'apple'); Hiking with
+  the user's confirmation maps to ruck (loadKg left null — prompt once per
+  import session). Import writes workouts with source:'apple' + a stable
+  appleId (HK uuid or start-timestamp hash) on the workout.
+- Double-count protection: skip an Apple workout when (a) same appleId already
+  imported, or (b) a manual workout of the same user exists on the same date
+  whose kind matches and |durationMin delta| <= 25% — list skipped items in
+  the import summary instead of silently dropping.
+- healthSamples continues to carry restingHR/sleep/steps/vo2max rows (already
+  implemented); the recovery strip reads them read-only.
+- Old clients: imported workouts are ordinary cardio workouts (P1 shape) —
+  no new entry types; forward-compat untouched.
+
+## Leaderboard (family view) — the one family-visible change, per the approved
+master plan ('activity badges so your 12-mile ruck finally counts'):
+- Each member card gains small activity badges for the trailing 4 weeks:
+  sessions count + per-kind icons (lift/run/ruck/swim/other) with counts.
+  Volume metric stays lift-only. Additive rows only; no layout reflow of
+  existing elements; simple-mode users see the same badges (they are part of
+  the shared family surface, sanctioned by the plan).
+
+## Acceptance tests (binding)
+
+1. LoadModel pure functions: weekly windows (Mon boundaries per app
+   convention), ACWR floors/zones incl. insufficient-history null, headline
+   selection (worst zone wins; ties: ruck > run > lift > other), restingHR
+   spike (consecutive-sampled-days rule, gaps tolerated), greenWeek elapsed
+   rule, ruckEconomy filtering. 100+ asserts.
+2. Analytics invisibility: existing functions byte-identical outputs (suite
+   extension); simple-mode leak sweep extended (no TODAY strip, no recovery
+   strip, no perf analytics section; leaderboard badges ARE allowed).
+3. Apple import: fixture export.xml with workouts+samples → correct typed
+   entries, appleId dedupe, manual-overlap skip, Hiking→ruck confirm path,
+   import summary counts. Node-level harness on the parser + Playwright
+   file-input flow.
+4. sw.js CACHE_NAME → 'ironlog-v2p5'; loadmodel.js in SHELL + index.html after
+   analytics.js.
+
+# V2 ADDENDUM — P4.5: ONE LIVE SESSION (pace as a layer)
+
+User-approved (with mockups) correction of P3.5. The guided player kept its OWN
+compiled timeline and actuals (`S.compiled.steps`, `S.actuals`,
+`ironlog/activeSession`) — a shadow copy of a workout. That is precisely why
+nothing could be edited mid-session: editing would have to mutate a frozen
+script that maps to nothing. This phase inverts the ownership.
+
+USER'S REQUIREMENT (binding): "I need to be able to do the durability workout
+and edit what I'm doing on it, concurrently... player can work in its sets, or
+at the level of each rep, or at the level of the exercise if rest time is
+determined... making it such that all of this is selectable and variable."
+
+## Principle
+
+**One session record: the draft.** `ironlog/activeWorkout` is the single source
+of truth for EVERY session type. The timing engine drives `draft.entries[i].sets[j]`
+directly. The focus view is a RENDERER over that draft, never an owner.
+`ironlog/activeSession`, `S.compiled`, `S.actuals` and the player's private save
+path are DELETED. Player.compile survives only as a derived projection
+recomputed on demand (for "what's next" and time-left estimates) — never as
+stored state.
+
+## Pace: a scope, with cadence as an orthogonal modifier
+
+RESOLVED against a competing "monotone ladder incl. rep" proposal: rep-cadence
+is a CUE that runs inside a timed set; it advances nothing, so it must not be a
+mutually-exclusive value of the same enum.
+
+```js
+pace: 'off' | 'set' | 'exercise' | 'session'   // what the app DRIVES
+cadence: boolean                                // tempo metronome INSIDE a timed set
+```
+
+| pace | app drives | hands back after | rest |
+|---|---|---|---|
+| `off` | nothing (elapsed clock only) | — | today's advisory pill, unchanged |
+| `set` | ONE set to completion | that set | advisory only |
+| `exercise` | remaining sets of ONE entry, work→rest→next | that entry | DRIVEN (auto-start, skippable, ±15s, no trailing rest) |
+| `session` | chains exercise-pace across entries | end of workout | driven, incl. inter-exercise transition |
+
+Governing rule: **the app drives every step it can time deterministically; the
+user triggers every step it cannot.** Holds/rests are timeable; reps are not
+unless a tempo exists. So `weight_reps` gets no set-level driver without a
+tempo — it advances on ✓.
+
+Per-shape set drivers:
+```
+hold, stretch(static|pnf|loaded) -> countdown(target); at end write
+                                    holdSec = ACTUAL elapsed seconds, done = true
+stretch(dynamic), weight_reps    -> only with a tempo: metronome + auto-✓ at
+                                    targetReps; otherwise no driver (✓ advances)
+carry                            -> elapsed stopwatch; ✓ stops it; never
+                                    auto-writes distanceM/weightKg
+```
+
+Tempo is a PRESCRIPTION, never an observation: `normalizeSet` rebuilds every
+lift set to exactly {weightKg, reps, type, rpe} on this and every older client,
+so a tempo can physically never be recorded on a lift set. Stored on the routine
+item (`item.tempo: '3-1-3'`); the UI must never imply it was recorded.
+
+## Direct manipulation beats configuration (the 95% path)
+
+- **Tap a set's NUMBER** → run exactly that set, whatever the resolved pace.
+- **Tap a card's stopwatch** → run that exercise (its sets + rests), then STOP.
+The picker exists only for Off / Whole-session / cadence / changing defaults.
+
+## Precedence (lowest → highest)
+
+```
+user.settings.pace[kind]      // per-workout-kind default
+  -> routine.pace             // routine-level, when seeded from a routine
+  -> item.pace                // routine item override
+  -> draft._pace              // session chip (this session only)
+  -> entry._pace              // card override
+  -> the button just tapped   // wins for that one action
+```
+
+Defaults table (binding): durability `set` · stretch `set` · **lift `off`** ·
+circuit `session` · interval (run/swim) `set` · steady cardio `off` (quick
+logger unchanged — a 40-minute steady run does not belong in a live session
+screen). cadence default false.
+
+Storage: `user.settings.pace` (object keyed by kind), `user.settings.cadence`,
+`user.settings.restSec`. VERIFIED SAFE: mergeSettings carries unknown settings
+keys through untouched (P0 forward-compat clause, store.js), so old clients
+preserve these. `settings.restTimerSec` and `settings.playerVoice` keep their
+current meanings. Routine-level `pace`/`tempo` ride the routines collection's
+existing unknown-key preservation.
+
+## Set identity — draft-local, provably unpersisted
+
+Timers bind to `(entryId, _sid)`, never to array index or object reference
+(`repaint()` rebuilds `root.innerHTML`, destroying identity).
+
+```js
+function sidOf(set) { return set._sid || (set._sid = U.uid('s')); }
+// loadDraft() backfills alongside the existing `if (!en.id)` loop.
+```
+
+`_sid` is draft-local and MUST NOT reach Store or sync. Proof chain (all
+pre-existing, verify in tests): `cleanSetworkEntry` skips `_`-prefixed keys at
+entry AND set level; `buildFinishedEntries` builds lift sets as 4-key literals;
+the finish payload enumerates its fields. NO normalizer change, NO contract
+change, NO old-client exposure. Do NOT introduce a persisted set id — lift sets
+are rebuilt to four keys by `normalizeSet` on every client, so a persisted id
+would be legal on setwork and silently dropped on lifts; asymmetric set identity
+is a permanent trap.
+
+## Reconciliation — one choke point
+
+Every draft mutation already funnels through `saveDraft()` (`ctx.persist`), so:
+
+```js
+function saveDraft() {
+  if (!draft) return;
+  rev++;
+  localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));   // existing
+  Session.reconcile();       // retarget / orphan-check the running timer
+  notifySubscribers(rev);    // focus view repaints; builder opts out
+}
+```
+
+Authoritative timer↔edit rules:
+- Editing the RUNNING set's target → retarget live, preserving elapsed
+  (`remain = newTarget - elapsed`; if already past, expire immediately).
+- Deleting the running SET, or its ENTRY → cancel the timer cleanly, keep the
+  session, record nothing for it, advance the cursor to the next pending set.
+- Reordering around the running set → binding is by `_sid`, so it follows.
+- Starting a second timer → the first is cancelled (single timer slot).
+- Backgrounded/expired while hidden → mark `boundary`, do not silently record;
+  on return show what expired and let the user confirm or adjust.
+- The cursor (`draft._active`) is ADVISORY, never modal: editing any other row
+  never moves it.
+
+## Two presentations, one state
+
+`draft._view: 'builder'|'focus'`. Switching is one tap in BOTH directions and
+never interrupts a running timer. Focus view keeps every bit of P3.5 chrome
+(name, ring, ±15s, pause, side badge, next-up, depth ask, voice/vibrate/beep,
+wake lock) and gains: a Builder button, and a tap-a-set sheet that edits the
+draft in place WHILE THE CLOCK KEEPS RUNNING. Circuits open in focus by default;
+durability/stretch open in builder.
+
+## Bug fixed in passing (binding)
+
+Today the builder's hold timer writes `holdSec = target` while the player writes
+actual elapsed — two answers for one thing. ONE RULE EVERYWHERE: `holdSec` is
+always the seconds ACTUALLY held (early stop records the short time; overtime
+records the long one).
+
+## Scope boundary
+
+In the live substrate: lift (pace off by default), durability, stretch,
+circuit/AMRAP, run/swim intervals. NOT in it: steady cardio — its quick logger
+is unchanged. Manual after-the-fact logging for every type stays exactly as it
+is today.
+
+## Mode gate
+
+Performance mode only for all pace UI. Simple mode BYTE-IDENTICAL: family users
+keep today's lift flow (pace off, advisory rest pill), the quick loggers, and no
+pace controls anywhere. Lift default `off` guarantees the flow the user praised
+is unchanged for everyone.
+
+## Acceptance tests (binding)
+
+1. `_sid` never persists: fixtures through save/finish/merge/import contain no
+   `_`-prefixed key at workout, entry, or set level; P1-era client sim
+   round-trips a player-written workout unchanged.
+2. Concurrent edit (Playwright, short targets): with set 2 running, edit set 3's
+   target, add a set, delete a different exercise, reorder — the timer keeps
+   running, stays bound to set 2, and records set 2's ACTUAL seconds.
+3. Retarget/orphan rules: each authoritative rule above asserted.
+4. Pace precedence resolves per the chain; the tapped button wins; defaults
+   table honored per kind.
+5. Builder↔focus toggle mid-timer preserves timer, cursor and edits in both
+   directions; editing from inside focus writes through to the draft.
+6. holdSec is ACTUAL in both views (early stop and overtime cases).
+7. Simple-mode leak sweep: no pace UI anywhere; lift flow byte-identical to the
+   P4 baseline.
+8. Existing suites stay green; `ironlog/activeSession` is gone and a stale one
+   left by P3.5 is discarded safely on boot.
+
+## Release
+
+sw.js CACHE_NAME → next version; no new files expected (player.js is
+refactored, not replaced).

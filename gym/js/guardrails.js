@@ -22,7 +22,16 @@
     PAIN_SEVERE: 7,             // severity >= 7 is a red flag
     STRETCH_DEEP_COUNT: 3,      // intensity-3+ sets on one drill within the window
     STRETCH_DEEP_WINDOW_DAYS: 14,
-    DURABILITY_GAP_DAY: 5       // durability_gap fires from day 5 of the week (Fri)
+    DURABILITY_GAP_DAY: 5,      // durability_gap fires from day 5 of the week (Fri)
+    // P4 deload advisories
+    EASY_SPLIT_COLLAPSE_PCT: 50,   // easy share under this = the split collapsed
+    EASY_SPLIT_MIN_SESSIONS: 4,    // ...but only once the week has this many
+                                   // classifiable cardio sessions (one hard
+                                   // session in a two-session week is not a
+                                   // collapse — easy_share_low still covers it)
+    RESTING_HR_FRESH_DAYS: 3       // a spike only advises while the reading is
+                                   // this recent; stale wearable data says
+                                   // nothing about today
   };
 
   // Weekly durability slot targets: work-set counts per Mon-Sun week (P3 —
@@ -116,6 +125,19 @@
     },
     no_rest_day: function () {
       return 'No rest day this week. Take one — the adaptation you\'re training for happens on it.';
+    },
+    easy_split_collapse: function (c) {
+      return 'Only ' + (c.pct !== undefined && c.pct !== null ? c.pct + '%' : 'a minority') +
+        ' of this week\'s cardio was easy across ' +
+        (c.sessions ? c.sessions + ' sessions' : 'several sessions') +
+        ' — the easy/hard split has collapsed. Make the next two genuinely easy, or take the week down.';
+    },
+    resting_hr_spike: function (c) {
+      return 'Resting heart rate is ' +
+        (c.pct !== undefined && c.pct !== null ? c.pct + '% ' : '') +
+        'over your 28-day baseline' +
+        (c.value !== undefined && c.value !== null ? ' (' + c.value + ' vs ' + c.baseline + ' bpm)' : '') +
+        ' two readings running — that\'s a recovery debt, not a bad night. Take an easy day.';
     },
     pain_bone_line: function (c) {
       return (c.region ? cap(c.region) + ': pain' : 'Pain') +
@@ -263,6 +285,47 @@
     const ex = DB && typeof DB.byId === 'function' ? DB.byId(ref) : null;
     if (!ex) return null;
     return (ex.primaryMuscles || []).concat(ex.secondaryMuscles || []);
+  }
+
+  // LoadModel owns every piece of P4 load/recovery arithmetic; guardrails only
+  // renders the advisory. It is read lazily and may legitimately be absent
+  // (older cached shell, node suites that don't load it) — callers then stay
+  // silent rather than guessing.
+  function loadModel() {
+    return (typeof window !== 'undefined' && window.LoadModel &&
+      typeof window.LoadModel.restingHR === 'function') ? window.LoadModel : null;
+  }
+
+  // Resting-HR spike advisory for a week, or null. The spike rule itself
+  // (28-day baseline, the 2 most recent SAMPLED days both >= baseline x 1.07)
+  // lives in LoadModel; here we only pick the reference date (never read past
+  // the week being reported on), filter foreign users, and require the reading
+  // to still be fresh — a spike from three weeks ago is history, not advice.
+  function restingHrAdvisory(samples, user, ws, weekEnd) {
+    if (!Array.isArray(samples) || !samples.length) return null;
+    const LM = loadModel();
+    if (!LM) return null;
+    const uid = user && user.id;
+    const rows = samples.filter(function (s) {
+      return s && (s.kind === undefined || s.kind === 'restingHR') &&
+        (!uid || !s.userId || s.userId === uid);
+    });
+    if (!rows.length) return null;
+    const today = U.todayStr();
+    const ref = today < weekEnd ? today : weekEnd;
+    if (ref < ws) return null; // week hasn't started yet
+    let hr = null;
+    try { hr = LM.restingHR(rows, ref); } catch (e) { return null; }
+    if (!hr || !hr.spike || !hr.baseline28 || !hr.latest) return null;
+    if (!hr.latestDate || hr.latestDate < U.addDays(ref, -LIMITS.RESTING_HR_FRESH_DAYS)) return null;
+    return {
+      code: 'resting_hr_spike',
+      message: msg('resting_hr_spike', {
+        pct: Math.round((hr.latest / hr.baseline28 - 1) * 100),
+        value: U.round1(hr.latest),
+        baseline: hr.baseline28
+      })
+    };
   }
 
   // 'easy' | 'hard' | null (unclassifiable). HR beats the effort field when
@@ -510,13 +573,18 @@
   // durability (P3) = { slots: {unilateral, calf_tib, grip, core} work-set
   // counts, covered, total: 4 } vs DURABILITY_TARGETS; see the accumulation
   // comment in the loop for the three source shapes.
-  Guardrails.weeklyStatus = function (workouts, user, weekStartStr) {
+  // opts (P4, optional) = { healthSamples } — restingHR rows for the user (a
+  // bare array is accepted too). Supplying them adds the resting-HR spike
+  // advisory; omitting them changes nothing. The returned shape is unchanged.
+  Guardrails.weeklyStatus = function (workouts, user, weekStartStr, opts) {
     const ws = U.weekStart(weekStartStr || U.todayStr());
     const weekEnd = U.addDays(ws, 6);
     const trailStart = U.addDays(ws, -28);
     const trailEnd = U.addDays(ws, -1);
     const list = forUser(workouts, user);
     const refYear = parseInt(ws.slice(0, 4), 10);
+    const healthSamples = Array.isArray(opts) ? opts
+      : (opts && Array.isArray(opts.healthSamples)) ? opts.healthSamples : null;
 
     let runKm = 0;
     let trailKm = 0;
@@ -600,9 +668,20 @@
     if (avg > 0 && rampPct > LIMITS.WEEKLY_RUN_RAMP_PCT) {
       warnings.push({ code: 'run_ramp', message: msg('run_ramp', { pct: rampPct }) });
     }
-    if (easySharePct !== null && easySharePct < LIMITS.EASY_SHARE_MIN_PCT) {
+    // Easy-split collapse (P4) is the stronger form of easy_share_low and
+    // subsumes it — one message per problem, same idiom as the pain rules.
+    if (easySharePct !== null &&
+        classifiedN >= LIMITS.EASY_SPLIT_MIN_SESSIONS &&
+        easySharePct < LIMITS.EASY_SPLIT_COLLAPSE_PCT) {
+      warnings.push({
+        code: 'easy_split_collapse',
+        message: msg('easy_split_collapse', { pct: easySharePct, sessions: classifiedN })
+      });
+    } else if (easySharePct !== null && easySharePct < LIMITS.EASY_SHARE_MIN_PCT) {
       warnings.push({ code: 'easy_share_low', message: msg('easy_share_low', { pct: easySharePct }) });
     }
+    const hrWarning = restingHrAdvisory(healthSamples, user, ws, weekEnd);
+    if (hrWarning) warnings.push(hrWarning);
     if (!restDayTaken) {
       warnings.push({ code: 'no_rest_day', message: msg('no_rest_day') });
     }

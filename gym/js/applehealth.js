@@ -76,6 +76,90 @@
     return v; // 'Cal' / 'kcal' / unknown -> already kcal
   }
 
+  function distanceToKm(v, unit) {
+    const u = String(unit || '').toLowerCase();
+    if (u === 'mi') return v * 1.609344;
+    if (u === 'm') return v / 1000;
+    if (u === 'yd') return v * 0.0009144;
+    if (u === 'ft') return v * 0.0003048;
+    return v; // 'km' / unknown -> already km
+  }
+
+  /* ---------- P4: HK workout -> typed cardio mapping ----------
+     Only these activity types become cardio entries (the contract's list).
+     Walking maps to its own 'walk' mode: an Apple Watch records ordinary daily
+     walks prolifically, and walking kilometres are not running kilometres —
+     'walk' belongs to no LoadModel modality, so imported walks are logged and
+     visible but never move run load, run ACWR or the run-ramp advisory.
+     Hiking defaults to 'run' (foot mileage) and only becomes a ruck behind the
+     one per-import-session confirmation — a ruck without a load is a lie about
+     the session, so it is never assumed. */
+  const WORKOUT_MODES = {
+    Running: 'run',
+    Walking: 'walk',
+    Hiking: 'run',
+    Swimming: 'swim',
+    Cycling: 'bike',
+    Rowing: 'row',
+    StairClimbing: 'stairs'
+  };
+
+  const STAT_RE = /<WorkoutStatistics\b[^>]*>/g;
+  const META_RE = /<MetadataEntry\b[^>]*>/g;
+
+  // Newer exports (iOS 16+) moved distance/HR out of the Workout attributes and
+  // into <WorkoutStatistics> children, so both shapes are read.
+  function readWorkoutStats(inner) {
+    const out = { distanceKm: 0, avgHR: 0, maxHR: 0 };
+    if (!inner || inner.indexOf('<WorkoutStatistics') < 0) return out;
+    STAT_RE.lastIndex = 0;
+    let m;
+    while ((m = STAT_RE.exec(inner))) {
+      const s = parseAttrs(m[0]);
+      const t = String(s.type || '');
+      if (t.indexOf('HKQuantityTypeIdentifierDistance') === 0) {
+        const v = parseFloat(s.sum);
+        if (isFinite(v) && v > 0) out.distanceKm = Math.max(out.distanceKm, distanceToKm(v, s.unit));
+      } else if (t === 'HKQuantityTypeIdentifierHeartRate') {
+        const av = parseFloat(s.average);
+        if (isFinite(av) && av > 0) out.avgHR = av;
+        const mx = parseFloat(s.maximum);
+        if (isFinite(mx) && mx > 0) out.maxHR = mx;
+      }
+    }
+    return out;
+  }
+
+  function hex8(n) { return ('0000000' + (n >>> 0).toString(16)).slice(-8); }
+
+  // Deterministic 64-bit-ish hash (two independent 32-bit mixes) — the fallback
+  // identity for exports that carry no UUID. Same export -> same appleId, which
+  // is what makes re-import dedupe work.
+  function hashHex(s) {
+    let h1 = 0x811c9dc5;
+    let h2 = 0x9e3779b9;
+    for (let i = 0; i < s.length; i++) {
+      const c = s.charCodeAt(i);
+      h1 = Math.imul(h1 ^ c, 0x01000193);
+      h2 = Math.imul(h2 + c, 0x85ebca6b);
+    }
+    return hex8(h1) + hex8(h2);
+  }
+
+  function workoutAppleId(a, inner, key) {
+    if (a.uuid) return String(a.uuid);
+    if (a.UUID) return String(a.UUID);
+    if (inner && inner.indexOf('<MetadataEntry') >= 0) {
+      META_RE.lastIndex = 0;
+      let m;
+      while ((m = META_RE.exec(inner))) {
+        const md = parseAttrs(m[0]);
+        if (md.key === 'HKExternalUUID' && md.value) return String(md.value);
+      }
+    }
+    return 'ah_' + hashHex(String(a.startDate || '') + '|' + key);
+  }
+
   /* ---------- minimal ZIP reader ---------- */
 
   function bytesOf(blob) {
@@ -166,6 +250,7 @@
   function createParser() {
     const acc = {
       workouts: [],
+      hkWorkouts: [], // P4: mapped cardio candidates (subset of workouts, richer)
       bodyMass: {},   // date -> kg (last per day)
       bodyFat: {},    // date -> pct (last per day)
       daily: { steps: {}, restingHR: {}, activeEnergyKcal: {}, exerciseMin: {}, vo2max: {}, sleepHours: {} },
@@ -243,7 +328,7 @@
       }
     }
 
-    function handleWorkout(a) {
+    function handleWorkout(a, inner) {
       const name = friendlyActivity(a.workoutActivityType);
       const date = datePart(a.startDate);
       if (!name || !date) return;
@@ -259,6 +344,38 @@
       const e = parseFloat(a.totalEnergyBurned);
       if (isFinite(e)) row.kcal = Math.round(energyToKcal(e, a.totalEnergyBurnedUnit));
       acc.workouts.push(row);
+      collectCardio(a, inner, name, date, row);
+    }
+
+    // P4: the same element, kept a second time in the richer shape the typed
+    // cardio import needs. parsed.workouts stays exactly what it always was.
+    function collectCardio(a, inner, name, date, row) {
+      const key = String(a.workoutActivityType || '').replace(/^HKWorkoutActivityType/, '');
+      const mode = WORKOUT_MODES[key];
+      if (!mode) return;
+      const stats = readWorkoutStats(inner);
+      let km = 0;
+      const td = parseFloat(a.totalDistance);
+      if (isFinite(td) && td > 0) km = distanceToKm(td, a.totalDistanceUnit);
+      if (stats.distanceKm > km) km = stats.distanceKm;
+      const out = {
+        appleId: workoutAppleId(a, inner, key),
+        activityType: key,
+        mode: mode,
+        date: date,
+        name: name,
+        durationMin: row.durationMin,
+        source: row.source
+      };
+      if (km > 0) out.distanceKm = Math.round(km * 1000) / 1000;
+      if (stats.avgHR > 0) out.avgHR = Math.round(stats.avgHR);
+      if (stats.maxHR > 0) out.maxHR = Math.round(stats.maxHR);
+      if (row.kcal !== undefined) out.kcal = row.kcal;
+      const st = parseHKTime(a.startDate);
+      if (st !== null) out.startedAt = st;
+      const en = parseHKTime(a.endDate);
+      if (en !== null) out.endedAt = en;
+      acc.hkWorkouts.push(out);
     }
 
     // Consume every complete <Record>/<Workout> element in buf; keep the tail
@@ -280,17 +397,19 @@
         if (gt < 0) { buf = final ? '' : buf.slice(start); return; }
         const openTag = buf.slice(start, gt + 1);
         let end;
+        let inner = ''; // child elements — Workout carries stats/metadata there
         if (buf.charCodeAt(gt - 1) === 47 /* '/' */) {
           end = gt + 1; // self-closing
         } else {
           const closer = '</' + name + '>';
           const ci = buf.indexOf(closer, gt + 1);
           if (ci < 0) { buf = final ? '' : buf.slice(start); return; }
+          if (name === 'Workout') inner = buf.slice(gt + 1, ci);
           end = ci + closer.length;
         }
         const attrs = parseAttrs(openTag); // attributes live on the open tag only
         if (name === 'Record') handleRecord(attrs);
-        else handleWorkout(attrs);
+        else handleWorkout(attrs, inner);
         pos = end;
       }
     }
@@ -332,6 +451,10 @@
     return {
       workouts: acc.workouts.slice().sort(function (a, b) {
         return a.date < b.date ? -1 : a.date > b.date ? 1 : 0;
+      }),
+      hkWorkouts: acc.hkWorkouts.slice().sort(function (a, b) {
+        if (a.date !== b.date) return a.date < b.date ? -1 : 1;
+        return (a.startedAt || 0) - (b.startedAt || 0);
       }),
       bodyMass: toRows(acc.bodyMass, 'valueKg'),
       bodyFat: toRows(acc.bodyFat, 'pct'),
@@ -464,6 +587,180 @@
     return out;
   };
 
+  /* ---------- P4: typed cardio workout import ----------
+     applyImport above keeps its P1 job (body metrics, daily samples, strength
+     sessions). The cardio import is a separate pass so the legacy behavior is
+     untouched and so the UI can preview the plan before writing anything. */
+
+  const DUP_REASON = 'duplicate';
+  const DUP_DETAIL = 'Already imported';
+  const DELETED_DETAIL = 'Deleted earlier — not re-imported';
+  const OVERLAP_REASON = 'overlap';
+  const OVERLAP_TOLERANCE = 0.25; // |duration delta| <= 25% counts as the same session
+
+  function entryKindOf(e) {
+    if (!e || typeof e !== 'object') return 'lift';
+    const t = e.type;
+    if (t === undefined || t === null || t === 'lift') return 'lift';
+    if (t === 'cardio') return typeof e.mode === 'string' && e.mode ? e.mode : 'cardio';
+    return typeof t === 'string' ? t : 'lift';
+  }
+
+  // Mirrors Store.deriveKind for workouts written before kind existed.
+  function workoutKindOf(w) {
+    if (w && typeof w.kind === 'string' && w.kind) return w.kind;
+    const entries = w && Array.isArray(w.entries) ? w.entries : [];
+    const kinds = [];
+    for (const e of entries) {
+      const k = entryKindOf(e);
+      if (kinds.indexOf(k) < 0) kinds.push(k);
+    }
+    if (!kinds.length) return null;
+    return kinds.length === 1 ? kinds[0] : 'mixed';
+  }
+
+  function workoutDuration(w) {
+    if (w && typeof w.durationMin === 'number' && isFinite(w.durationMin)) return w.durationMin;
+    let sum = 0;
+    for (const e of (w && Array.isArray(w.entries) ? w.entries : [])) {
+      const d = Number(e && e.durationMin);
+      if (isFinite(d)) sum += d;
+    }
+    return sum;
+  }
+
+  // (b) of the double-count rule: a MANUAL session of the same user, same date,
+  // same kind, whose duration is within 25% of the Apple one.
+  function findClash(existing, row, mode) {
+    for (const w of existing) {
+      if (!w || w.date !== row.date) continue;
+      if ((w.source || 'manual') === 'apple') continue;
+      if (workoutKindOf(w) !== mode) continue;
+      const ed = workoutDuration(w);
+      const cd = Number(row.durationMin) || 0;
+      const base = cd > 0 ? cd : ed;
+      if (base <= 0 || Math.abs(ed - cd) <= base * OVERLAP_TOLERANCE) return w;
+    }
+    return null;
+  }
+
+  AppleHealth.planWorkoutImport = function (parsed, userId, opts) {
+    opts = opts || {};
+    const since = opts.since || null;
+    const hikeRuck = opts.hikingAsRuck === true;
+    const rows = (parsed && Array.isArray(parsed.hkWorkouts)) ? parsed.hkWorkouts : [];
+    const Store = window.Store;
+    const source = Array.isArray(opts.existing)
+      ? opts.existing
+      : (Store && Store.workoutsFor ? Store.workoutsFor(userId) || [] : []);
+    const existing = source.filter(function (w) {
+      return w && (!userId || !w.userId || w.userId === userId);
+    });
+
+    const seen = {};
+    for (const w of existing) {
+      if (w && w.appleId) seen[String(w.appleId)] = true;
+    }
+    // Deleting an imported session is a decision, not a hiccup: its appleId is
+    // tombstoned by the Store, so re-importing the same export never brings it
+    // back. Callers planning against a hypothetical store can pass their own map.
+    const tombstoned = (opts.deletedAppleIds && typeof opts.deletedAppleIds === 'object')
+      ? opts.deletedAppleIds
+      : ((Store && typeof Store.deletedAppleIds === 'function') ? Store.deletedAppleIds(userId) || {} : {});
+
+    const items = [];
+    const skipped = [];
+    let hikes = 0;
+    let considered = 0;
+    for (const r of rows) {
+      if (!r || !r.date) continue;
+      if (since && r.date < since) continue;
+      considered++;
+      const isHike = r.activityType === 'Hiking';
+      if (isHike) hikes++;
+      const mode = isHike && hikeRuck ? 'ruck' : r.mode;
+      const id = String(r.appleId || '');
+      if (id && seen[id]) {
+        skipped.push({ date: r.date, name: r.name, durationMin: r.durationMin,
+          reason: DUP_REASON, detail: DUP_DETAIL });
+        continue;
+      }
+      if (id && tombstoned[id]) {
+        skipped.push({ date: r.date, name: r.name, durationMin: r.durationMin,
+          reason: DUP_REASON, detail: DELETED_DETAIL });
+        continue;
+      }
+      const clash = findClash(existing, r, mode);
+      if (clash) {
+        skipped.push({ date: r.date, name: r.name, durationMin: r.durationMin,
+          reason: OVERLAP_REASON, detail: 'Already logged as “' + (clash.name || 'a session') + '”' });
+        continue;
+      }
+      if (id) seen[id] = true;
+      items.push({ row: r, mode: mode, appleId: id });
+    }
+    return { items: items, skipped: skipped, hikes: hikes, considered: considered };
+  };
+
+  AppleHealth.applyWorkoutImport = function (parsed, userId, opts) {
+    opts = opts || {};
+    const plan = AppleHealth.planWorkoutImport(parsed, userId, opts);
+    const out = {
+      workoutsAdded: 0,
+      skipped: plan.skipped,
+      hikes: plan.hikes,
+      considered: plan.considered,
+      hikingAsRuck: opts.hikingAsRuck === true
+    };
+    const Store = window.Store;
+    if (!userId || !Store || !Store.addWorkout) return out;
+
+    // Build every session first, then hand the whole list to the Store: one
+    // persist for the import instead of two per session (a multi-year export is
+    // 1000+ sessions, and every persist re-serializes the entire state).
+    // appleId rides on the workout, not the entry, and addWorkout carries it in
+    // its fixed shape — no second write to patch it on.
+    const built = [];
+    for (const it of plan.items) {
+      const r = it.row;
+      const dur = r.durationMin > 0 ? r.durationMin : 0;
+      // Plain P1 cardio: no new entry types, nothing an old client can't read.
+      const entry = { id: U.uid('en'), type: 'cardio', mode: it.mode, durationMin: dur };
+      if (r.distanceKm > 0) entry.distanceKm = r.distanceKm;
+      if (r.avgHR > 0) entry.avgHR = r.avgHR;
+      if (r.maxHR > 0) entry.maxHR = r.maxHR;
+      const w = {
+        userId: userId,
+        date: r.date,
+        name: r.name || 'Workout',
+        durationMin: dur > 0 ? Math.max(1, Math.round(dur)) : null,
+        startedAt: typeof r.startedAt === 'number' ? r.startedAt : null,
+        endedAt: typeof r.endedAt === 'number' ? r.endedAt : null,
+        source: 'apple',
+        entries: [entry]
+      };
+      if (it.appleId) w.appleId = it.appleId;
+      built.push(w);
+    }
+    if (!built.length) return out;
+    if (typeof Store.addWorkouts === 'function') {
+      out.workoutsAdded = (Store.addWorkouts(built) || []).length;
+      return out;
+    }
+    // Older Store without the batch entry point: write one at a time, and only
+    // patch the appleId on when that Store's fixed shape dropped it.
+    for (const w of built) {
+      const saved = Store.addWorkout(w);
+      if (saved && saved.id && w.appleId && !saved.appleId && Store.updateWorkout) {
+        Store.updateWorkout(saved.id, { appleId: w.appleId });
+      }
+      out.workoutsAdded++;
+    }
+    return out;
+  };
+
+  AppleHealth.WORKOUT_MODES = WORKOUT_MODES;
+
   /* ---------- CSV export ---------- */
 
   function csvField(v) {
@@ -523,7 +820,7 @@
     '<li>Scroll to the bottom and tap <strong>Export All Health Data</strong>, then confirm with <strong>Export</strong>.</li>',
     '<li>Give it a minute — Health bundles everything into a single <code>export.zip</code> file.</li>',
     '<li><strong>AirDrop</strong> the file to this device, or save it to <strong>Files</strong> (or email it to yourself).</li>',
-    '<li>Come back here and <strong>upload export.zip</strong> — or the <code>export.xml</code> inside it. IronLog pulls out strength workouts, body weight, body fat, steps, resting heart rate, active energy, exercise minutes, VO₂max and sleep. Large files are fine: everything is parsed on your device and never leaves it.</li>',
+    '<li>Come back here and <strong>upload export.zip</strong> — or the <code>export.xml</code> inside it. IronLog pulls out strength workouts, runs, walks, hikes, rides, swims and rows, body weight, body fat, steps, resting heart rate, active energy, exercise minutes, VO₂max and sleep. Large files are fine: everything is parsed on your device and never leaves it.</li>',
     '</ol>',
     '<h3>Bonus: one-tap weigh-ins with Apple Shortcuts</h3>',
     '<p>Make logging body weight effortless — it lands in Apple Health, ready for your next import:</p>',
