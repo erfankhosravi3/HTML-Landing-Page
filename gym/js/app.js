@@ -506,7 +506,10 @@
         wordmarkHTML() +
       '</a>' +
       '<div class="topbar-actions">' +
-        '<button type="button" class="btn icon ghost" id="sync-btn" title="Sync is off" aria-label="Sync status">' +
+        // Says what it does. It navigates to Settings, so the label has to
+        // mention that rather than describing only the dot it renders.
+        '<button type="button" class="btn icon ghost" id="sync-btn" title="Sync is off — open Settings" ' +
+          'aria-label="Sync status — open Settings">' +
           '<span class="sync-dot off" id="sync-dot"></span>' +
         '</button>' +
         '<button type="button" class="avatar" id="user-btn" aria-label="Switch profile" aria-haspopup="menu">💪</button>' +
@@ -690,6 +693,18 @@
           '<span class="leading plain" style="color:var(--text-2)">' + icons.users + '</span>' +
           '<span class="body"><span class="title">Manage profiles</span></span>' +
         '</button>' +
+        /* Settings belongs here. The sidebar has a Settings item, but the
+           sidebar only exists at >=768px — on a phone the ONLY route to
+           Settings was the topbar sync-status dot, a button labelled "Sync
+           status" that gives no hint it also opens Settings. Everything a
+           person configures (units, theme, mode, Apple Health, the coach key,
+           backups) sat behind that. Tapping your own avatar is where people
+           look for their own settings, so it goes here. */
+        '<button type="button" class="list-row" data-settings style="min-height:48px;border:0;background:none">' +
+          '<span class="leading plain" style="color:var(--text-2)">' + icons.settings + '</span>' +
+          '<span class="body"><span class="title">Settings</span>' +
+            '<span class="sub">Units, appearance, mode, backups</span></span>' +
+        '</button>' +
       '</div>');
     document.body.appendChild(userMenuEl);
     const r = anchor.getBoundingClientRect();
@@ -708,6 +723,11 @@
     U.on(userMenuEl, 'click', '[data-manage]', function () {
       closeUserMenu();
       App.navigate('profiles');
+    });
+
+    U.on(userMenuEl, 'click', '[data-settings]', function () {
+      closeUserMenu();
+      App.navigate('settings');
     });
     setTimeout(function () {
       document.addEventListener('click', onDocClickMenu, true);
