@@ -1620,64 +1620,35 @@
   App.registerView('settings', { title: 'Settings', icon: icons.settings, nav: false, order: 90, render: renderSettings });
   App.registerView('profiles', { title: 'Profiles', icon: icons.users, nav: false, order: 91, render: renderProfiles });
 
-  // P3.5: a guided session interrupted mid-run (reload/crash) is offered back
-  // at boot — Resume continues at the same step, Discard drops it; closing the
-  // dialog keeps it for next time. Mirrors the activeWorkout draft semantics
-  // (another profile's session names its owner and switches on resume).
-  function offerPendingGuidedSession() {
+  // P4.5 — ONE LIVE SESSION. P3.5's player kept a second session record at
+  // 'ironlog/activeSession' (its own compiled timeline + actuals) and offered
+  // it back here at boot. There is exactly ONE session concept now: the
+  // 'ironlog/activeWorkout' draft, whose existing resume flow covers guided
+  // sessions too (the log view renders it, the fab dot below hints at it).
+  // A stale shadow session left behind by a shipped P3.5 client is DISCARDED
+  // on boot — never resumed, never allowed to compete with the draft.
+  function discardLegacyGuidedSession() {
     const P = window.Player;
-    if (!P || typeof P.resumePending !== 'function') return;
-    const pend = P.resumePending();
-    if (!pend) return;
-    if (!Store.state.users.length) return; // onboarding first
-    const owner = pend.userId
-      ? Store.state.users.find(function (x) { return x.id === pend.userId; })
-      : Store.currentUser();
-    if (!owner) { P.discardPending(); return; } // orphaned (profile deleted)
-    // Mode gate: guided sessions are Performance-mode only. If the owner has
-    // since switched to simple mode, show nothing (simple mode stays
-    // byte-identical) but KEEP the pending — switching back to performance
-    // mode makes the offer reappear.
-    if (!(owner.settings && owner.settings.trainingProfile === 'performance')) return;
-    App.modal({
-      title: 'Guided session in progress',
-      content: '<p class="text-2" style="font-size:14px;line-height:1.55;margin:4px 0 8px">' +
-        U.esc(owner.name) + ' has an unfinished guided session — “' +
-        U.esc(pend.name) + '”. Resume it where it left off?</p>',
-      actions: [
-        {
-          label: 'Discard',
-          kind: 'danger',
-          onClick: function () {
-            P.discardPending();
-            App.toast('Session discarded');
-          }
-        },
-        {
-          label: 'Resume',
-          kind: 'primary',
-          onClick: function () {
-            const cur = Store.currentUser();
-            if (!cur || cur.id !== owner.id) Store.setCurrentUser(owner.id);
-            if (!P.resume()) App.toast('Could not resume that session', 'err');
-          }
-        }
-      ]
-    });
+    if (P && typeof P.discardLegacySession === 'function') {
+      try { P.discardLegacySession(); return; } catch (e) { /* fall through */ }
+    }
+    try { localStorage.removeItem('ironlog/activeSession'); }
+    catch (e) { /* storage unavailable */ }
   }
 
   App.init = function () {
     Store.load();
+    discardLegacyGuidedSession();
     buildChrome();
     window.addEventListener('hashchange', onHashChange);
     Store.subscribe(scheduleRerender);
     if (window.Sync && Sync.onStatus) Sync.onStatus(refreshSyncDot);
-    // another tab may start/finish a workout draft — keep the fab dot honest
+    // another tab may start/finish a workout draft (guided or not — one record)
+    // — keep the fab dot honest
     window.addEventListener('storage', function (e) {
       if (e.key === 'ironlog/activeWorkout') updateChrome();
     });
     render();
-    offerPendingGuidedSession();
   };
 
   window.App = App;

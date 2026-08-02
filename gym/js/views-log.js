@@ -85,6 +85,17 @@
 
   let draft = null;
 
+  /* P4.5 — set identity. Timers bind to (entryId, _sid), never to an array
+     index or an object reference (repaint() rebuilds root.innerHTML, which
+     destroys both). `_sid` is DRAFT-LOCAL and provably never reaches Store or
+     sync: cleanSetworkEntry skips '_'-prefixed keys at entry AND set level,
+     buildFinishedEntries/openWorkoutEdit/openMixedWorkoutEdit build lift sets
+     as 4-key literals, and the finish payload enumerates its fields. Do NOT
+     turn this into a persisted set id — normalizeSet rebuilds lift sets to
+     four keys on every client, so a persisted id would survive on setwork and
+     vanish on lifts (asymmetric set identity is a permanent trap). */
+  function sidOf(set) { return set._sid || (set._sid = U.uid('s')); }
+
   function loadDraft() {
     try {
       const raw = localStorage.getItem(DRAFT_KEY);
@@ -92,26 +103,122 @@
       const d = JSON.parse(raw);
       if (!d || typeof d !== 'object' || !Array.isArray(d.entries)) return null;
       d.entries = d.entries.filter(function (en) { return en && typeof en === 'object'; });
+      let minted = false;
       d.entries.forEach(function (en) {
         if (!en.id) en.id = U.uid('en');
-        if (!Array.isArray(en.sets)) en.sets = [];
+        // Only shapes that legitimately carry sets get one grown for them.
+        // A cardio/circuit/mobility entry is a typed blob that saves verbatim,
+        // so injecting `sets: []` here put an empty array on the stored
+        // workout (cleanTypedEntry copies unknown keys through).
+        if (isSetBearingEntry(en) && !Array.isArray(en.sets)) en.sets = [];
+        // Backfill set identity alongside the entry-id backfill above. Setwork
+        // only: those are the rows the Session can drive, and lift draft rows
+        // stay byte-for-byte what they are today.
+        if (en.type !== 'setwork') return;
+        en.sets.forEach(function (s) {
+          if (s && typeof s === 'object' && !s._sid) { sidOf(s); minted = true; }
+        });
       });
+      // Let the focus view's substrate backfill anything else it needs on the
+      // same pass (its backfill is idempotent and only fills what is missing).
+      if (playerSession() && playerSession().backfill(d)) minted = true;
+      // Write the backfill straight back: renderLog re-reads the draft on every
+      // render, so an unpersisted _sid would be regenerated and orphan a
+      // running timer.
+      if (minted) {
+        try { localStorage.setItem(DRAFT_KEY, JSON.stringify(d)); } catch (e) { /* storage full */ }
+      }
       return d;
     } catch (e) {
       return null;
     }
   }
 
+  /* P4.5 — THE reconcile choke point. Every draft mutation already funnels
+     through here (mountEditor's ctx.persist === saveDraft for the live draft,
+     plus the handful of direct saveDraft() calls), so retargeting the running
+     timer and repainting the focus view need no extra hooks anywhere. */
+  let draftRev = 0;
+  const draftSubs = [];
+
+  function subscribeDraft(fn) {
+    if (typeof fn !== 'function') return function () {};
+    draftSubs.push(fn);
+    return function () {
+      const i = draftSubs.indexOf(fn);
+      if (i >= 0) draftSubs.splice(i, 1);
+    };
+  }
+
+  function notifySubscribers(rev) {
+    if (!draftSubs.length) return;
+    draftSubs.slice().forEach(function (fn) {
+      try { fn(rev, draft); } catch (e) { /* a bad subscriber never breaks a save */ }
+    });
+  }
+
+  let reconciling = false;
+
   function saveDraft() {
     if (!draft) return;
+    draftRev++;
     try { localStorage.setItem(DRAFT_KEY, JSON.stringify(draft)); } catch (e) { /* storage full */ }
+    // A reconcile that expires a timer WRITES, and that write must not
+    // re-enter this function — the localStorage line above still runs for it.
+    if (reconciling) return;
+    reconciling = true;
+    try {
+      const PS = playerSession();  // retarget / orphan-check the running timer
+      if (PS) { try { PS.reconcile(); } catch (e) { /* never break a save */ } }
+    } finally {
+      reconciling = false;
+    }
+    notifySubscribers(draftRev);  // focus view repaints; the builder opts out
+  }
+
+  /* js/player.js (loaded AFTER this file) owns the ONE timing engine
+     (Player.Session) and the focus presentation. This file owns draft storage,
+     the builder DOM and the finish flow, and binds itself as the engine's
+     host: the engine reads and writes the session record only through these
+     accessors, which is what keeps it I/O-free and unit-testable in Node.
+     Reference it lazily and never require it. */
+  let playerBound = false;
+  function playerSession() {
+    const P = window.Player;
+    const S = P && P.Session;
+    if (!S || typeof S.reconcile !== 'function' || typeof S.backfill !== 'function') return null;
+    if (!playerBound && typeof S.bind === 'function') {
+      playerBound = true;
+      try {
+        S.bind({
+          getDraft: function () { return draft; },
+          saveDraft: saveDraft,
+          setDraft: function (d) { draft = d; },
+          clearDraft: clearDraft,
+          rerender: function () { App.rerender(); },
+          // 'the ✓ would have filled this in' — the engine asks before it
+          // records a carry it stopped with nothing typed. It never measures
+          // distance or load itself.
+          prefill: fillFromPrev
+        });
+        S.subscribe(onSessionState);
+      } catch (e) { /* an unbindable player just stays a no-op */ }
+    }
+    return S;
   }
 
   function clearDraft() {
+    const S = playerSession();
+    if (S) { try { S.cancel(); } catch (e) { /* nothing on the clock */ } }
     draft = null;
     stopRest();
     stopHold();
+    dismissPill();
+    clearRunningRow();
+    lastSessSig = 'idle';
+    draftRev++;
     try { localStorage.removeItem(DRAFT_KEY); } catch (e) { /* ignore */ }
+    notifySubscribers(draftRev);
   }
 
   function defaultDraftName() {
@@ -132,6 +239,7 @@
     const u = user();
     if (!u) return;
     opts = opts || {};
+    Session.cancel();
     draft = {
       userId: u.id,
       date: U.todayStr(),
@@ -141,6 +249,17 @@
       notes: '',
       fromTemplateId: opts.fromTemplateId || null
     };
+    // P4.5 live-session layer — all draft-local ('_'-prefixed, never persisted
+    // to Store). Absent keys resolve through the precedence chain instead.
+    if (PACE_KIND_DEFAULT[opts.kind]) draft._kind = opts.kind;
+    if (paceVal(opts.pace)) draft._pace = paceVal(opts.pace);
+    if (opts.view === 'focus' || opts.view === 'builder') draft._view = opts.view;
+    if (opts.routine && typeof opts.routine === 'object') draft._routine = opts.routine;
+    if (opts.circuit && typeof opts.circuit === 'object') draft._circuit = opts.circuit;
+    draft.entries.forEach(function (en) {
+      if (!en || en.type !== 'setwork') return;
+      (en.sets || []).forEach(function (s) { if (s && typeof s === 'object') sidOf(s); });
+    });
     saveDraft();
   }
 
@@ -210,6 +329,50 @@
     return prev.length ? prev[Math.min(i, prev.length - 1)] : null;
   }
 
+  /* ---------- P4.5: a PRESCRIPTION is never an observation ----------
+     A routine's targets must not be seeded into the very fields the finish
+     flow reads as "what happened" (reps/weightKg on a lift set, holdSec/reps/
+     distanceM on a setwork set) — that is how an untouched guided session came
+     to save work nobody did. The seeder (Player.draftFromRoutine) emits BLANK
+     sets carrying the item's targets in draft-local, '_t'-prefixed keys:
+
+       lift    : _tWeightKg, _tReps
+       setwork : _tHoldSec, _tReps, _tDistanceM, _tWeightKg
+
+     and the builder renders them as PLACEHOLDERS, exactly like the template
+     path's _repLow/_repHigh. '_'-prefixed keys never persist (cleanSetworkEntry
+     skips them at entry and set level; the lift save paths build 4-key
+     literals), so nothing here reaches Store or sync.
+
+     Nothing below invents a target: with no '_t' keys present every reader
+     falls straight through to today's last-time hint, so an older seed — or a
+     build whose seeder has not been updated yet — renders and saves exactly as
+     it does now. */
+  function tgtNum(s, key) {
+    const n = Number(s && s['_t' + key]);
+    return n > 0 ? n : 0;
+  }
+
+  // The prescription shaped like a hint set, so every prefill path can consume
+  // it unchanged. null when the set carries no targets.
+  const TARGET_KEYS = [
+    { t: 'HoldSec', k: 'holdSec' }, { t: 'Reps', k: 'reps' },
+    { t: 'DistanceM', k: 'distanceM' }, { t: 'WeightKg', k: 'weightKg' }
+  ];
+
+  function targetSetOf(s) {
+    if (!s) return null;
+    const o = {};
+    let any = false;
+    TARGET_KEYS.forEach(function (d) {
+      const n = tgtNum(s, d.t);
+      if (n <= 0) return;
+      o[d.k] = d.k === 'weightKg' ? n : Math.round(n);
+      any = true;
+    });
+    return any ? o : null;
+  }
+
   /* ======================================================================
      P3 — structured set work ('setwork' entries: holds, carries, stretches).
      FORBIDDEN NAMES (binding, see ARCHITECTURE.md): the entry key is
@@ -231,6 +394,13 @@
 
   function isSetworkEntry(en) {
     return !!en && en.type === 'setwork';
+  }
+
+  // Shapes that legitimately carry a `sets` array (the same test player.js
+  // uses). Everything else — cardio/circuit, mobility, test blobs — is a typed
+  // entry that saves verbatim, and must never grow a `sets` key.
+  function isSetBearingEntry(en) {
+    return isLiftEntry(en) || isSetworkEntry(en);
   }
 
   function setShapeOf(ex) {
@@ -279,7 +449,7 @@
     }
     const n = U.clamp(Number(nSets) || (shape === 'stretch' ? 2 : 3), 1, 10);
     for (let i = 0; i < n; i++) {
-      const s = { done: false };
+      const s = { done: false, _sid: U.uid('s') };
       if (perSide) s.side = i % 2 === 0 ? 'L' : 'R';
       if (seed) {
         if ((seed.holdSec || 0) > 0) s.holdSec = seed.holdSec;
@@ -337,6 +507,54 @@
     return prev[Math.min(i, prev.length - 1)];
   }
 
+  /* P4.5 — the host's prefill hint, handed to Player.Session.bind(). Mirrors
+     the ✓ behavior: an untouched set accepts the values it would have been
+     prefilled with, so a carry stopped on the stopwatch still saves. The
+     engine never invents these — it asks, exactly once, at record time. */
+  function swFillFromPrev(en, s) {
+    if (!en || !s || swValidSet(s) || !draft) return;
+    const i = (en.sets || []).indexOf(s);
+    // the row's own prescribed target outranks the carry-forward and the hint
+    let src = targetSetOf(s);
+    if (!src) {
+      for (let j = i - 1; j >= 0; j--) {
+        if (swValidSet(en.sets[j])) { src = en.sets[j]; break; }
+      }
+      if (!src) src = swHintSetOf(en, prevSetworkFor(draft.userId, en.exerciseRef), i);
+    }
+    if (!src) return;
+    if ((src.distanceM || 0) > 0 && !((s.distanceM || 0) > 0)) s.distanceM = src.distanceM;
+    if ((src.weightKg || 0) > 0 && !((s.weightKg || 0) > 0)) s.weightKg = src.weightKg;
+    if ((src.reps || 0) > 0 && !((s.reps || 0) > 0)) s.reps = src.reps;
+    if ((src.holdSec || 0) > 0 && !((s.holdSec || 0) > 0)) s.holdSec = src.holdSec;
+  }
+
+  /* P4.5 — the SAME hint for lift entries. swFillFromPrev looks history up by
+     en.exerciseRef, which a lift entry does not have, so it bailed on every
+     lift row: a set driven to completion (focus 'Done ✓', or a metronome that
+     wrote only its rep count) with nothing typed recorded nothing at all, or
+     recorded reps at 0 kg. This mirrors onCheck() exactly — the row's own
+     prescribed target, then the nearest earlier filled row, then last time —
+     and delegates setwork rows to the cleaner that already handles them. */
+  function fillFromPrev(en, s) {
+    if (!en || !s) return;
+    if (isSetworkEntry(en)) { swFillFromPrev(en, s); return; }
+    if (!isLiftEntry(en) || !en.exerciseId || !draft) return;
+    if ((s.weightKg || 0) > 0 && (s.reps || 0) > 0) return;
+    const i = (en.sets || []).indexOf(s);
+    let src = targetSetOf(s);
+    if (!src) {
+      for (let j = i - 1; j >= 0; j--) {
+        const p = en.sets[j];
+        if ((p.weightKg || 0) > 0 || (p.reps || 0) > 0) { src = p; break; }
+      }
+      if (!src) src = hintSetOf(prevSetsFor(draft.userId, en.exerciseId), Math.max(0, i));
+    }
+    if (!src) return;
+    if (!((s.weightKg || 0) > 0)) s.weightKg = src.weightKg || 0;
+    if (!((s.reps || 0) > 0)) s.reps = src.reps || 0;
+  }
+
   function swHintText(hs, rowShape) {
     if (!hs) return '';
     const w = (hs.weightKg || 0) > 0 ? dispW(hs.weightKg) : '';
@@ -374,8 +592,12 @@
         if (!((Number(o[k]) || 0) > 0)) delete o[k];
       });
       if (o.side !== 'L' && o.side !== 'R') delete o.side;
-      if (stretch) o.intensity = depth;
-      else delete o.intensity;
+      // P4.5: a set's OWN intensity wins over the card-level aim, so per-set
+      // depth captured live (the rest-step depth ask) survives the save.
+      if (stretch) {
+        const own = parseInt(o.intensity, 10);
+        o.intensity = own >= 1 && own <= 4 ? own : depth;
+      } else delete o.intensity;
       sets.push(o);
     });
     if (!sets.length) return null;
@@ -401,7 +623,7 @@
     const en = { id: U.uid('en'), type: 'setwork', exerciseRef: x.exerciseRef, notes: '', sets: [] };
     if (x.method) en.method = x.method;
     (x.sets || []).forEach(function (s) {
-      const c = { done: false };
+      const c = { done: false, _sid: U.uid('s') };
       if ((s.reps || 0) > 0) c.reps = s.reps;
       if ((s.holdSec || 0) > 0) c.holdSec = s.holdSec;
       if ((s.distanceM || 0) > 0) c.distanceM = s.distanceM;
@@ -409,7 +631,7 @@
       if (s.side === 'L' || s.side === 'R') c.side = s.side;
       en.sets.push(c);
     });
-    if (!en.sets.length) en.sets.push({ done: false });
+    if (!en.sets.length) en.sets.push({ done: false, _sid: U.uid('s') });
     const first = (x.sets || []).find(function (s) { return s && s.intensity >= 1; });
     if (swIsStretch(en)) en._depth = first ? U.clamp(Math.round(first.intensity), 1, 4) : 2;
     return en;
@@ -485,6 +707,11 @@
 
   function startRest(sec) {
     if (!sec || sec <= 0) return;
+    // P4.5 — ONE rest authority. While the live Session is driving a step it
+    // owns the single pill slot; a legacy advisory rest mounted on top of it
+    // would cover the running label AND fire a false 'Rest done' cue mid-rest.
+    // (Session is initialised long before any click can reach this.)
+    if (Session.isRunning()) return;
     stopHold(); // one pill at a time — the hold countdown owns the same slot
     rest.endsAt = Date.now() + sec * 1000;
     rest.totalSec = sec;
@@ -519,23 +746,26 @@
      cancels a running rest timer (and vice versa). Typing always works; the
      timer is never required. */
 
-  const holdT = { el: null, timeEl: null, fillEl: null, iv: null, endsAt: 0, totalSec: 0, onDone: null };
+  const holdT = { el: null, timeEl: null, fillEl: null, iv: null, endsAt: 0, totalSec: 0, startedAt: 0, onDone: null };
 
   function startHold(sec, onDone) {
     if (!sec || sec <= 0) return;
     stopRest();
     stopHold();
-    holdT.endsAt = Date.now() + sec * 1000;
+    holdT.startedAt = Date.now();
+    holdT.endsAt = holdT.startedAt + sec * 1000;
     holdT.totalSec = sec;
     holdT.onDone = onDone || null;
     holdT.el = U.el('<div class="rest-timer hold-pill" role="timer">' +
       '<span style="display:inline-flex;color:var(--blue)">' + ic().timer + '</span>' +
       '<span class="time">' + fmtClock(sec) + '</span>' +
       '<span class="track"><span class="fill" style="width:100%"></span></span>' +
+      '<button type="button" class="btn small primary" data-h="done">Done</button>' +
       '<button type="button" class="btn small ghost" data-h="cancel">Cancel</button>' +
       '</div>');
     holdT.timeEl = holdT.el.querySelector('.time');
     holdT.fillEl = holdT.el.querySelector('.fill');
+    holdT.el.querySelector('[data-h="done"]').addEventListener('click', function () { endHoldEarly(); });
     holdT.el.querySelector('[data-h="cancel"]').addEventListener('click', function () { stopHold(); });
     document.body.appendChild(holdT.el);
     holdT.iv = setInterval(tickHold, 250);
@@ -559,10 +789,754 @@
 
   function finishHold() {
     const done = holdT.onDone;
+    const actual = (Date.now() - holdT.startedAt) / 1000;
     stopHold();
     if (navigator.vibrate) { try { navigator.vibrate([180, 90, 180]); } catch (e) { /* ignore */ } }
     App.toast('Hold done', 'ok');
-    if (typeof done === 'function') done();
+    if (typeof done === 'function') done(actual);
+  }
+
+  // Early stop from the sheet-level hold pill — BINDING (P4.5): holdSec is the
+  // seconds ACTUALLY held, so stopping short records the short time.
+  function endHoldEarly() {
+    const done = holdT.onDone;
+    const actual = (Date.now() - holdT.startedAt) / 1000;
+    stopHold();
+    if (typeof done === 'function') done(actual);
+  }
+
+  /* ======================================================================
+     P4.5 — ONE LIVE SESSION: pace as a layer.
+
+     The draft ('ironlog/activeWorkout') is the single session record for EVERY
+     session type. The timing engine below drives draft.entries[i].sets[j]
+     directly — there is no compiled timeline and no shadow copy of actuals.
+     The builder and the focus view are two renderers over the same state.
+     ====================================================================== */
+
+  const PACE_ORDER = ['off', 'set', 'exercise', 'session'];
+  const PACE_DEFS = [
+    { id: 'off', label: 'Off', sub: 'I tap everything — same as lifting' },
+    { id: 'set', label: 'This set', sub: 'One set at a time, on the row you tap' },
+    { id: 'exercise', label: 'This exercise', sub: 'Runs its sets + rests, then hands back' },
+    { id: 'session', label: 'Whole session', sub: 'Hands-free start to finish · default for circuits' }
+  ];
+  const PACE_SHORT = { off: 'Off', set: 'Set', exercise: 'Exercise', session: 'Session' };
+  // Binding defaults table (ARCHITECTURE.md P4.5). Lift 'off' is today's exact
+  // behavior — that is what keeps the family lift flow byte-identical.
+  const PACE_KIND_DEFAULT = {
+    durability: 'set', stretch: 'set', lift: 'off',
+    circuit: 'session', interval: 'set', cardio: 'off'
+  };
+  const PACE_KIND_ROWS = [
+    { id: 'durability', label: 'Durability' },
+    { id: 'stretch', label: 'Stretch' },
+    { id: 'lift', label: 'Lift' },
+    { id: 'circuit', label: 'Circuit / AMRAP' },
+    { id: 'interval', label: 'Intervals (run · swim)' },
+    { id: 'cardio', label: 'Steady cardio', fixed: 'Off — quick log' }
+  ];
+  const DEFAULT_REST_SEC = 60;
+  const DEFAULT_HOLD_SEC = 30;
+
+  // ◎ — switch to the focus presentation (not in App.icons)
+  const FOCUS_ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" ' +
+    'fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" ' +
+    'aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.4" fill="currentColor" stroke="none"/></svg>';
+
+  function paceVal(v) { return PACE_ORDER.indexOf(v) >= 0 ? v : null; }
+
+  /* ---------- storage: user.settings.pace / cadence / restSec ----------
+     VERIFIED SAFE: store.js mergeSettings copies every key it does not know
+     through untouched (the P0 forward-compat clause), so old clients preserve
+     these. settings.restTimerSec and settings.playerVoice keep their current
+     meanings — restTimerSec still drives today's advisory lift rest pill. */
+
+  function paceSettingsOf(u) {
+    const raw = ((u && u.settings) || {}).pace;
+    const src = raw && typeof raw === 'object' ? raw : {};
+    const out = {};
+    for (const k in PACE_KIND_DEFAULT) out[k] = paceVal(src[k]) || PACE_KIND_DEFAULT[k];
+    return out;
+  }
+
+  /* The map to WRITE BACK. settings.pace is stored with REPLACE semantics
+     (store.js mergeSettings swaps an unknown key wholesale), which is only safe
+     because every writer hands in the COMPLETE map. paceSettingsOf above is the
+     DISPLAY resolver: it emits exactly the kinds this build knows, so using it
+     as the write map silently deletes kinds a newer client stored — and even
+     'mixed', which player.js's own PACE_DEFAULTS has and this table does not.
+     This starts from the RAW stored object so unknown kinds survive verbatim,
+     then backfills the known defaults. */
+  function paceSettingsForWrite(u) {
+    const raw = ((u && u.settings) || {}).pace;
+    const src = raw && typeof raw === 'object' ? raw : {};
+    const out = {};
+    for (const k in src) {
+      if (!Object.prototype.hasOwnProperty.call(src, k)) continue;
+      // known kinds are coerced to a legal pace; unknown kinds pass through
+      out[k] = PACE_KIND_DEFAULT[k] ? (paceVal(src[k]) || PACE_KIND_DEFAULT[k]) : src[k];
+    }
+    for (const k in PACE_KIND_DEFAULT) if (!paceVal(out[k])) out[k] = PACE_KIND_DEFAULT[k];
+    return out;
+  }
+
+  function cadenceSettingOf(u) { return ((u && u.settings) || {}).cadence === true; }
+
+  function restSecSettingOf(u) {
+    const n = Number(((u && u.settings) || {}).restSec);
+    return n > 0 ? Math.round(n) : DEFAULT_REST_SEC;
+  }
+
+  // Session kind for the defaults table. Explicit at seed time (the entry
+  // sheets set it); otherwise derived from what is actually in the draft.
+  function draftKind(d) {
+    d = d || draft;
+    if (!d) return 'lift';
+    if (PACE_KIND_DEFAULT[d._kind]) return d._kind;
+    const S = playerSession();
+    if (S) return S.kindOfDraft(d);
+    const sw = (d.entries || []).filter(isSetworkEntry);
+    if (!sw.length) return 'lift';
+    return sw.every(swIsStretch) ? 'stretch' : 'durability';
+  }
+
+  /* ---------- pace / driver resolution: ONE authority ----------
+     Player.Session (js/player.js) owns the precedence chain
+       user.settings.pace[kind] -> routine.pace -> item.pace -> draft._pace
+         -> entry._pace -> the button just tapped,
+     the rest chain that mirrors it, the per-shape driver table and the tempo
+     prescription. The wrappers below keep the names the builder DOM and the
+     window.ViewsLog consumers already use and add NOTHING of their own. With
+     no player.js loaded (the Node smoke harness) they answer inert defaults,
+     so the builder still renders — it just cannot drive anything. */
+
+  function resolvePace(en, d) {
+    const S = playerSession();
+    return S ? S.resolvePace(en || null, null, d || draft || undefined) : 'off';
+  }
+
+  function resolveCadence(d) {
+    const S = playerSession();
+    return S ? !!S.resolveCadence(null, d || draft || undefined) : false;
+  }
+
+  function resolveRestSec(en, d) {
+    const S = playerSession();
+    return S ? S.restSecFor(en || null, d || draft || undefined) : restSecSettingOf(user());
+  }
+
+  /* Tempo is a PRESCRIPTION, never an observation: normalizeSet rebuilds every
+     lift set to exactly {weightKg, reps, type, rpe} on this and every older
+     client, so a tempo can physically never be recorded on a set. */
+  function resolveTempo(en, d) {
+    const S = playerSession();
+    return S ? S.tempoOf(en || null, d || draft || undefined) : null;
+  }
+
+  /* ---------- per-shape set drivers ----------
+     Governing rule: the app drives every step it can time deterministically;
+     the user triggers every step it cannot. The table lives in Player.Session;
+     this maps its {driver,...} answer onto the 'countdown'|'stopwatch'|'tempo'
+     string the builder rows and the ViewsLog consumers read. */
+  function driverFor(en, s, d) {
+    const S = playerSession();
+    if (!S || !en || !s) return null;
+    const drv = S.driverFor(en, s, d || draft || undefined);
+    if (!drv) return null;
+    if (drv.driver === 'stopwatch') return 'stopwatch';
+    return drv.driver === 'metronome' ? 'tempo' : 'countdown';
+  }
+
+  function entryHasDriver(en) {
+    return ((en && en.sets) || []).some(function (s) { return !!driverFor(en, s); });
+  }
+
+  function targetSecFor(en, s) {
+    const S = playerSession();
+    return S && en && s ? S.targetSecOf(en, s) : 0;
+  }
+
+  /* ======================================================================
+     Session — a FAÇADE over Player.Session (js/player.js), which owns the
+     app's one and only timer slot.
+
+     Nothing here holds session state: every verb forwards, and every read is a
+     projection of Player.Session.state(). The projection keeps the
+     {kind, mode, scope} snapshot shape the builder rows, the pill and the
+     P4.5 probes already read, and answers null when nothing is on the clock.
+     ====================================================================== */
+
+  const Session = {};
+  let liveRepaint = null;   // builder repaint hook (set by renderActiveDraft)
+  let lastSessSig = 'idle'; // what the builder last painted a session for
+
+  function sessEntry(id) {
+    if (!draft) return null;
+    return (draft.entries || []).find(function (x) { return x && x.id === id; }) || null;
+  }
+
+  function sessSet(en, sid) {
+    const list = (en && en.sets) || [];
+    for (let i = 0; i < list.length; i++) if (list[i] && list[i]._sid === sid) return list[i];
+    return null;
+  }
+
+  function sessIndex(en, sid) {
+    const list = (en && en.sets) || [];
+    for (let i = 0; i < list.length; i++) if (list[i] && list[i]._sid === sid) return i;
+    return -1;
+  }
+
+  // The running step, or null when the slot is free.
+  function sessionStep() {
+    const S = playerSession();
+    if (!S || !S.timer()) return null;
+    const st = S.state();
+    if (!st || (!st.running && !st.boundary)) return null;
+    return {
+      kind: st.phase === 'rest' ? 'rest' : 'work',
+      entryId: st.entryId,
+      sid: st.sid,
+      mode: st.driver === 'stopwatch' ? 'stopwatch' : 'countdown',
+      scope: st.chain || 'set',
+      targetSec: st.targetSec,
+      boundary: !!st.boundary,
+      paused: !!st.paused,
+      elapsedSec: st.elapsedSec,
+      remainSec: st.remainSec
+    };
+  }
+
+  Session.state = sessionStep;
+  Session.isRunning = function () { return !!sessionStep(); };
+
+  // Row-level state for renderers (builder rows, focus rows).
+  Session.rowState = function (entryId, sid) {
+    const st = sessionStep();
+    if (!st || st.entryId !== entryId || st.sid !== sid) return null;
+    const pct = st.mode === 'countdown' && st.targetSec > 0
+      ? U.clamp((st.elapsedSec / st.targetSec) * 100, 0, 100)
+      : 0;
+    return {
+      kind: st.kind, mode: st.mode, boundary: st.boundary, paused: st.paused,
+      remainSec: st.remainSec, elapsedSec: st.elapsedSec, pct: pct
+    };
+  };
+
+  // Direct manipulation: tapping a set's NUMBER runs exactly that set, whatever
+  // the resolved pace — the button just tapped wins for that one action.
+  Session.runSet = function (entryId, sid, opts) {
+    const S = playerSession();
+    if (!S || !draft) return false;
+    const en = sessEntry(entryId);
+    const s = en ? sessSet(en, sid) : null;
+    if (!en || !s) return false;
+    if (!driverFor(en, s)) {
+      App.toast('Nothing to time here — tap ✓ when you finish the set', 'info');
+      return false;
+    }
+    opts = opts || {};
+    stopRest();
+    stopHold();
+    return S.runSet(entryId, sid, { pace: paceVal(opts.scope) || undefined }) !== false;
+  };
+
+  // Tapping a card's stopwatch runs that exercise (its sets + rests), then stops.
+  Session.runEntry = function (entryId) {
+    const S = playerSession();
+    if (!S || !draft) return false;
+    const en = sessEntry(entryId);
+    if (!en) return false;
+    const s = (en.sets || []).find(function (x) { return x && !x.done && driverFor(en, x); });
+    if (!s) { App.toast('All sets are done', 'info'); return false; }
+    stopRest();
+    stopHold();
+    return S.runExercise(entryId) !== false;
+  };
+
+  Session.runSession = function () {
+    const S = playerSession();
+    if (!S || !draft) return false;
+    const es = draft.entries || [];
+    let found = null;
+    for (let j = 0; j < es.length && !found; j++) {
+      found = (es[j].sets || []).find(function (x) { return x && !x.done && driverFor(es[j], x); }) || null;
+    }
+    if (!found) { App.toast('Nothing left to run', 'info'); return false; }
+    stopRest();
+    stopHold();
+    return S.runSession() !== false;
+  };
+
+  // Cancel cleanly: keep the session, record nothing for the running step.
+  Session.cancel = function () {
+    const S = playerSession();
+    if (S) S.cancel();
+  };
+
+  Session.doneNow = function () {
+    const S = playerSession();
+    const st = sessionStep();
+    if (!S || !st) return;
+    if (st.boundary) { S.confirmBoundary(); return; }
+    if (st.kind === 'rest') { S.skipRest(); return; }
+    S.done();
+  };
+
+  /* The pill multiplexes Done / Skip rest / Record it onto ONE node, and the
+     first tap re-labels it synchronously — so a double-tap's second activation
+     silently means something the finger never aimed at (it skipped the driven
+     rest the first tap had just armed). Re-arm the control when its MEANING
+     changes: an activation landing inside the window on a different meaning is
+     the tail of a double-tap and is dropped. A deliberate later tap reads the
+     new label and works. The focus view is immune already (it rebuilds
+     .player-foot per phase), so this guard lives with the pill. */
+  const DONE_REARM_MS = 450;
+  const doneTap = { stamp: '', at: 0 };
+
+  function doneStampOf(st) {
+    return st ? st.kind + ':' + st.entryId + ':' + st.sid + (st.boundary ? ':b' : '') : '';
+  }
+
+  function armDoneTap() {
+    const stamp = doneStampOf(sessionStep());
+    const now = Date.now();
+    if (doneTap.stamp && doneTap.stamp !== stamp && now - doneTap.at < DONE_REARM_MS) {
+      doneTap.at = now; // a whole flurry of taps keeps the guard armed
+      return false;
+    }
+    doneTap.stamp = stamp;
+    doneTap.at = now;
+    return true;
+  }
+
+  Session.skipRest = function () {
+    const S = playerSession();
+    const st = sessionStep();
+    if (S && st && st.kind === 'rest') S.skipRest();
+  };
+
+  // ±15s adjusts the CURRENT step target only — it never writes back into the
+  // set, so a user-typed target is never clobbered by the remote control.
+  Session.adjust = function (deltaSec) {
+    const S = playerSession();
+    if (S) S.adjust(deltaSec);
+  };
+
+  Session.pause = function () { const S = playerSession(); if (S) S.pause(); };
+  Session.resume = function () { const S = playerSession(); if (S) S.resume(); };
+
+  /* Authoritative timer<->edit reconciliation lives in Player.Session and runs
+     inside saveDraft(), so every draft mutation is covered:
+       - editing the RUNNING set's target retargets live, preserving elapsed
+         (remain = newTarget - elapsed; already past => expire immediately)
+       - deleting the running SET or its ENTRY cancels cleanly, records nothing
+         and advances the cursor to the next pending set
+       - reordering follows, because the binding is by _sid
+       - the cursor is advisory: editing any other row never moves it */
+  Session.reconcile = function () {
+    const S = playerSession();
+    if (S) S.reconcile();
+  };
+
+  /* The engine publishes 'change' and 'tick'. The pill repaints on both (it is
+     a handful of text nodes); the BUILDER only repaints when the session
+     actually moved — a full repaint on every keystroke would eat the caret. */
+  function onSessionState() {
+    const st = sessionStep();
+    paintPill(st);
+    const ld = draft && draft._lastDone;
+    const sig = (st
+      ? st.kind + ':' + st.entryId + ':' + st.sid + (st.boundary ? 'b' : '') + (st.paused ? 'p' : '')
+      : 'idle') + '|' + (ld ? ld.sid + ':' + ld.at : '');
+    if (sig === lastSessSig) return;
+    lastSessSig = sig;
+    if (liveRepaint) liveRepaint();
+  }
+
+  /* ---------- the timer pill: a remote control for whichever row owns it,
+     however far the user has scrolled ---------- */
+
+  const pill = { el: null, timeEl: null, fillEl: null, labelEl: null, nextEl: null, doneEl: null };
+
+  function dismissPill() {
+    if (pill.el) { pill.el.remove(); pill.el = null; }
+    pill.timeEl = pill.fillEl = pill.labelEl = pill.nextEl = pill.doneEl = null;
+    doneTap.stamp = '';
+    doneTap.at = 0;
+  }
+
+  function buildPill() {
+    dismissPill();
+    pill.el = U.el('<div class="rest-timer sess-pill" role="timer">' +
+      '<span class="sess-ic">' + ic().timer + '</span>' +
+      '<span class="time">0:00</span>' +
+      '<button type="button" class="btn small ghost" data-s="minus">−15s</button>' +
+      '<button type="button" class="btn small ghost" data-s="plus">+15s</button>' +
+      '<button type="button" class="btn small primary" data-s="done">Done</button>' +
+      '<button type="button" class="btn icon ghost sess-x" data-s="cancel" aria-label="Stop timer">' +
+      ic().close + '</button>' +
+      '<span class="track"><span class="fill" style="width:0%"></span></span>' +
+      '<span class="sess-sub"><span class="l"></span><span class="r"></span></span>' +
+      '</div>');
+    pill.timeEl = pill.el.querySelector('.time');
+    pill.fillEl = pill.el.querySelector('.fill');
+    pill.labelEl = pill.el.querySelector('.sess-sub .l');
+    pill.nextEl = pill.el.querySelector('.sess-sub .r');
+    pill.doneEl = pill.el.querySelector('[data-s="done"]');
+    U.on(pill.el, 'click', 'button[data-s]', function (e, btn) {
+      const a = btn.getAttribute('data-s');
+      if (a === 'minus') Session.adjust(-15);
+      else if (a === 'plus') Session.adjust(15);
+      else if (a === 'done') { if (armDoneTap()) Session.doneNow(); }
+      else if (a === 'cancel') Session.cancel();
+    });
+    document.body.appendChild(pill.el);
+  }
+
+  // A rest is bound to the set it LEADS TO, so 'next' during a rest is the
+  // step the pill is already pointing at.
+  function stepLabels(st) {
+    if (!st || !draft) return { l: '', r: '' };
+    const en = sessEntry(st.entryId);
+    if (!en) return { l: '', r: '' };
+    const i = sessIndex(en, st.sid);
+    const total = (en.sets || []).length;
+    const name = exName(en.exerciseRef || en.exerciseId);
+    const s = sessSet(en, st.sid);
+    const side = s && (s.side === 'L' || s.side === 'R') ? ' ' + s.side : '';
+    const here = name + side + ' · set ' + (i + 1) + ' of ' + total;
+    if (st.kind === 'rest') return { l: 'Rest · next ' + here, r: '' };
+    let next = '';
+    if (st.scope !== 'set') {
+      const S = playerSession();
+      const nx = S ? S.next(draft) : null;
+      const sameEntry = nx && nx.entryId === en.id;
+      if (nx && (sameEntry || st.scope === 'session')) {
+        const nSide = nx.set.side === 'L' || nx.set.side === 'R' ? ' ' + nx.set.side : '';
+        next = sameEntry
+          // staying on this card — name the set, not the exercise again
+          ? 'Next: set ' + (sessIndex(en, nx.sid) + 1) + nSide
+          : 'Next: ' + exName(nx.entry.exerciseRef || nx.entry.exerciseId) + nSide;
+      }
+    }
+    return { l: here, r: next };
+  }
+
+  function paintPill(st) {
+    if (!st) {
+      if (pill.el) dismissPill();
+      clearRunningRow();
+      return;
+    }
+    // one pill at a time — the advisory rest / sheet hold pills share the slot.
+    // Evict them on EVERY paint, not just the first: an advisory pill that
+    // mounted AFTER the session pill would otherwise sit on top of it (both are
+    // pinned to the same anchor) and cover the running-step label.
+    stopRest();
+    stopHold();
+    if (!pill.el) buildPill();
+    const secs = st.mode === 'countdown' ? st.remainSec : st.elapsedSec;
+    const resting = st.kind === 'rest';
+    pill.el.classList.toggle('is-rest', resting);
+    pill.el.classList.toggle('is-boundary', st.boundary);
+    pill.timeEl.textContent = fmtClock(st.boundary ? st.targetSec : Math.ceil(secs));
+    const pct = st.mode === 'countdown' && st.targetSec > 0
+      ? U.clamp((st.remainSec / st.targetSec) * 100, 0, 100) : 100;
+    pill.fillEl.style.width = pct + '%';
+    if (pill.doneEl) pill.doneEl.textContent = resting ? 'Skip rest' : (st.boundary ? 'Record it' : 'Done');
+    const lab = stepLabels(st);
+    pill.labelEl.textContent = st.boundary
+      ? 'Ended while the screen was off — record it or discard'
+      : (st.paused ? 'Paused · ' + lab.l : lab.l);
+    pill.nextEl.textContent = lab.r;
+    if (resolveCadence() && !resting && !st.boundary) pill.el.classList.add('has-cadence');
+    else pill.el.classList.remove('has-cadence');
+    paintRunningRow(st);
+  }
+
+  function clearRunningRow() {
+    U.$$('.set-row.running').forEach(function (r) {
+      r.classList.remove('running', 'resting');
+      const p = r.querySelector('.sess-prog');
+      if (p) p.remove();
+      const inp = r.querySelector('input[readonly]');
+      if (inp) inp.removeAttribute('readonly');
+    });
+  }
+
+  function paintRunningRow(st) {
+    if (!st) return;
+    const root = document.getElementById('lg-entries');
+    if (!root) return;
+    const row = root.querySelector('.set-row[data-sid="' + st.sid + '"]');
+    U.$$('.set-row.running', root).forEach(function (r) {
+      if (r !== row) {
+        r.classList.remove('running', 'resting');
+        const p = r.querySelector('.sess-prog');
+        if (p) p.remove();
+      }
+    });
+    if (!row) return;
+    row.classList.add('running');
+    row.classList.toggle('resting', st.kind === 'rest');
+    let prog = row.querySelector('.sess-prog');
+    if (!prog) {
+      prog = U.el('<span class="sess-prog" aria-hidden="true"><i></i></span>');
+      row.appendChild(prog);
+    }
+    const pct = st.mode === 'countdown' && st.targetSec > 0
+      ? U.clamp((st.elapsedSec / st.targetSec) * 100, 0, 100) : 0;
+    prog.firstChild.style.width = pct + '%';
+    if (st.kind === 'work') {
+      const inp = row.querySelector('input[data-act="sw-hold"]');
+      if (inp && st.mode === 'countdown') {
+        // A pending boundary is a QUESTION ('record it or discard'), not a
+        // running clock: the addendum promises the user can adjust before
+        // confirming, so the row must stay typeable. Writing the formatted
+        // target into a locked field made the plan the only answer. Hand the
+        // field back to the SET (blank when nothing is recorded yet) instead
+        // of leaving the hijacked countdown text sitting in it as a fake
+        // answer — but never while the user has the caret in it.
+        if (st.boundary) {
+          inp.removeAttribute('readonly');
+          if (document.activeElement !== inp) {
+            const bs = sessSet(sessEntry(st.entryId), st.sid);
+            inp.value = bs && (bs.holdSec || 0) > 0 ? fmtClock(bs.holdSec) : '';
+          }
+        } else {
+          inp.value = fmtClock(st.remainSec);
+          inp.setAttribute('readonly', 'readonly');
+        }
+      }
+    }
+  }
+
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) onSessionState();
+  });
+
+  /* ======================================================================
+     P4.5 — pace UI (performance mode only).
+
+     Direct manipulation beats configuration: tapping a set number runs that
+     set and tapping a card's stopwatch runs that exercise. These sheets exist
+     only for Off / Whole-session / cadence / changing defaults.
+     ====================================================================== */
+
+  function paceRadioHTML(sel, kindDefault) {
+    return '<div class="pace-list" role="radiogroup" aria-label="How much should the app drive?">' +
+      PACE_DEFS.map(function (p) {
+        const on = sel === p.id;
+        return '<button type="button" class="pace-row' + (on ? ' active' : '') + '" data-pace="' + p.id +
+          '" role="radio" aria-checked="' + (on ? 'true' : 'false') + '">' +
+          '<span class="dot" aria-hidden="true"></span>' +
+          '<span class="body"><span class="t">' + U.esc(p.label) +
+          (p.id === kindDefault ? ' <span class="badge">default</span>' : '') + '</span>' +
+          '<span class="s">' + U.esc(p.sub) + '</span></span></button>';
+      }).join('') + '</div>';
+  }
+
+  // The session chip in the active-draft header. Writes draft._pace (this
+  // session only) unless 'Remember' is on, which writes the per-kind default.
+  function openPaceSheet() {
+    const u = user();
+    if (!u || !draft) return;
+    const kind = draftKind(draft);
+    const kindLabel = (PACE_KIND_ROWS.find(function (r) { return r.id === kind; }) || { label: capStr(kind) }).label;
+    const defaults = paceSettingsOf(u);
+    const st = {
+      pace: resolvePace(null, draft),
+      cadence: resolveCadence(draft),
+      restSec: resolveRestSec(null, draft),
+      remember: false
+    };
+
+    const content = document.createElement('div');
+    function paint() {
+      content.innerHTML =
+        '<div class="card" style="margin-bottom:12px">' +
+        '<div class="card-title">How much should the app drive?</div>' +
+        paceRadioHTML(st.pace, PACE_KIND_DEFAULT[kind]) +
+        '<div class="pace-opt">' +
+        '<div class="body"><div class="t">Rep cadence cues</div>' +
+        '<div class="s">3-1-3 tick inside a timed set</div></div>' +
+        '<div class="segmented" data-slot="cadence">' +
+        '<button type="button" class="seg' + (st.cadence ? '' : ' active') + '" data-cad="0" aria-pressed="' +
+        (st.cadence ? 'false' : 'true') + '">Off</button>' +
+        '<button type="button" class="seg' + (st.cadence ? ' active' : '') + '" data-cad="1" aria-pressed="' +
+        (st.cadence ? 'true' : 'false') + '">On</button>' +
+        '</div></div>' +
+        '<div class="pace-opt">' +
+        '<div class="body"><div class="t">Rest between sets</div>' +
+        '<div class="s">Used by This exercise / Whole session</div></div>' +
+        '<div class="sw-stepper"><button type="button" class="btn icon ghost" data-rest="-15" aria-label="Less rest">−</button>' +
+        '<span class="val" id="pace-rest">' + st.restSec + 's</span>' +
+        '<button type="button" class="btn icon ghost" data-rest="15" aria-label="More rest">+</button></div>' +
+        '</div>' +
+        '<button type="button" class="pace-remember' + (st.remember ? ' active' : '') + '" data-act="remember" ' +
+        'role="checkbox" aria-checked="' + (st.remember ? 'true' : 'false') + '">' +
+        '<span class="box" aria-hidden="true"></span>' +
+        '<span class="body"><span class="t">Remember this for ' + U.esc(kindLabel) + '</span>' +
+        '<span class="s">Applies to new ' + U.esc(kindLabel.toLowerCase()) + ' sessions</span></span></button>' +
+        '</div>' +
+        '<div class="card"><div class="card-title">Your defaults</div>' +
+        '<div class="pace-defaults">' + PACE_KIND_ROWS.map(function (r) {
+          const v = r.fixed || PACE_DEFS.find(function (p) { return p.id === defaults[r.id]; }).label;
+          const tone = r.fixed ? 'off' : defaults[r.id];
+          return '<div class="row"><span>' + U.esc(r.label) + '</span>' +
+            '<span class="v tone-' + tone + '">' + U.esc(v) + '</span></div>';
+        }).join('') + '</div>' +
+        '<p class="hint" style="margin-top:10px">A routine can override the default, an exercise can ' +
+        'override the routine, and this sheet overrides both for the session you\'re in. Nothing here is ' +
+        'needed to train: tapping a set number runs that set, tapping a card\'s stopwatch runs that exercise.</p>' +
+        '</div>';
+    }
+    paint();
+
+    U.on(content, 'click', '[data-pace]', function (e, btn) {
+      st.pace = paceVal(btn.getAttribute('data-pace')) || 'off';
+      paint();
+    });
+    U.on(content, 'click', '[data-cad]', function (e, btn) {
+      st.cadence = btn.getAttribute('data-cad') === '1';
+      paint();
+    });
+    U.on(content, 'click', '[data-rest]', function (e, btn) {
+      st.restSec = U.clamp(st.restSec + parseInt(btn.getAttribute('data-rest'), 10), 0, 600);
+      paint();
+    });
+    U.on(content, 'click', '[data-act="remember"]', function () {
+      st.remember = !st.remember;
+      paint();
+    });
+
+    App.sheet({
+      title: 'Session pace',
+      content: content,
+      actions: [
+        { label: 'Cancel', kind: 'ghost' },
+        {
+          label: 'Apply',
+          kind: 'primary',
+          onClick: function () {
+            if (!draft) return;
+            draft._pace = st.pace;
+            draft._cadence = st.cadence;
+            draft._restSec = st.restSec;
+            if (st.remember) {
+              // The COMPLETE map, built from what is actually stored — a kind
+              // this build does not know (a newer client's, or 'mixed') must
+              // survive a Remember tap on some other kind.
+              const pace = paceSettingsForWrite(u);
+              pace[kind] = st.pace;
+              // mergeSettings replaces an unknown key wholesale, so always
+              // hand it the COMPLETE pace map, never a partial patch.
+              Store.updateUser(u.id, {
+                settings: { pace: pace, cadence: st.cadence, restSec: st.restSec }
+              });
+            }
+            saveDraft();
+            App.rerender();
+          }
+        }
+      ]
+    });
+  }
+
+  /* ======================================================================
+     P4.5 — the live-session substrate handed to the focus renderer.
+
+     ONE session record: this draft. The focus view never owns state — it
+     renders and mutates through here, and every mutation lands in the same
+     saveDraft() choke point the builder uses.
+     ====================================================================== */
+
+  function focusRenderer() {
+    const P = window.Player;
+    return P && typeof P.renderFocus === 'function' ? P.renderFocus : null;
+  }
+
+  // P3.5 left a private session record behind; the draft is now the only one.
+  // A stale 'ironlog/activeSession' is discarded (never resumed) on first sight.
+  let legacyDiscarded = false;
+  function discardLegacySession() {
+    if (legacyDiscarded) return;
+    legacyDiscarded = true;
+    try { localStorage.removeItem('ironlog/activeSession'); } catch (e) { /* ignore */ }
+  }
+
+  // The renderer's PORT: what Player.renderFocus(container, live) is handed.
+  // Storage and DOM verbs are this file's; every timing member below is a
+  // delegate to Player.Session, so the focus view and the builder drive the
+  // same clock through the same choke point.
+  function liveSessionApi() {
+    return {
+      draft: draft,
+      rev: draftRev,
+      kind: draftKind(draft),
+      Session: Session,
+      sidOf: sidOf,
+      save: saveDraft,
+      subscribe: subscribeDraft,
+      resolvePace: function (en) { return resolvePace(en, draft); },
+      resolveRestSec: function (en) { return resolveRestSec(en, draft); },
+      resolveCadence: function () { return resolveCadence(draft); },
+      resolveTempo: function (en) { return resolveTempo(en, draft); },
+      driverFor: function (en, s) { return driverFor(en, s, draft); },
+      targetSecFor: targetSecFor,
+      openPaceSheet: openPaceSheet,
+      openEntryPaceSheet: openEntryPaceSheet,
+      openPicker: openExercisePicker,
+      newEntryFor: newEntryFor,
+      finish: openFinishSheet,
+      discard: function () { clearDraft(); App.rerender(); },
+      toBuilder: function () {
+        if (!draft) return;
+        draft._view = 'builder';
+        saveDraft();
+        App.rerender();
+      }
+    };
+  }
+
+  // Per-card override -> entry._pace (draft-local, never persisted).
+  function openEntryPaceSheet(en, ctx) {
+    if (!en) return;
+    const inherited = resolvePace(null, draft);
+    const cur = paceVal(en._pace);
+    const content = document.createElement('div');
+    content.innerHTML =
+      '<p class="muted" style="font-size:13px;margin-bottom:10px">' +
+      U.esc(exName(en.exerciseRef || en.exerciseId)) + ' — how much should the app drive this one?</p>' +
+      '<div class="pace-list" role="radiogroup" aria-label="Pace for this exercise">' +
+      '<button type="button" class="pace-row' + (cur ? '' : ' active') + '" data-pace="" role="radio" ' +
+      'aria-checked="' + (cur ? 'false' : 'true') + '"><span class="dot" aria-hidden="true"></span>' +
+      '<span class="body"><span class="t">Use the session setting</span>' +
+      '<span class="s">Currently ' + U.esc(PACE_DEFS.find(function (p) { return p.id === inherited; }).label) +
+      '</span></span></button>' +
+      PACE_DEFS.map(function (p) {
+        const on = cur === p.id;
+        return '<button type="button" class="pace-row' + (on ? ' active' : '') + '" data-pace="' + p.id +
+          '" role="radio" aria-checked="' + (on ? 'true' : 'false') + '">' +
+          '<span class="dot" aria-hidden="true"></span>' +
+          '<span class="body"><span class="t">' + U.esc(p.label) + '</span>' +
+          '<span class="s">' + U.esc(p.sub) + '</span></span></button>';
+      }).join('') + '</div>';
+
+    let api = null;
+    U.on(content, 'click', '[data-pace]', function (e, btn) {
+      const v = paceVal(btn.getAttribute('data-pace'));
+      const live = draft ? (draft.entries || []).find(function (x) { return x.id === en.id; }) : null;
+      const target = live || en;
+      if (v) target._pace = v; else delete target._pace;
+      if (draft && target === live) saveDraft();
+      else if (ctx && ctx.persist) ctx.persist();
+      if (api) api.close();
+      App.rerender();
+    });
+    api = App.sheet({ title: 'Pace for this exercise', content: content });
   }
 
   /* ======================================================================
@@ -621,6 +1595,30 @@
       return ctx.model.entries.find(function (x) { return x.id === eid; }) || null;
     }
 
+    /* ONE rest authority: at exercise/session pace the Session drives the rests
+       (auto-start, skippable, ±15s), so the legacy advisory pill must not fire
+       from a ✓ alongside it. Inert unless this editor IS the live draft and a
+       chain is armed — pace 'off'/'set' (all of simple mode, and today's lift
+       default) keep today's exact advisory rest. */
+    function chainedRest() {
+      if (!ctx.live || !draft) return false;
+      if (Session.isRunning()) return true;
+      const c = draft._chain;
+      return !!(c && (c.pace === 'exercise' || c.pace === 'session'));
+    }
+
+    /* The builder's ✓ is the ONLY control a lift row has (no run affordance),
+       so it is what must continue an armed chain — without this hook a session
+       pace stalls dead on the first lift set it reaches. Guarded on an armed
+       chain as well as ctx.live, so it is a provable no-op at pace 'off'/'set'
+       and in simple mode. */
+    function noteChainDone(en, s) {
+      if (!ctx.live || !s || !s.done || !draft || !draft._chain) return;
+      const S = playerSession();
+      if (!S || typeof S.noteSetDone !== 'function') return;
+      try { S.noteSetDone(en.id, sidOf(s)); } catch (e) { /* the ✓ still stands */ }
+    }
+
     /* ---- P3: setwork row/card renderers (dispatched before the lift branch;
        the lift branch below stays byte-for-byte current behavior) ---- */
 
@@ -629,12 +1627,24 @@
       const done = draftMode && s.done;
       const hs = swHintSetOf(en, prev, i);
       const hint = swHintText(hs, rowShape);
-      const cls = 'set-row ' + (rowShape === 'carry' ? 'sw-carry' : 'no-rpe') + (done ? ' done' : '');
+      // P4.5 — live-session row state. `_sid` is only minted inside the live
+      // draft; the saved-workout editors never grow one.
+      const sid = ctx.live ? sidOf(s) : null;
+      const run = sid ? Session.rowState(en.id, sid) : null;
+      const cursor = !run && sid && draft && draft._active &&
+        draft._active.entryId === en.id && draft._active.sid === sid;
+      const drivable = ctx.live && !done && !!driverFor(en, s);
+      const cls = 'set-row ' + (rowShape === 'carry' ? 'sw-carry' : 'no-rpe') + (done ? ' done' : '') +
+        (run ? ' running' + (run.kind === 'rest' ? ' resting' : '') : '') + (cursor ? ' cursor' : '');
       const aid = 'swa_' + en.id + '_' + i;
       const bid = 'swb_' + en.id + '_' + i;
 
-      let html = '<div class="' + cls + '" data-i="' + i + '">';
-      html += '<span class="set-num" aria-label="Set ' + (i + 1) + '">' + (i + 1) + '</span>';
+      let html = '<div class="' + cls + '" data-i="' + i + '"' +
+        (sid ? ' data-sid="' + U.esc(sid) + '"' : '') + '>';
+      html += drivable
+        ? '<button type="button" class="set-num set-run" data-act="sw-run" title="Run this set" ' +
+          'aria-label="Run set ' + (i + 1) + '">' + (i + 1) + '</button>'
+        : '<span class="set-num" aria-label="Set ' + (i + 1) + '">' + (i + 1) + '</span>';
       html += '<div class="set-prev" style="display:flex;align-items:center;min-width:0">' +
         '<button type="button" data-act="sw-hint"' + (hint ? '' : ' disabled') +
         ' title="Fill from last time" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;' +
@@ -645,9 +1655,15 @@
             'style="width:32px;height:40px;min-height:40px;border:none;color:var(--text-muted)">' + ic().close + '</button>'
           : '') +
         '</div>';
+      // P4.5 — the item's TARGET is a placeholder, never a value: it outranks
+      // the last-time hint for what the empty field SUGGESTS, and contributes
+      // nothing to what gets saved.
+      const tgt = targetSetOf(s);
       if (rowShape === 'carry') {
-        const phW = hs && hs.weightKg > 0 ? dispW(hs.weightKg) : '';
-        const phM = hs && hs.distanceM > 0 ? String(Math.round(hs.distanceM)) : '';
+        const phW = tgt && tgt.weightKg > 0 ? dispW(tgt.weightKg)
+          : (hs && hs.weightKg > 0 ? dispW(hs.weightKg) : '');
+        const phM = tgt && tgt.distanceM > 0 ? String(Math.round(tgt.distanceM))
+          : (hs && hs.distanceM > 0 ? String(Math.round(hs.distanceM)) : '');
         html += '<input class="input set-weight" id="' + aid + '" data-act="sw-kg" type="text" inputmode="decimal" ' +
           'autocomplete="off" enterkeyhint="next" aria-label="Load" placeholder="' + U.esc(phW) + '" ' +
           'value="' + (s.weightKg > 0 ? U.esc(dispW(s.weightKg)) : '') + '">';
@@ -655,7 +1671,7 @@
           'autocomplete="off" enterkeyhint="next" aria-label="Meters" placeholder="' + U.esc(phM) + '" ' +
           'value="' + (s.distanceM > 0 ? Math.round(s.distanceM) : '') + '">';
       } else if (rowShape === 'reps') {
-        const phR = hs && hs.reps > 0 ? String(hs.reps) : '';
+        const phR = tgt && tgt.reps > 0 ? String(tgt.reps) : (hs && hs.reps > 0 ? String(hs.reps) : '');
         html += '<input class="input" id="' + aid + '" data-act="sw-reps" type="text" inputmode="numeric" ' +
           'autocomplete="off" enterkeyhint="next" aria-label="Reps" placeholder="' + U.esc(phR) + '" ' +
           'value="' + (s.reps > 0 ? s.reps : '') + '">';
@@ -665,10 +1681,15 @@
           : '<div></div>';
       } else {
         // hold — mm:ss mask shared with parseTimeToSec ('45' = seconds)
-        const phH = hs && hs.holdSec > 0 ? fmtClock(hs.holdSec) : '0:30';
+        // While the Session drives this row the field shows the live countdown
+        // and is read-only; ±15s on the pill retargets instead.
+        const phH = tgt && tgt.holdSec > 0 ? fmtClock(tgt.holdSec)
+          : (hs && hs.holdSec > 0 ? fmtClock(hs.holdSec) : '0:30');
+        const live = run && run.kind === 'work';
         html += '<input class="input" id="' + aid + '" data-act="sw-hold" type="text" inputmode="numeric" ' +
           'autocomplete="off" enterkeyhint="next" aria-label="Hold time" placeholder="' + U.esc(phH) + '" ' +
-          'value="' + (s.holdSec > 0 ? U.esc(fmtClock(s.holdSec)) : '') + '">';
+          (live ? 'readonly ' : '') +
+          'value="' + (live ? U.esc(fmtClock(run.remainSec)) : (s.holdSec > 0 ? U.esc(fmtClock(s.holdSec)) : '')) + '">';
         html += perSide
           ? '<button type="button" class="sw-side" data-act="sw-side" aria-label="Side, tap to switch">' +
             U.esc(s.side === 'R' ? 'R' : 'L') + '</button>'
@@ -678,6 +1699,10 @@
         ? '<button type="button" class="set-check" data-act="sw-check" aria-pressed="' + (done ? 'true' : 'false') +
           '" aria-label="Mark set complete">' + ic().check + '</button>'
         : '<button type="button" class="set-check" data-act="rmset" aria-label="Remove set">' + ic().close + '</button>';
+      if (run) {
+        html += '<span class="sess-prog" aria-hidden="true"><i style="width:' +
+          U.clamp(run.pct, 0, 100) + '%"></i></span>';
+      }
       html += '</div>';
       return html;
     }
@@ -703,7 +1728,14 @@
       const perSide = !!(ex && ex.perSide);
       const prev = prevSwFor(en.exerciseRef);
       const notesShown = notesShownOf(en);
-      const holdTimerOk = ctx.mode === 'draft' && setShapeOf(ex) === 'hold';
+      // P4.5 — in the LIVE draft the stopwatch runs the whole exercise (its
+      // sets + rests, then stops). Outside it (stretch mini-builder, saved
+      // workout editors) it stays the single sheet-level hold countdown.
+      const holdTimerOk = ctx.live
+        ? entryHasDriver(en)
+        : (ctx.mode === 'draft' && setShapeOf(ex) === 'hold');
+      const paceOk = ctx.live && perfMode(user());
+      const paceOverridden = paceOk && !!paceVal(en._pace);
 
       let html = '<div class="card" data-eid="' + U.esc(en.id) + '">';
       html += '<div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:8px">' +
@@ -713,7 +1745,14 @@
         U.esc(exSub(ex)) + '</div></div>' +
         '<div style="display:flex;gap:2px;flex:none">' +
         (holdTimerOk
-          ? '<button type="button" class="btn icon ghost" data-act="sw-timer" title="Hold countdown" aria-label="Hold countdown">' + ic().timer + '</button>'
+          ? '<button type="button" class="btn icon ghost" data-act="sw-timer" title="' +
+            (ctx.live ? 'Run this exercise' : 'Hold countdown') + '" aria-label="' +
+            (ctx.live ? 'Run this exercise' : 'Hold countdown') + '">' + ic().timer + '</button>'
+          : '') +
+        (paceOk
+          ? '<button type="button" class="btn icon ghost' + (paceOverridden ? ' pace-on' : '') +
+            '" data-act="pace" title="How much the app drives this exercise — ' +
+            U.esc(PACE_SHORT[resolvePace(en)]) + '" aria-label="Pace for this exercise">' + FOCUS_ICON + '</button>'
           : '') +
         '<button type="button" class="btn icon ghost" data-act="exnotes" title="Exercise notes" aria-label="Exercise notes">' + ic().edit + '</button>' +
         '<button type="button" class="btn icon ghost" data-act="delentry" title="Remove exercise" aria-label="Remove exercise">' + ic().trash + '</button>' +
@@ -765,11 +1804,17 @@
       const rowShape = swRowShapeOf(en);
       if (!s.done) {
         if (!swValidSet(s)) {
-          let src = null;
-          for (let j = i - 1; j >= 0; j--) {
-            if (swValidSet(en.sets[j])) { src = en.sets[j]; break; }
+          // A ✓ accepts what the row SHOWS: its own prescribed target first
+          // (that is the placeholder the user is looking at), then the
+          // carry-forward, then the last-time hint. An UNTOUCHED set is still
+          // never filled — this only runs on the row the user just ticked.
+          let src = targetSetOf(s);
+          if (!src) {
+            for (let j = i - 1; j >= 0; j--) {
+              if (swValidSet(en.sets[j])) { src = en.sets[j]; break; }
+            }
+            if (!src) src = swHintSetOf(en, prevSwFor(en.exerciseRef), i);
           }
-          if (!src) src = swHintSetOf(en, prevSwFor(en.exerciseRef), i);
           if (src) {
             if (rowShape === 'carry') {
               if (!((s.distanceM || 0) > 0) && (src.distanceM || 0) > 0) s.distanceM = src.distanceM;
@@ -782,12 +1827,14 @@
           }
         }
         s.done = true;
-        if (!swIsStretch(en)) startRest(settingsOf(user()).restTimerSec);
+        if (!swIsStretch(en) && !chainedRest()) startRest(settingsOf(user()).restTimerSec);
       } else {
         s.done = false;
       }
       rowEl.classList.toggle('done', !!s.done);
       btn.setAttribute('aria-pressed', s.done ? 'true' : 'false');
+      // P4.5 — a manual ✓ continues an armed chain (exercise/session pace)
+      noteChainDone(en, s);
       const aIn = rowEl.querySelector('#swa_' + en.id + '_' + i);
       const bIn = rowEl.querySelector('#swb_' + en.id + '_' + i);
       if (aIn && aIn.value === '') {
@@ -800,8 +1847,12 @@
       if (ctx.onStats) ctx.onStats();
     }
 
-    // Countdown target = the first open set's filled/prefilled seconds
-    // (default 30). On finish: vibrate, write holdSec = target, mark done.
+    // Sheet-level hold countdown (the stretch mini-builder and the saved-workout
+    // editors — the LIVE draft uses the Session engine instead). Target = the
+    // first open set's filled/prefilled seconds, default 30.
+    // P4.5 BUG FIX (binding): this used to write holdSec = target while the
+    // player wrote actual elapsed — two answers for one thing. holdSec is now
+    // ALWAYS the seconds actually held, here too.
     function startSwTimer(en) {
       const open = (en.sets || []).find(function (s) { return !s.done; });
       if (!open) { App.toast('All sets are done', 'info'); return; }
@@ -810,15 +1861,16 @@
         const hs = swHintSetOf(en, prevSwFor(en.exerciseRef), en.sets.indexOf(open));
         if (hs && (hs.holdSec || 0) > 0) target = hs.holdSec;
       }
-      if (!target) target = 30;
+      if (!target) target = DEFAULT_HOLD_SEC;
       const eid = en.id;
-      startHold(target, function () {
+      startHold(target, function (actualSec) {
+        const held = Math.max(1, Math.round(actualSec > 0 ? actualSec : target));
         // draft may have been reloaded by a rerender — re-resolve by entry id
-        if (ctx.mode === 'draft' && draft) {
+        if (ctx.mode === 'draft' && draft && ctx.model === draft) {
           const live = draft.entries.find(function (x) { return x.id === eid; });
           const t = live ? (live.sets || []).find(function (x) { return !x.done; }) : null;
           if (!t) return;
-          t.holdSec = target;
+          t.holdSec = held;
           t.done = true;
           saveDraft();
           App.rerender();
@@ -827,7 +1879,7 @@
         const live = ctx.model.entries.find(function (x) { return x.id === eid; });
         const t = live ? (live.sets || []).find(function (x) { return !x.done; }) : null;
         if (!t) return;
-        t.holdSec = target;
+        t.holdSec = held;
         t.done = true;
         ctx.persist();
         repaint();
@@ -840,7 +1892,19 @@
       const i = rowEl ? parseInt(rowEl.getAttribute('data-i'), 10) : -1;
       const s = i >= 0 ? en.sets[i] : null;
 
-      if (act === 'sw-check' && s) { onSwCheck(en, i, rowEl, btn); return; }
+      // P4.5 direct manipulation — tap a set's NUMBER to run exactly that set.
+      if (act === 'sw-run' && s) { Session.runSet(en.id, sidOf(s), {}); return; }
+
+      if (act === 'pace') { openEntryPaceSheet(en, ctx); return; }
+
+      if (act === 'sw-check' && s) {
+        // ✓ on the running row hands the Session the stop, so the ACTUAL
+        // seconds land on the set instead of whatever was typed.
+        const st = ctx.live && s._sid ? Session.rowState(en.id, s._sid) : null;
+        if (st && st.kind === 'work') { Session.doneNow(); return; }
+        onSwCheck(en, i, rowEl, btn);
+        return;
+      }
 
       if (act === 'sw-side' && s) {
         s.side = s.side === 'L' ? 'R' : 'L';
@@ -882,7 +1946,7 @@
       if (act === 'addset') {
         const ex = exOf(en.exerciseRef);
         const last = en.sets[en.sets.length - 1] || null;
-        const next = { done: false };
+        const next = { done: false, _sid: U.uid('s') };
         if (last) {
           if ((last.reps || 0) > 0) next.reps = last.reps;
           if ((last.holdSec || 0) > 0) next.holdSec = last.holdSec;
@@ -904,6 +1968,17 @@
 
       if (act === 'sw-depth') {
         en._depth = U.clamp(parseInt(btn.getAttribute('data-depth'), 10) || 2, 1, 4);
+        // An explicit chip tap is a statement about the WHOLE entry, and it is
+        // the only depth control the UI offers. Since P4.5 the save cleaner
+        // lets a set's OWN intensity outrank the card aim — and it writes one
+        // onto every set — so without this write-through the chip goes inert
+        // the moment a workout has been saved once (a silent no-op in the
+        // saved-workout editor). Rows already completed in a LIVE draft keep
+        // what was captured for them (the rest-step depth ask).
+        (en.sets || []).forEach(function (s) {
+          if (!s || (ctx.mode === 'draft' && s.done)) return;
+          s.intensity = en._depth;
+        });
         ctx.persist();
         repaint();
         return;
@@ -930,7 +2005,12 @@
         return;
       }
 
-      if (act === 'sw-timer') { startSwTimer(en); return; }
+      if (act === 'sw-timer') {
+        // live draft: run the exercise (sets + rests, then stop).
+        if (ctx.live) Session.runEntry(en.id);
+        else startSwTimer(en);
+        return;
+      }
 
       if (act === 'exnotes') {
         en._notesOpen = !notesShownOf(en);
@@ -977,9 +2057,14 @@
       const hint = hs && hs.reps
         ? (hs.weightKg > 0 ? dispW(hs.weightKg) : 'BW') + ' × ' + hs.reps
         : '';
-      const phW = hs && hs.weightKg > 0 ? dispW(hs.weightKg) : '';
-      const phR = hs && hs.reps ? String(hs.reps)
-        : (en._repLow && en._repHigh ? en._repLow + '–' + en._repHigh : '');
+      // P4.5 — a routine target renders as a placeholder (see targetSetOf);
+      // with none present this is byte-for-byte the previous behavior.
+      const tgt = targetSetOf(s);
+      const phW = tgt && tgt.weightKg > 0 ? dispW(tgt.weightKg)
+        : (hs && hs.weightKg > 0 ? dispW(hs.weightKg) : '');
+      const phR = tgt && tgt.reps > 0 ? String(tgt.reps)
+        : (hs && hs.reps ? String(hs.reps)
+          : (en._repLow && en._repHigh ? en._repLow + '–' + en._repHigh : ''));
       const cls = 'set-row' + (showRpe ? '' : ' no-rpe') +
         (done ? ' done' : '') + (s.type === 'warmup' ? ' warmup' : '');
       const wid = 'sw_' + en.id + '_' + i;
@@ -1068,13 +2153,43 @@
       return html;
     }
 
+    /* P4.5 — NEVER rebuild under the caret. Every session-step transition
+       repaints the whole builder (root.innerHTML), which replaces the node the
+       user is typing into: focus is lost, the rest of the word goes nowhere and
+       the half-parsed prefix ('1' of '1:15') is what survives to the draft.
+       Every editable field carries a stable id, so save the RAW in-progress
+       string plus the selection and put them back. Restoring the raw string
+       matters as much as the focus: otherwise the formatter rewrites '1:' to
+       '0:01' the moment the step moves. Timer-written cells (the running row's
+       readonly countdown) are deliberately excluded — they must keep updating. */
+    function keepCaret() {
+      const a = document.activeElement;
+      if (!a || !a.id || !root.contains(a)) return null;
+      if (typeof a.value !== 'string' || a.hasAttribute('readonly')) return null;
+      const k = { id: a.id, value: a.value, s: null, e: null };
+      try { k.s = a.selectionStart; k.e = a.selectionEnd; } catch (err) { /* not text-shaped */ }
+      return k;
+    }
+
+    function restoreCaret(k) {
+      if (!k) return;
+      const el = document.getElementById(k.id);
+      if (!el || !root.contains(el) || el.hasAttribute('readonly')) return;
+      el.value = k.value;
+      try { el.focus({ preventScroll: true }); } catch (err) { el.focus(); }
+      if (k.s === null) return;
+      try { el.setSelectionRange(k.s, k.e); } catch (err) { /* not text-shaped */ }
+    }
+
     function repaint() {
+      const keep = keepCaret();
       if (!ctx.model.entries.length) {
         root.innerHTML = '<div class="empty" style="padding:32px 24px">' + ic().log +
           '<h3>No exercises yet</h3><p>Add an exercise to start logging sets.</p></div>';
       } else {
         root.innerHTML = ctx.model.entries.map(entryCardHTML).join('');
       }
+      restoreCaret(keep);
       if (ctx.onStats) ctx.onStats();
     }
 
@@ -1083,24 +2198,30 @@
       if (!s) return;
       if (!s.done) {
         if (!s.weightKg || !s.reps) {
-          let src = null;
-          for (let j = i - 1; j >= 0; j--) {
-            const p = en.sets[j];
-            if ((p.weightKg || 0) > 0 || (p.reps || 0) > 0) { src = p; break; }
+          // the ✓ accepts what the row SHOWS — prescribed target, then the
+          // carry-forward, then last time (null target => today's exact path)
+          let src = targetSetOf(s);
+          if (!src) {
+            for (let j = i - 1; j >= 0; j--) {
+              const p = en.sets[j];
+              if ((p.weightKg || 0) > 0 || (p.reps || 0) > 0) { src = p; break; }
+            }
+            if (!src) src = hintSetOf(prevFor(en.exerciseId), i);
           }
-          if (!src) src = hintSetOf(prevFor(en.exerciseId), i);
           if (src) {
             if (!s.weightKg) s.weightKg = src.weightKg || 0;
             if (!s.reps) s.reps = src.reps || 0;
           }
         }
         s.done = true;
-        if (s.type !== 'warmup') startRest(settingsOf(user()).restTimerSec);
+        if (s.type !== 'warmup' && !chainedRest()) startRest(settingsOf(user()).restTimerSec);
       } else {
         s.done = false;
       }
       rowEl.classList.toggle('done', !!s.done);
       btn.setAttribute('aria-pressed', s.done ? 'true' : 'false');
+      // P4.5 — a manual ✓ continues an armed chain (exercise/session pace)
+      noteChainDone(en, s);
       const wIn = rowEl.querySelector('[data-act="w"]');
       const rIn = rowEl.querySelector('[data-act="r"]');
       if (wIn && s.weightKg > 0 && wIn.value === '') wIn.value = dispW(s.weightKg);
@@ -2618,8 +3739,6 @@
       const guidedBtn = $id('#cl-guided');
       if (guidedBtn) {
         guidedBtn.addEventListener('click', function () {
-          const P = playerApi();
-          if (!P) { App.toast('Update the app to run guided sessions', 'err'); return; }
           const stations = st.stations.map(cleanStation).filter(Boolean);
           if (!stations.length) { App.toast('Add at least one station first', 'err'); return; }
           const routine = {
@@ -2640,7 +3759,14 @@
           const amEl = $id('#cl-amrap');
           const am = amEl ? parseFloat(amEl.value) : NaN;
           if (!isNaN(am) && am > 0) routine.amrapSec = Math.round(am * 60);
-          if (P.start(routine, { name: 'Circuit' }) && cardioSheet) cardioSheet.close();
+          // P4.5: circuits are a LIVE SESSION that OPENS IN FOCUS (the round
+          // player). Seeding goes through Player.start, which owns the circuit
+          // projection over the draft — building a second one here would give
+          // the session both a cardio circuit entry and a set of per-station
+          // entries, i.e. double-logged stations.
+          const P = playerApi();
+          if (!P) { App.toast('Update the app to run live sessions', 'err'); return; }
+          if (P.start(routine, { name: 'Circuit', view: 'focus' }) && cardioSheet) cardioSheet.close();
         });
       }
       const repBtn = $id('#cl-struct-repeat');
@@ -2751,14 +3877,14 @@
     // performance-only structured-stretch entry point.
     const perf = perfMode(u);
     const lastSession = editEn ? null : lastStretchSession(u, perf);
-    // P3.5: guided entry point (perf only) — starts the user's stretch routine
-    // in the player, or offers the planner when they don't have one yet.
-    const guidedAvailable = perf && !editEn && !!playerApi();
+    // P4.5: live-session entry point (perf only) — seeds the draft from a
+    // stretch routine / the last structured session and opens the builder.
+    const guidedAvailable = perf && !editEn;
     const quickRowHTML = editEn ? '' :
       ((lastSession || perf)
         ? '<div class="chip-row" style="margin-bottom:12px">' +
           (guidedAvailable
-            ? '<button type="button" class="chip" id="mb-guided">▶ Start guided</button>'
+            ? '<button type="button" class="chip" id="mb-guided">▶ Start stretch session</button>'
             : '') +
           (lastSession
             ? '<button type="button" class="chip" id="mb-same">' + ic().copy + ' Same as last time</button>'
@@ -2878,18 +4004,8 @@
     const guidedBtn = U.$('#mb-guided', content);
     if (guidedBtn) {
       guidedBtn.addEventListener('click', function () {
-        const P = playerApi();
-        if (!P) return;
-        const routines = stretchRoutinesFor(u);
         if (sheetApi) sheetApi.close();
-        if (routines.length === 1) {
-          P.start(routines[0], { routineRef: routines[0].id });
-        } else if (routines.length > 1) {
-          P.openPlanner(u.id); // pick which one to run
-        } else {
-          App.toast('No stretch routines yet — build one first');
-          P.editRoutine({ kind: 'stretch', restSec: 30, items: [] }, { userId: u.id });
-        }
+        seedStretchSession(u);
       });
     }
 
@@ -3117,11 +4233,22 @@
     }) || null;
   }
 
-  function seedDurabilityDraft(letter) {
+  // opts.pace forces the session pace ('off' = the manual, after-the-fact path).
+  function seedDurabilityDraft(letter, opts) {
+    opts = opts || {};
     const db = window.ExerciseDB;
     const routines = db && db.DURABILITY_ROUTINES;
     const items = routines && routines[letter];
     if (!items || !items.length) { App.toast('Routine unavailable — update the app', 'err'); return; }
+    const routine = { items: {} };
+    items.forEach(function (it) {
+      if (!it || !it.exerciseId) return;
+      const layer = {};
+      if (Number(it.restSec) > 0) layer.restSec = Math.round(it.restSec);
+      if (typeof it.tempo === 'string' && it.tempo) layer.tempo = it.tempo;
+      if (paceVal(it.pace)) layer.pace = paceVal(it.pace);
+      routine.items[it.exerciseId] = layer;
+    });
     const entries = items.map(function (it) {
       const ex = exOf(it.exerciseId);
       if (setShapeOf(ex) === 'weight_reps') {
@@ -3138,14 +4265,21 @@
         holdSec: it.targetHoldSec, reps: it.targetReps, distanceM: it.targetDistanceM
       });
     });
-    startDraft({ name: 'Durability ' + letter, entries: entries });
+    startDraft({
+      name: 'Durability ' + letter,
+      entries: entries,
+      kind: 'durability',
+      pace: opts.pace,
+      routine: routine
+    });
     App.navigate('log');
     App.rerender();
   }
 
   // Draft entries from a saved workout, keeping setwork entries editable with
   // their values prefilled (unlike repeatableView, which strips typed entries).
-  function seedRepeatDurability(w) {
+  function seedRepeatDurability(w, opts) {
+    opts = opts || {};
     const entries = [];
     (w.entries || []).forEach(function (en) {
       if (!en) return;
@@ -3169,7 +4303,12 @@
       }
     });
     if (!entries.length) { App.toast('Nothing repeatable in that session', 'err'); return; }
-    startDraft({ name: w.name || 'Durability', entries: entries });
+    startDraft({
+      name: w.name || 'Durability',
+      entries: entries,
+      kind: opts.kind || 'durability',
+      pace: opts.pace
+    });
     App.navigate('log');
     App.rerender();
   }
@@ -3185,34 +4324,38 @@
     const items = (db && db.DURABILITY_ROUTINES && db.DURABILITY_ROUTINES[next]) || [];
     const preview = items.map(function (it) { return exName(it.exerciseId); }).join(' · ');
     const P = playerApi();
+    const paceLabel = PACE_DEFS.find(function (p) {
+      return p.id === paceSettingsOf(u).durability;
+    }).label;
 
-    // P3.5: guided is the front door — the app runs the routine (timers, sides,
-    // rests). Manual logging stays, demoted to the 'trained without the phone'
-    // fallback with the exact same seeding behavior as before.
-    let html = '';
-    if (P) {
-      html += '<button type="button" class="btn primary" data-dur="guided" ' +
-        'style="width:100%;min-height:54px;font-size:16px">▶ Start guided — Durability ' + next +
-        (lastLetter ? ' <span style="font-weight:400;font-size:13px;opacity:.75">(' + lastLetter +
-          ' was ' + U.esc(U.relDate(lastW.date).toLowerCase()) + ')</span>' : '') +
-        '</button>';
-      if (lastW && P.routineFromWorkout(lastW)) {
-        html += '<button type="button" class="btn ghost" data-dur="repeat-guided" ' +
-          'style="width:100%;min-height:48px;margin-top:8px">Repeat last, guided — ' +
-          U.esc(lastW.name) + '</button>';
-      }
-      html += sectionLabel('Trained without the phone?');
+    // P4.5: the LIVE SESSION is the front door — one record (the draft), opened
+    // in the builder, with the app driving whatever the resolved pace says.
+    // Manual after-the-fact logging stays, demoted to the 'trained without the
+    // phone' fallback, and runs with pace off.
+    let html = '<button type="button" class="btn primary" data-dur="guided" ' +
+      'style="width:100%;min-height:54px;font-size:16px">▶ Start Durability ' + next +
+      (lastLetter ? ' <span style="font-weight:400;font-size:13px;opacity:.75">(' + lastLetter +
+        ' was ' + U.esc(U.relDate(lastW.date).toLowerCase()) + ')</span>' : '') +
+      '</button>' +
+      '<p class="hint" style="margin:6px 2px 0">' + U.esc(preview || '5 drills') + '</p>' +
+      '<p class="hint" style="margin:2px 2px 0">The app drives: ' + U.esc(paceLabel) +
+      ' — tap a set number to run it, or a card\'s ⏱ to run the exercise.</p>';
+    if (lastW) {
+      html += '<button type="button" class="btn ghost" data-dur="repeat-guided" ' +
+        'style="width:100%;min-height:48px;margin-top:10px">' + ic().copy + ' Repeat last — ' +
+        U.esc(lastW.name) + '</button>';
     }
+    html += sectionLabel('Trained without the phone?');
     html += '<div class="list">' +
       '<button type="button" class="list-row" data-dur="routine">' +
       '<span class="leading" style="color:var(--accent)">' + KIND_ICONS.durability + '</span>' +
-      '<div class="body"><div class="title">' + (P ? 'Log Durability ' + next + ' manually' : 'Durability ' + next) + '</div>' +
-      '<div class="sub">' + U.esc(preview || 'Guided routine — 5 drills') + '</div></div>' +
+      '<div class="body"><div class="title">Log Durability ' + next + ' manually</div>' +
+      '<div class="sub">' + U.esc(preview || '5 drills') + '</div></div>' +
       '<span class="chevron">' + ic().chevron + '</span></button>';
     if (lastW) {
       html += '<button type="button" class="list-row" data-dur="repeat">' +
         '<span class="leading">' + ic().copy + '</span>' +
-        '<div class="body"><div class="title">Repeat last</div>' +
+        '<div class="body"><div class="title">Repeat last, manually</div>' +
         '<div class="sub">' + U.esc(lastW.name) + ' · ' + U.esc(U.relDate(lastW.date)) + '</div></div>' +
         '<span class="chevron">' + ic().chevron + '</span></button>';
     }
@@ -3221,7 +4364,7 @@
       '<div class="body"><div class="title">Quick checklist</div>' +
       '<div class="sub">Tick off drills without logging sets</div></div>' +
       '<span class="chevron">' + ic().chevron + '</span></button></div>';
-    if (P) {
+    if (P && typeof P.editRoutine === 'function') {
       html += '<button type="button" class="btn ghost small" data-dur="new-routine" style="margin-top:10px">' +
         ic().plus + ' New routine</button>';
     }
@@ -3232,18 +4375,12 @@
     U.on(content, 'click', '[data-dur]', function (e, row) {
       const act = row.getAttribute('data-dur');
       if (api) api.close();
-      if (act === 'guided' && P) {
-        const r = P.builtinRoutine(next);
-        if (r) P.start(r, { name: r.name });
-        else App.toast('Routine unavailable — update the app', 'err');
-      } else if (act === 'repeat-guided' && P && lastW) {
-        const rr = P.routineFromWorkout(lastW);
-        if (rr) P.start(rr, { name: lastW.name || rr.name });
-        else App.toast('Nothing repeatable in that session', 'err');
-      } else if (act === 'new-routine' && P) {
-        P.editRoutine({ kind: 'durability', restSec: 60, items: [] }, { userId: u.id });
-      } else if (act === 'routine') seedDurabilityDraft(next);
-      else if (act === 'repeat' && lastW) seedRepeatDurability(lastW);
+      if (act === 'guided') seedDurabilityDraft(next);
+      else if (act === 'repeat-guided' && lastW) seedRepeatDurability(lastW);
+      else if (act === 'new-routine' && P) {
+        P.editRoutine({ kind: 'durability', restSec: DEFAULT_REST_SEC, items: [] }, { userId: u.id });
+      } else if (act === 'routine') seedDurabilityDraft(next, { pace: 'off' });
+      else if (act === 'repeat' && lastW) seedRepeatDurability(lastW, { pace: 'off' });
       else if (act === 'checklist') openDurabilityLogger(null); // legacy flow, unchanged shape
     });
     api = App.sheet({ title: 'Durability', content: content });
@@ -3281,6 +4418,50 @@
       });
     });
     return Math.max(1, Math.round(sec / 60 + dyn * 0.5));
+  }
+
+  /* P4.5 — a stretch session is a LIVE SESSION (the draft), opened in the
+     builder. Seeded from the user's stretch routine when they have one, else
+     from their last structured stretch session, else empty. The legacy quick
+     sheet and the 'Log individual stretches' mini-builder both stay put as the
+     after-the-fact paths. */
+  function seedStretchSession(u) {
+    const routines = stretchRoutinesFor(u);
+    const r = routines.length ? routines[0] : null;
+    let entries = [];
+    const layer = { items: {} };
+    if (r) {
+      if (paceVal(r.pace)) layer.pace = paceVal(r.pace);
+      if (Number(r.restSec) > 0) layer.restSec = Math.round(r.restSec);
+      entries = (r.items || []).map(function (it) {
+        const ex = exOf(it.exerciseId);
+        const perSide = !!(ex && ex.perSide);
+        const rows = U.clamp(Number(it.sets) || 2, 1, 10) * (perSide ? 2 : 1);
+        const en = newSetworkEntry(it.exerciseId, rows, {
+          holdSec: it.targetHoldSec, reps: it.targetReps, distanceM: it.targetDistanceM
+        });
+        if (it.method) en.method = it.method;
+        const cell = {};
+        if (Number(it.restSec) > 0) cell.restSec = Math.round(it.restSec);
+        if (typeof it.tempo === 'string' && it.tempo) cell.tempo = it.tempo;
+        if (paceVal(it.pace)) cell.pace = paceVal(it.pace);
+        layer.items[it.exerciseId] = cell;
+        return en;
+      }).filter(function (en) { return !!en.exerciseRef; });
+    }
+    if (!entries.length) {
+      const last = lastStretchSession(u, true);
+      if (last && last.kind === 'structured') entries = last.entries.map(swDraftCopyOf);
+    }
+    startDraft({
+      name: r && r.name ? r.name : 'Stretch',
+      entries: entries,
+      kind: 'stretch',
+      routine: layer
+    });
+    App.navigate('log');
+    App.rerender();
+    if (!entries.length) App.toast('Add the stretches you are doing — the app times each hold', 'info');
   }
 
   // opts.from = a prior structured session ({entries}) to prefill for repeat.
@@ -3975,6 +5156,29 @@
       }
     }
 
+    // P4.5 — two presentations, one state. The focus view is a RENDERER over
+    // the same draft (js/player.js, loaded after this file); when it is not
+    // available the session simply stays in the builder.
+    // Mode gate (binding): the focus presentation is Performance-mode only. A
+    // draft that reached simple mode still carrying _view:'focus' (a mid-draft
+    // profile switch) falls back to the builder rather than rendering pace UI a
+    // family user must never see.
+    if (draft && draft._view === 'focus' && !perfMode(u)) {
+      draft._view = 'builder';
+      saveDraft();
+    }
+    if (draft && draft._view === 'focus') {
+      const render = focusRenderer();
+      if (render) {
+        liveRepaint = null;
+        discardLegacySession();
+        render(container, liveSessionApi());
+        return;
+      }
+      draft._view = 'builder';
+      saveDraft();
+    }
+
     if (!draft) {
       // honor deep-link params
       if (params && params.repeat) {
@@ -4122,6 +5326,19 @@
 
   function renderActiveDraft(container, u) {
     const notesShown = draft._notesOpen === undefined ? !!draft.notes : !!draft._notesOpen;
+    // P4.5 — pace UI is performance-mode only; simple mode keeps today's header
+    // exactly (elapsed · stats · discard).
+    const perf = perfMode(u);
+    const focusOk = perf && !!focusRenderer();
+    const pace = perf ? resolvePace(null, draft) : 'off';
+    // Mode gate (binding): simple mode is BYTE-IDENTICAL. A draft that reached
+    // it carrying setwork entries (via Repeat, a sync, or a mid-session switch)
+    // must not keep the live layer — and a timer already on the clock when the
+    // switch happened is cancelled here, recording nothing, which also unmounts
+    // the pill. ctx.live below is the single gate for _sid minting, the set-run
+    // buttons, the card stopwatch's 'run this exercise' meaning and every run
+    // dispatch, so one flag restores exact P4 behavior.
+    if (!perf && Session.isRunning()) Session.cancel();
 
     container.innerHTML =
       '<div class="card" style="position:sticky;top:calc(var(--topbar-h) + env(safe-area-inset-top, 0px) + 8px);z-index:20">' +
@@ -4134,6 +5351,15 @@
       ic().timer + '<span id="lg-elapsed">0:00</span></span>' +
       '<span id="lg-stats" style="font-variant-numeric:tabular-nums"></span>' +
       '<span style="flex:1"></span>' +
+      (perf
+        ? '<button type="button" class="chip pace-chip' + (pace === 'off' ? '' : ' active') + '" id="lg-pace" ' +
+          'title="How much should the app drive?" aria-label="Session pace: ' + U.esc(PACE_SHORT[pace]) + '">' +
+          ic().timer + ' ' + U.esc(PACE_SHORT[pace]) + '</button>'
+        : '') +
+      (focusOk
+        ? '<button type="button" class="btn icon ghost" id="lg-focus" title="Focus view" aria-label="Switch to focus view">' +
+          FOCUS_ICON + '</button>'
+        : '') +
       '<button type="button" class="btn icon ghost" id="lg-discard" aria-label="Discard workout" title="Discard workout">' +
       ic().trash + '</button></div></div>' +
       '<div id="lg-entries" style="display:flex;flex-direction:column;gap:16px"></div>' +
@@ -4144,14 +5370,35 @@
         : '<button type="button" class="btn ghost small" id="lg-notes-btn" style="align-self:flex-start">' +
           ic().edit + ' Add notes</button>');
 
-    mountEditor(U.$('#lg-entries', container), {
+    const editor = mountEditor(U.$('#lg-entries', container), {
       mode: 'draft',
+      live: perf,          // P4.5 — THE live session record, Performance mode only
       model: draft,
       persist: saveDraft,
       prev: function (exId) { return prevSetsFor(u.id, exId); },
       prevSw: function (ref) { return prevSetworkFor(u.id, ref); },
       onStats: updateDraftStats
     });
+
+    // The builder repaints itself surgically instead of subscribing (a full
+    // repaint on every keystroke would eat the caret); the Session engine calls
+    // this when it writes a set.
+    liveRepaint = function () {
+      if (!document.getElementById('lg-entries')) { liveRepaint = null; return; }
+      editor.repaint();
+    };
+
+    const paceBtn = U.$('#lg-pace', container);
+    if (paceBtn) paceBtn.addEventListener('click', openPaceSheet);
+    const focusBtn = U.$('#lg-focus', container);
+    if (focusBtn) {
+      focusBtn.addEventListener('click', function () {
+        // one tap in BOTH directions; never interrupts a running timer
+        draft._view = 'focus';
+        saveDraft();
+        App.rerender();
+      });
+    }
 
     U.$('#lg-name', container).addEventListener('input', function (e) {
       draft.name = e.target.value;
@@ -4212,6 +5459,9 @@
 
     updateDraftStats();
     startElapsedTicker();
+    // the draft object was re-read by renderLog — re-bind the pill/row paint
+    if (Session.isRunning()) Session.reconcile();
+    onSessionState();
   }
 
   /* ---------- state C: finish flow ---------- */
@@ -4219,12 +5469,38 @@
   // Valid set: reps > 0 (weight 0 is fine — bodyweight). Drops the 'done' flag.
   // Setwork entries dispatch to their own cleaner (valid = reps>0 || holdSec>0
   // || distanceM>0 — never the lift reps>0 filter).
+  // P4.5: a live session can put TYPED entries in the draft (the circuit round
+  // player writes the ordinary P3 cardio entry with rounds + stations). They
+  // save verbatim, minus draft-local '_'-prefixed keys — the same
+  // preserve-unknown-keys rule the mixed editor already follows. Lift and
+  // setwork paths below are untouched, so simple mode stays byte-identical.
+  function cleanTypedEntry(en) {
+    const out = {};
+    for (const k in en) {
+      if (k.charAt(0) === '_') continue;
+      out[k] = en[k];
+    }
+    out.id = en.id || U.uid('en');
+    // THE write boundary: a typed entry never carries sets. An empty array
+    // injected while the draft was live (by any past or future backfill, and
+    // by drafts already polluted on disk) is dropped here rather than copied
+    // verbatim into the stored workout.
+    if (Array.isArray(out.sets) && out.sets.length === 0) delete out.sets;
+    if (out.type === 'cardio' && out.mode === 'circuit' && !((Number(out.rounds) || 0) > 0)) return null;
+    return out;
+  }
+
   function buildFinishedEntries() {
     const entries = [];
     (draft.entries || []).forEach(function (en) {
       if (isSetworkEntry(en)) {
         const c = cleanSetworkEntry(en);
         if (c) entries.push(c);
+        return;
+      }
+      if (!isLiftEntry(en)) {
+        const t = cleanTypedEntry(en);
+        if (t) entries.push(t);
         return;
       }
       if (!en.exerciseId) return;
@@ -5049,6 +6325,37 @@
   // player-written sessions behave exactly like direct-save loggers.
   window.ViewsLog = {
     openExercisePicker: openExercisePicker,
-    openSessionCheckin: openSessionCheckin
+    openSessionCheckin: openSessionCheckin,
+    // P4.5 — the live-session substrate. ONE session record: the draft, and
+    // ONE timing engine: Player.Session. The focus view renders and mutates
+    // through this API, so every change lands in the same saveDraft()
+    // reconcile choke point the builder uses. `Session` below is the façade
+    // over Player.Session, kept for the snapshot shape older callers read.
+    live: liveSessionApi,
+    getDraft: function () { return draft; },
+    saveDraft: saveDraft,
+    subscribeDraft: subscribeDraft,
+    sidOf: sidOf,
+    Session: Session,
+    resolvePace: resolvePace,
+    resolveRestSec: resolveRestSec,
+    resolveCadence: resolveCadence,
+    resolveTempo: resolveTempo,
+    driverFor: driverFor,
+    targetSecFor: targetSecFor,
+    draftKind: draftKind,
+    paceSettingsOf: paceSettingsOf,
+    openPaceSheet: openPaceSheet,
+    openEntryPaceSheet: openEntryPaceSheet,
+    startDraft: startDraft,
+    clearDraft: clearDraft,
+    finish: openFinishSheet,
+    // named hooks the focus view calls back into (js/player.js)
+    openFinishSheet: openFinishSheet,
+    startRestPill: function (sec) { startRest(sec); },
+    stopRestPill: stopRest,
+    buildFinishedEntries: function () { return draft ? buildFinishedEntries() : []; },
+    PACE_KIND_DEFAULT: PACE_KIND_DEFAULT
   };
+
 })();

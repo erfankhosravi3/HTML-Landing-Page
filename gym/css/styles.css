@@ -3231,3 +3231,438 @@ button.std-row:hover .std-name {
   line-height: 1.5;
   margin-top: 10px;
 }
+
+/* ==========================================================================
+   P4.5: Live session
+   One session record (the draft), two presentations. Everything below is
+   performance-mode-only surface: setwork rows, the session pill remote
+   control and the pace sheets. The lift flow never renders any of it.
+   ========================================================================== */
+
+/* ---- active row indication ---- */
+
+.set-row.running {
+  position: relative;
+  background: rgba(10, 132, 255, .13);
+}
+
+.set-row.running.resting {
+  background: rgba(255, 159, 10, .12);
+}
+
+.set-row.running .set-num,
+.set-row.running .set-run {
+  color: var(--blue);
+  border: 1.5px solid var(--blue);
+  border-radius: 999px;
+  width: 26px;
+  height: 26px;
+  min-height: 26px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.set-row.running.resting .set-num,
+.set-row.running.resting .set-run {
+  color: var(--orange);
+  border-color: var(--orange);
+}
+
+.set-row.running .input {
+  border-color: var(--blue);
+  color: var(--blue);
+  font-weight: 700;
+}
+
+.set-row.running.resting .input {
+  border-color: transparent;
+  color: var(--text-2);
+  font-weight: 600;
+}
+
+/* the advisory cursor — never modal, just a hint of where you left off */
+.set-row.cursor .set-num,
+.set-row.cursor .set-run {
+  box-shadow: inset 0 0 0 1.5px rgba(48, 209, 88, .5);
+  border-radius: 999px;
+}
+
+/* tap-a-set-number affordance */
+.set-row .set-run {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-2);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  min-height: 40px;
+  transition: color var(--speed) var(--ease), transform var(--speed) var(--ease);
+}
+
+.set-row .set-run:hover {
+  color: var(--blue);
+}
+
+.set-row .set-run:active {
+  transform: scale(.9);
+}
+
+/* per-row progress hairline (absolute — never takes a grid cell) */
+.set-row .sess-prog {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, .08);
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.set-row .sess-prog > i {
+  display: block;
+  height: 100%;
+  background: var(--blue);
+  transition: width .25s linear;
+}
+
+.set-row.running.resting .sess-prog > i {
+  background: var(--orange);
+}
+
+/* card pace button, lit when the card overrides the session */
+.btn.icon.pace-on {
+  color: var(--blue);
+  border-color: rgba(10, 132, 255, .45);
+}
+
+/* ---- the session pill: a remote control for whichever row owns it ---- */
+
+.rest-timer.sess-pill {
+  flex-wrap: wrap;
+  border-radius: 20px;
+  padding: 10px 12px;
+  gap: 6px;
+  row-gap: 6px;
+  border-color: rgba(10, 132, 255, .4);
+  width: max-content;
+  max-width: min(460px, calc(100vw - 16px));
+}
+
+.rest-timer.sess-pill .time {
+  font-size: 17px;
+  min-width: 44px;
+  flex: none;
+}
+
+.rest-timer.sess-pill .btn.small {
+  padding: 4px 9px;
+  font-size: 12px;
+  white-space: nowrap;
+  flex: none;
+}
+
+.rest-timer.sess-pill.is-rest {
+  border-color: rgba(255, 159, 10, .4);
+}
+
+.rest-timer.sess-pill.is-boundary {
+  border-color: rgba(255, 214, 10, .55);
+}
+
+.rest-timer.sess-pill .sess-ic {
+  display: inline-flex;
+  color: var(--blue);
+}
+
+.rest-timer.sess-pill.is-rest .sess-ic {
+  color: var(--orange);
+}
+
+.rest-timer.sess-pill .time {
+  color: var(--text);
+}
+
+.rest-timer.sess-pill .track {
+  order: 4;
+  width: 100%;
+  flex: 1 0 100%;
+}
+
+.rest-timer.sess-pill .fill {
+  background: var(--blue);
+}
+
+.rest-timer.sess-pill.is-rest .fill {
+  background: var(--orange);
+}
+
+.rest-timer.sess-pill .sess-x {
+  width: 36px;
+  height: 32px;
+  min-height: 32px;
+  border: none;
+  color: var(--text-muted);
+}
+
+.rest-timer.sess-pill .sess-x svg {
+  width: 18px;
+  height: 18px;
+}
+
+.rest-timer.sess-pill .sess-sub {
+  order: 5;
+  flex: 1 0 100%;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.35;
+}
+
+.rest-timer.sess-pill .sess-sub .l {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* the draft header stays one line: the stats truncate, the controls never wrap */
+#lg-stats {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rest-timer.sess-pill .sess-sub .r {
+  flex: none;
+  color: var(--text-2);
+}
+
+.rest-timer.sess-pill.has-cadence .sess-ic {
+  animation: sess-tick 1s steps(1, end) infinite;
+}
+
+@keyframes sess-tick {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: .35; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rest-timer.sess-pill.has-cadence .sess-ic { animation: none; }
+  .set-row .sess-prog > i { transition: none; }
+}
+
+/* ---- session pace chip in the active-draft header ---- */
+
+.chip.pace-chip {
+  min-height: 32px;
+  padding: 4px 10px;
+  gap: 4px;
+  flex: none;
+}
+
+.chip.pace-chip svg {
+  width: 14px;
+  height: 14px;
+}
+
+.chip.pace-chip.active {
+  color: var(--blue);
+  border-color: rgba(10, 132, 255, .5);
+  background: rgba(10, 132, 255, .12);
+}
+
+/* ---- granularity sheet ('How much should the app drive?') ---- */
+
+.pace-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.pace-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  text-align: left;
+  padding: 12px 2px;
+  min-height: 56px;
+  border-top: 1px solid var(--border);
+  color: var(--text);
+}
+
+.pace-row:first-child {
+  border-top: none;
+}
+
+.pace-row .dot {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin-top: 2px;
+  border-radius: 999px;
+  border: 2px solid var(--text-muted);
+  position: relative;
+  transition: border-color var(--speed) var(--ease);
+}
+
+.pace-row.active .dot {
+  border-color: var(--accent);
+}
+
+.pace-row.active .dot::after {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
+.pace-row .body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.pace-row .t {
+  font-size: 15px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pace-row .t .badge {
+  font-size: 10px;
+  padding: 2px 7px;
+  background: var(--accent-tint);
+  color: var(--accent);
+  border-radius: 999px;
+  font-weight: 700;
+  letter-spacing: .02em;
+}
+
+.pace-row .s {
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.pace-opt {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 2px;
+  border-top: 1px solid var(--border);
+}
+
+.pace-opt .body {
+  flex: 1;
+  min-width: 0;
+}
+
+.pace-opt .t {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.pace-opt .s {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.4;
+  margin-top: 2px;
+}
+
+.pace-opt .segmented,
+.pace-opt .sw-stepper {
+  flex: none;
+}
+
+.pace-remember {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  text-align: left;
+  padding: 12px 2px 2px;
+  border-top: 1px solid var(--border);
+  width: 100%;
+  color: var(--text);
+}
+
+.pace-remember .box {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  margin-top: 1px;
+  border-radius: 6px;
+  border: 2px solid var(--text-muted);
+  position: relative;
+  transition: border-color var(--speed) var(--ease);
+}
+
+.pace-remember.active .box {
+  border-color: var(--accent);
+}
+
+.pace-remember.active .box::after {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  border-radius: 3px;
+  background: var(--accent);
+}
+
+.pace-remember .body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.pace-remember .t {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.pace-remember .s {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.pace-defaults .row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 2px;
+  border-top: 1px solid var(--border);
+  font-size: 14px;
+}
+
+.pace-defaults .row:first-child {
+  border-top: none;
+}
+
+.pace-defaults .v {
+  font-weight: 600;
+  text-align: right;
+}
+
+.pace-defaults .v.tone-off {
+  color: var(--text-2);
+}
+
+.pace-defaults .v.tone-set,
+.pace-defaults .v.tone-exercise {
+  color: var(--blue);
+}
+
+.pace-defaults .v.tone-session {
+  color: var(--accent);
+}
