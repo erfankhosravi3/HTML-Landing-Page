@@ -4723,3 +4723,61 @@ button.std-row:hover .std-name {
   line-height: var(--lh-tight);
 }
 .storage-bar .btn { flex: none; align-self: center; }
+
+/* =====================================================================
+   §15  HEALTH LINK
+   A connection has states; a file transfer does not. That difference is
+   the whole design, so the state row is the loudest thing on the card.
+   ===================================================================== */
+
+.link-state {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--card-2);
+  margin-bottom: 14px;
+}
+.link-state .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.link-state.live .dot    { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-tint); }
+.link-state.waiting .dot { background: var(--blue);   box-shadow: 0 0 0 3px var(--blue-tint); }
+.link-state.stale .dot   { background: var(--orange); box-shadow: 0 0 0 3px var(--amber-tint); }
+.link-state.off .dot     { background: var(--text-muted); }
+.link-state .txt { flex: 1; min-width: 0; }
+.link-state .txt b { display: block; font-size: var(--fs-sm); }
+.link-state .txt span { font-size: var(--fs-micro); color: var(--text-2); }
+
+.pair-key {
+  font-family: var(--font-num);
+  font-size: 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  word-break: break-all;
+  line-height: 1.55;
+  color: var(--text);
+  margin-bottom: 8px;
+  user-select: all;
+  -webkit-user-select: all;
+}
+
+.feed { display: flex; flex-direction: column; }
+.feed-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 0;
+  border-top: 1px solid var(--hairline);
+  font-size: var(--fs-sm);
+}
+.feed-row:first-child { border-top: 0; }
+.feed-row .nm { flex: 1; min-width: 0; }
+.feed-row .val {
+  font-family: var(--font-num);
+  color: var(--text-2);
+  font-size: var(--fs-micro);
+  font-variant-numeric: tabular-nums;
+}

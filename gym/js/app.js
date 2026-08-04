@@ -1213,31 +1213,122 @@
     /* ---- 3. Training (v2 mode gate + goals/profile editor) ---- */
     if (cur) el.appendChild(buildTrainingCard(cur));
 
-    /* ---- 4. Apple Health ---- */
+    /* ---- 4. Apple Health ----
+       A CONNECTION, not a file transfer. A courier that holds HealthKit
+       permission delivers to a private inbox on a schedule; the app drains it.
+       The four states are off / pairing / receiving / gone quiet, because a
+       link that fails silently is worse than no link. */
+    const link = (Store.state.sync && Store.state.sync.health) || {};
+    const inboxUrl = (window.Sync && Sync.healthInboxUrl && Sync.healthInboxUrl()) || '';
+    const syncUrl = (Store.state.sync && Store.state.sync.url) || '';
+    const lastAt = link.lastAt || 0;
+    const daysQuiet = lastAt ? Math.floor((Date.now() - lastAt) / 86400000) : null;
+    const stale = lastAt && daysQuiet >= 2;
+    const sum = link.lastSummary || null;
+
+    function stateRow() {
+      if (!syncUrl) {
+        return '<div class="link-state off"><span class="dot"></span><span class="txt">' +
+          '<b>Family sync required first</b><span>The inbox lives in your sync database. ' +
+          'Set up Family Sync below, then come back.</span></span></div>';
+      }
+      if (!inboxUrl) {
+        return '<div class="link-state off"><span class="dot"></span><span class="txt">' +
+          '<b>Not connected</b><span>Nothing is arriving from Health yet.</span></span></div>';
+      }
+      if (!lastAt) {
+        return '<div class="link-state waiting"><span class="dot"></span><span class="txt">' +
+          '<b>Waiting for the first delivery</b><span>Paste the address into Health Auto Export, ' +
+          'then run it once by hand to check.</span></span></div>';
+      }
+      if (stale) {
+        return '<div class="link-state stale"><span class="dot"></span><span class="txt">' +
+          '<b>Nothing for ' + daysQuiet + ' days</b><span>Your recovery numbers are going stale. ' +
+          'Check Health → Sharing → Apps still grants access.</span></span></div>';
+      }
+      return '<div class="link-state live"><span class="dot"></span><span class="txt">' +
+        '<b>Receiving</b><span>Last delivery ' + U.relDate(U.dateToStr(new Date(lastAt))) +
+        (sum ? ' · ' + sum.added + ' of ' + sum.rows + ' rows new' : '') + '</span></span></div>';
+    }
+
+    function summaryRows() {
+      if (!sum) return '';
+      const kinds = sum.kinds || {};
+      const names = { restingHR: 'Resting heart rate', sleepHours: 'Sleep', steps: 'Steps',
+        activeEnergyKcal: 'Active energy', exerciseMin: 'Exercise minutes',
+        vo2max: 'VO2 max', weightKg: 'Body weight', bodyFatPct: 'Body fat' };
+      const keys = Object.keys(kinds).sort();
+      let h = '';
+      keys.forEach(function (k) {
+        h += '<div class="feed-row"><span class="nm">' + U.esc(names[k] || k) + '</span>' +
+          '<span class="val">' + kinds[k] + ' point' + (kinds[k] === 1 ? '' : 's') + '</span></div>';
+      });
+      if (sum.unknown && sum.unknown.length) {
+        h += '<div class="feed-row"><span class="nm" style="color:var(--orange)">Not recognised: ' +
+          U.esc(sum.unknown.slice(0, 4).join(', ')) + '</span></div>';
+      }
+      if (!keys.length && !h) {
+        h = '<div class="feed-row"><span class="nm" style="color:var(--orange)">' +
+          'A delivery arrived but nothing in it was recognised.</span></div>';
+      }
+      return h ? '<div class="feed" style="margin-top:12px">' + h + '</div>' : '';
+    }
+
     const ahCard = U.el('<div class="card">' +
       cardTitle(icons.apple, 'Apple Health') +
-      '<p class="text-2 small-text" style="margin:6px 0 12px">Import weight, daily activity and workouts from your ' +
-        'iPhone’s Health export. Everything stays on this device.</p>' +
-      '<div id="ah-drop" role="button" tabindex="0" aria-label="Import Apple Health export" ' +
-        'style="border:1.5px dashed var(--border);border-radius:var(--radius-sm);padding:22px 16px;text-align:center;' +
-        'cursor:pointer;transition:border-color .15s ease,background .15s ease">' +
-        '<span style="display:inline-flex;color:var(--text-2)">' + icons.upload + '</span>' +
-        '<div style="font-size:14px;font-weight:600;margin-top:6px">Drop export.zip here, or tap to choose</div>' +
-        '<div class="small-text muted" style="margin-top:2px">Accepts export.zip or export.xml</div>' +
-      '</div>' +
-      '<input type="file" id="ah-file" accept=".zip,.xml,application/zip,text/xml" style="display:none">' +
-      '<div class="progress-bar" id="ah-prog" style="display:none;margin-top:12px"><div id="ah-prog-fill" style="width:0%"></div></div>' +
-      '<div class="btn-row" style="margin-top:12px">' +
-        '<button type="button" class="btn ghost small" id="ah-export">' + icons.download + ' Export workouts CSV</button>' +
-      '</div>' +
-      detailsBlock('How to export from iPhone', (window.AppleHealth && AppleHealth.shortcutsGuide) ||
-        '<ol style="padding-left:18px;display:flex;flex-direction:column;gap:6px">' +
-        '<li>Open the <b>Health</b> app on your iPhone.</li>' +
-        '<li>Tap your picture (top right) → <b>Export All Health Data</b>.</li>' +
-        '<li>Wait for <b>export.zip</b> to be created, then AirDrop / save it here.</li>' +
-        '<li>Drop the file above — no need to unzip.</li></ol>') +
+      '<p class="text-2 small-text" style="margin:6px 0 12px">Sleep, resting heart rate and daily ' +
+        'activity, arriving on their own every morning. No files, no exporting.</p>' +
+      stateRow() +
+      (inboxUrl
+        ? '<div class="field"><label>Deliver to this address</label>' +
+            '<div class="pair-key" id="ah-url">' + U.esc(inboxUrl) + '</div>' +
+            '<div class="btn-row"><button type="button" class="btn small" id="ah-copy">Copy address</button>' +
+            '<button type="button" class="btn ghost small" id="ah-test">Check now</button>' +
+            '<button type="button" class="btn ghost small" id="ah-unpair">Disconnect</button></div>' +
+          '</div>' +
+          summaryRows() +
+          detailsBlock('Set up Health Auto Export (once)',
+            '<ol style="padding-left:18px;display:flex;flex-direction:column;gap:6px">' +
+            '<li>Install <b>Health Auto Export</b> from the App Store and give it Health access ' +
+              '— it appears in Health → Sharing → Apps because it is a native app.</li>' +
+            '<li>In the app: <b>Automations → Add Automation</b>.</li>' +
+            '<li>Type <b>REST API</b>, method <b>POST</b>, and paste the address above as the URL.</li>' +
+            '<li>Pick the metrics: resting heart rate, sleep analysis, step count, active energy, ' +
+              'exercise time, VO2 max, weight.</li>' +
+            '<li>Set it to run <b>daily</b>, early morning. Save.</li>' +
+            '<li>Run it once by hand, then tap <b>Check now</b> here.</li></ol>') +
+          (link.lastRaw
+            ? detailsBlock('What the last delivery actually contained',
+                '<p class="text-2 small-text" style="margin:0 0 8px">Useful if data arrives but nothing ' +
+                'appears — it shows exactly what was sent.</p>' +
+                '<pre style="white-space:pre-wrap;word-break:break-all;font-size:11px;' +
+                'font-family:var(--font-num);color:var(--text-2);margin:0;max-height:180px;overflow:auto">' +
+                U.esc(link.lastRaw.slice(0, 1500)) + '</pre>')
+            : '')
+        : (syncUrl
+            ? '<button type="button" class="btn primary" id="ah-pair" style="width:100%;min-height:48px">' +
+              'Set up connection</button>' +
+              '<p class="small-text muted" style="margin:8px 0 0">Mints a private address for your ' +
+              'profile. Takes about three minutes on this phone, once.</p>'
+            : '')) +
+      detailsBlock('Import an export.zip instead (for old history)',
+        '<p class="text-2 small-text" style="margin:0 0 10px">The connection only brings data from the ' +
+        'day it starts. To backfill everything before that, import once from a Health export.</p>' +
+        '<div id="ah-drop" role="button" tabindex="0" aria-label="Import Apple Health export" ' +
+          'style="border:1.5px dashed var(--border);border-radius:var(--radius-sm);padding:22px 16px;' +
+          'text-align:center;cursor:pointer">' +
+          '<span style="display:inline-flex;color:var(--text-2)">' + icons.upload + '</span>' +
+          '<div style="font-size:14px;font-weight:600;margin-top:6px">Drop export.zip here, or tap to choose</div>' +
+        '</div>' +
+        '<input type="file" id="ah-file" accept=".zip,.xml,application/zip,text/xml" style="display:none">' +
+        '<div class="progress-bar" id="ah-prog" style="display:none;margin-top:12px">' +
+          '<div id="ah-prog-fill" style="width:0%"></div></div>' +
+        '<div class="btn-row" style="margin-top:12px">' +
+          '<button type="button" class="btn ghost small" id="ah-export">' + icons.download +
+          ' Export workouts CSV</button></div>') +
       '</div>');
     el.appendChild(ahCard);
+    wireHealthLink(ahCard);
     wireAppleHealth(ahCard);
 
     /* ---- 5. Family Sync ---- */
@@ -1544,6 +1635,84 @@
   }
 
   /* ---------- Apple Health wiring ---------- */
+
+  /* The health link's own wiring. wireAppleHealth still owns the export.zip
+     import below it — the two coexist because the connection only brings data
+     from the day it starts, and old history still has to come from a file. */
+  function wireHealthLink(card) {
+    const pair = U.$('#ah-pair', card);
+    if (pair) {
+      pair.addEventListener('click', function () {
+        const url = Sync.pairHealth();
+        if (!url) { App.toast('Set up Family Sync first', 'err'); return; }
+        App.toast('Address ready — paste it into Health Auto Export', 'ok');
+        App.rerender();
+      });
+    }
+
+    const copy = U.$('#ah-copy', card);
+    if (copy) {
+      copy.addEventListener('click', function () {
+        const url = Sync.healthInboxUrl();
+        function done() { App.toast('Address copied', 'ok'); }
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(url).then(done, function () { select(); });
+        } else select();
+        function select() {
+          // No clipboard permission: select it so a long-press can copy.
+          const el = U.$('#ah-url', card);
+          if (!el) return;
+          const r = document.createRange();
+          r.selectNodeContents(el);
+          const sel = window.getSelection();
+          sel.removeAllRanges();
+          sel.addRange(r);
+          App.toast('Long-press the highlighted address to copy', 'ok');
+        }
+      });
+    }
+
+    const test = U.$('#ah-test', card);
+    if (test) {
+      test.addEventListener('click', function () {
+        test.disabled = true;
+        const was = test.textContent;
+        test.textContent = 'Checking…';
+        Sync.drainHealth().then(function (r) {
+          test.disabled = false;
+          test.textContent = was;
+          if (!r.ok) {
+            App.toast(r.reason === 'not-configured' ? 'Not connected yet' :
+              'Could not reach the inbox: ' + r.reason, 'err');
+          } else if (r.empty) {
+            App.toast('Inbox is empty — run the automation on your phone, then check again', 'ok');
+          } else if (!r.added && r.unknown && r.unknown.length) {
+            App.toast('A delivery arrived but none of it was recognised', 'err');
+          } else {
+            App.toast(r.added + ' new reading' + (r.added === 1 ? '' : 's') + ' merged', 'ok');
+          }
+          App.rerender();
+        });
+      });
+    }
+
+    const unpair = U.$('#ah-unpair', card);
+    if (unpair) {
+      unpair.addEventListener('click', function () {
+        App.confirm({
+          title: 'Disconnect Health?',
+          message: 'The address stops working immediately. Data already received stays. ' +
+            'Reconnecting mints a new address, so you would update Health Auto Export.',
+          danger: true, confirmLabel: 'Disconnect'
+        }).then(function (ok) {
+          if (!ok) return;
+          Sync.unpairHealth();
+          App.toast('Disconnected', 'ok');
+          App.rerender();
+        });
+      });
+    }
+  }
 
   function wireAppleHealth(card) {
     const drop = U.$('#ah-drop', card);
