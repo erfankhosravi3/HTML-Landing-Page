@@ -106,16 +106,29 @@ every palette is validated for colourblind-safe chart series and contrast.
 
 ### Apple Health
 
-Import your `export.zip` in the browser: body weight and body fat, steps, resting
-heart rate, active energy, exercise minutes, VO₂max, sleep, and workouts. Parsed
-locally, previewed before anything is added, nothing uploaded. Walks import as
-walks — not as runs, which would quietly inflate your mileage and your injury
-guardrails with it.
+**A connection, not a file transfer.** Settings → Apple Health → *Set up
+connection* mints a private inbox address in your own sync database. Paste it
+into [Health Auto Export](https://apps.apple.com/app/id1115567069) as a daily
+POST automation and sleep, resting heart rate, steps, active energy, exercise
+minutes, VO₂max and body weight arrive on their own each morning. Nothing is
+exported by hand, and the card shows what actually turned up — including
+anything it did not recognise, so a silent link is a visible one.
+
+The inbox is a **sibling** of the training path, not a child of it, with its own
+unguessable token. An address you hand to a third-party app cannot be walked up
+into your log, and it never leaves the device it was minted on.
+
+*A pure web app cannot read HealthKit — Apple exposes it to native iOS apps
+only. So a native app you already trust with Health permission does the
+delivering, and IronLog only receives.*
+
+For history from before the connection existed, import your `export.zip` once:
+body weight and body fat, steps, resting heart rate, active energy, exercise
+minutes, VO₂max, sleep and workouts, parsed locally and previewed before
+anything is added. Walks import as walks — not as runs, which would quietly
+inflate your mileage and your injury guardrails with it.
 
 Export lifting history as CSV or everything as a JSON backup.
-
-*Live HealthKit sync is impossible for any pure web app — Apple exposes it to
-native iOS apps only. The export/import loop is the standard approach.*
 
 ## Updates
 
@@ -193,8 +206,8 @@ own path already filled in, so you can copy them straight into
     },
 
     "$inbox": {
-      ".read": "$inbox.matches(/^health-[a-z0-9]{24}$/)",
-      ".write": "$inbox.matches(/^health-[a-z0-9]{24}$/)"
+      ".read": "$inbox.matches(/^health-[a-z0-9]{16,}$/)",
+      ".write": "$inbox.matches(/^health-[a-z0-9]{16,}$/)"
     }
   }
 }
@@ -203,8 +216,10 @@ own path already filled in, so you can copy them straight into
 The root is denied, so nobody can list what exists — which is what turns the
 random segments into actual secrets. The training path is allowed by name;
 health inboxes are allowed by *pattern*, so the app can mint and rotate one
-without you editing rules again. These rules do not expire the way test mode
-does.
+without you editing rules again. The pattern is a minimum length, not an exact
+one, so an address minted before these rules existed keeps working — if yours
+is somehow shorter still, the Apple Health card says so and offers a new one.
+These rules do not expire the way test mode does.
 
 *Anyone who knows the full path can still read and write it. That is the design
 — it is a shared family log with no accounts. Rotate a segment if it leaks.*

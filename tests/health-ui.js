@@ -118,6 +118,32 @@ const { serve } = require('./lib/hport');
     'an unrecognised delivery is called out on screen');
   await shot('6-unrecognised');
 
+  /* ---- 7. an address the database rules would reject ----
+     Only reachable for links paired before the lockdown shipped. It outranks
+     every other paired state because it is the one that breaks silently the
+     moment the user publishes the rules: the courier keeps posting, Firebase
+     keeps answering 401, and the app just stops seeing new data. */
+  await p.evaluate(function () {
+    Store.state.sync.health.inbox = 'health-tooshort';
+    Store.state.sync.health.lastAt = Date.now();
+    Store.save(); App.rerender();
+  });
+  await p.waitForTimeout(500);
+  s = await state();
+  ok(/risk/.test(s.cls), 'legacy address: the alarming state, ahead of "receiving" (got "' + s.cls + '")');
+  ok(/predates/i.test(s.head), 'legacy address: says what is wrong (got "' + s.head + '")');
+  const hasRemint = await p.evaluate(function () { return !!document.querySelector('#ah-remint'); });
+  ok(hasRemint, 'legacy address: offers to mint a new one');
+  await shot('7-legacy');
+
+  await p.click('#ah-remint');
+  await p.waitForTimeout(600);
+  s = await state();
+  const fixed = await p.evaluate(function () { return Sync.conformingInbox(); });
+  ok(fixed, 're-minting produces an address the rules accept');
+  ok(!/risk/.test(s.cls), 'and the warning clears (got "' + s.cls + '")');
+  ok(s.url.indexOf('health-tooshort') === -1, 'the rejected address is gone from the card');
+
   ok(errs.length === 0, 'no page errors: ' + errs.slice(0, 2).join(' | '));
 
   console.log('passed:', pass);
