@@ -85,6 +85,133 @@
     return Sync.status();
   };
 
+  /* ======================================================================
+     THE HEALTH LINK
+     ======================================================================
+     A courier holding HealthKit permission (Health Auto Export) POSTs to a
+     private inbox on a schedule. The app drains that inbox and merges what it
+     finds. No file ever changes hands.
+
+     THE INBOX IS A SIBLING OF THE SYNC PATH, not a child of it. Same database,
+     separate top-level key with its own unguessable token — so the address you
+     hand a third-party app cannot be walked up into your training log, and a
+     leak exposes recent health metrics and nothing else.
+
+     The token lives in state.sync, which is deleted before every push, so it
+     never travels to the family database it points at. */
+
+  function origin(u) {
+    const m = /^(https?:\/\/[^/]+)/i.exec(String(u || ''));
+    return m ? m[1] : '';
+  }
+
+  Sync.healthInbox = function () {
+    const c = cfg();
+    return c && c.health && c.health.inbox ? c.health.inbox : '';
+  };
+
+  // The address the courier posts to. Empty until paired, or if sync has no URL.
+  Sync.healthInboxUrl = function () {
+    const c = cfg();
+    if (!c || !c.url) return '';
+    const box = Sync.healthInbox();
+    if (!box) return '';
+    const o = origin(c.url);
+    if (!o) return '';
+    return o + '/' + box + '.json' + (c.secret ? '?auth=' + encodeURIComponent(c.secret) : '');
+  };
+
+  Sync.pairHealth = function () {
+    const c = cfg();
+    if (!c) return '';
+    if (!c.health) c.health = { inbox: '', lastAt: null, lastSummary: null, lastRaw: '', outbox: false };
+    // Long, unguessable, and its own secret — independent of the sync path so
+    // rotating one does not disturb the other.
+    c.health.inbox = 'health-' + U.uid('').replace(/[^a-z0-9]/gi, '') +
+      Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 10);
+    if (window.Store && window.Store.save) window.Store.save();
+    notify();
+    return Sync.healthInboxUrl();
+  };
+
+  Sync.unpairHealth = function () {
+    const c = cfg();
+    if (!c || !c.health) return;
+    c.health = { inbox: '', lastAt: null, lastSummary: null, lastRaw: '', outbox: false };
+    if (window.Store && window.Store.save) window.Store.save();
+    notify();
+  };
+
+  /* One delivery, or a map of them. Firebase POST appends under a push key, so
+     the inbox is usually { "-Nabc...": {delivery}, ... }; a PUT writes the
+     delivery straight in. Handle both rather than betting on which verb the
+     courier uses — that is not something this code can verify from here. */
+  function deliveriesIn(payload) {
+    if (!payload || typeof payload !== 'object') return [];
+    if (payload.data || payload.metrics) return [payload];      // written by PUT
+    const out = [];
+    for (const k in payload) {
+      const v = payload[k];
+      if (v && typeof v === 'object') out.push(v);
+    }
+    return out;
+  }
+
+  /* Drains the inbox into healthSamples. Returns a summary; NEVER rejects, so
+     a failing link degrades the status line instead of the app. */
+  Sync.drainHealth = function () {
+    const c = cfg();
+    const AH = window.AppleHealth;
+    const Store = window.Store;
+    if (!c || !c.url || !Sync.healthInbox() || !AH || !Store) {
+      return Promise.resolve({ ok: false, reason: 'not-configured' });
+    }
+    const url = Sync.healthInboxUrl();
+    const user = Store.currentUser && Store.currentUser();
+    if (!user) return Promise.resolve({ ok: false, reason: 'no-profile' });
+
+    return request(url, { method: 'GET' }).then(function (res) {
+      if (!res.ok) throw new Error('inbox HTTP ' + res.status);
+      return res.json();
+    }).then(function (payload) {
+      const list = deliveriesIn(payload);
+      if (!list.length) return { ok: true, empty: true, added: 0 };
+
+      let rows = [];
+      const kinds = {};
+      const unknown = [];
+      for (let i = 0; i < list.length; i++) {
+        const parsed = AH.parseDelivery(list[i], user.id);
+        rows = rows.concat(parsed.rows);
+        for (const k in parsed.kinds) kinds[k] = (kinds[k] || 0) + parsed.kinds[k];
+        parsed.unknown.forEach(function (n) { if (unknown.indexOf(n) < 0) unknown.push(n); });
+      }
+      const added = rows.length ? Store.addHealthSamples(rows) : 0;
+
+      if (!c.health) c.health = {};
+      c.health.lastAt = Date.now();
+      c.health.lastSummary = { rows: rows.length, added: added, kinds: kinds, unknown: unknown };
+      /* Keep the raw body of the newest delivery. If the courier's shape ever
+         differs from what the parser expects, this is the difference between
+         "nothing arrived, no idea why" and a five-minute fix. */
+      try { c.health.lastRaw = JSON.stringify(list[list.length - 1]).slice(0, 4000); }
+      catch (e) { c.health.lastRaw = ''; }
+      Store.save();
+
+      // Only clear the inbox once the rows are safely merged and saved.
+      return request(url, { method: 'DELETE' }).then(function () {
+        return { ok: true, added: added, rows: rows.length, kinds: kinds, unknown: unknown };
+      }).catch(function () {
+        // Merged but not cleared: the next drain re-merges the same rows, and
+        // addHealthSamples is idempotent, so this is safe to shrug at.
+        return { ok: true, added: added, rows: rows.length, kinds: kinds,
+          unknown: unknown, uncleared: true };
+      });
+    }).catch(function (err) {
+      return { ok: false, reason: stripSecret(err) || 'fetch failed' };
+    });
+  };
+
   /* ---------- debounced push after local changes ---------- */
 
   const firePush = U.debounce(function () {

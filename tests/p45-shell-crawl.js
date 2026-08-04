@@ -17,7 +17,7 @@ const cn = (sw.match(/const CACHE_NAME = '([^']+)'/) || [])[1];
 // Pinning an exact version made this fail on every release, which is the
 // opposite of useful. Assert the SHAPE, and that it is strictly ahead of the
 // version currently live in production (that is the real release invariant).
-const LIVE = 'ironlog-v2p14';   // last deployed; bump when a release goes out
+const LIVE = 'ironlog-v2p15';   // last deployed; bump when a release goes out
 const m = /^ironlog-v2p(\d+)$/.exec(cn || '');
 ok(!!m, 'CACHE_NAME "' + cn + '" matches ironlog-v2p<n>');
 ok(m && Number(m[1]) >= Number(/(\d+)$/.exec(LIVE)[1]),

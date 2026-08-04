@@ -811,6 +811,158 @@
 
   /* ---------- settings-panel guide (static HTML, no user data) ---------- */
 
+  /* ======================================================================
+     THE HEALTH LINK — deliveries that arrive on their own
+     ======================================================================
+     A courier that holds HealthKit permission (Health Auto Export) POSTs a
+     JSON body to a private inbox on a schedule. This is the parsing half;
+     sync.js owns the fetch, because it is the only module allowed on the
+     network.
+
+     WRITTEN DEFENSIVELY, ON PURPOSE. The courier's exact payload shape cannot
+     be verified from here — the same class of gap that let a malformed API
+     schema ship. So: accept several plausible shapes, never throw, and keep
+     the raw body of the last delivery so a mis-map is DIAGNOSABLE on screen
+     instead of silently producing nothing.                                */
+
+  // Courier metric name (lowercased, punctuation stripped) -> our kind.
+  /* Keys here MUST be normKey() output — lowercase, alphanumeric only. An
+     earlier version listed underscored aliases like `resting_heart_rate`,
+     which normKey can never produce, so half this table was dead weight while
+     our OWN kind names were missing entirely: a flat map keyed `restingHR`
+     matched nothing. Aliases belong on the left of normKey, not in the key. */
+  const INBOX_KINDS = {
+    // Health Auto Export / HealthKit names
+    restingheartrate: 'restingHR',
+    heartrateresting: 'restingHR',
+    stepcount: 'steps',
+    steps: 'steps',
+    activeenergy: 'activeEnergyKcal',
+    activeenergyburned: 'activeEnergyKcal',
+    appleexercisetime: 'exerciseMin',
+    exercisetime: 'exerciseMin',
+    exerciseminutes: 'exerciseMin',
+    vo2max: 'vo2max',
+    sleepanalysis: 'sleepHours',
+    timeasleep: 'sleepHours',
+    asleep: 'sleepHours',
+    weightbodymass: 'weightKg',
+    bodymass: 'weightKg',
+    weight: 'weightKg',
+    bodyfatpercentage: 'bodyFatPct',
+    bodyfat: 'bodyFatPct',
+    // our own kind names, so a hand-built shortcut can post them directly
+    restinghr: 'restingHR',
+    activeenergykcal: 'activeEnergyKcal',
+    exercisemin: 'exerciseMin',
+    sleephours: 'sleepHours',
+    weightkg: 'weightKg',
+    bodyfatpct: 'bodyFatPct'
+  };
+
+
+  function normKey(name) {
+    return String(name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  }
+
+  // "2026-08-01 05:00:00 -0700" | ISO | epoch ms -> YYYY-MM-DD, or ''.
+  function inboxDate(v) {
+    if (v === null || v === undefined) return '';
+    if (typeof v === 'number' && isFinite(v)) {
+      const d = new Date(v > 1e12 ? v : v * 1000);
+      return isNaN(d.getTime()) ? '' : U.dateToStr(d);
+    }
+    const str = String(v).trim();
+    const m = /^(\d{4}-\d{2}-\d{2})/.exec(str);
+    if (m) return m[1];                       // already date-first; no timezone shift
+    const d = new Date(str);
+    return isNaN(d.getTime()) ? '' : U.dateToStr(d);
+  }
+
+  function toKg(value, units) {
+    const u = String(units || '').toLowerCase();
+    if (u.indexOf('lb') >= 0 || u.indexOf('pound') >= 0) return Number(value) / U.LB_PER_KG;
+    return Number(value);
+  }
+
+  // Sleep arrives as hours, minutes or seconds depending on the courier.
+  function toHours(value, units) {
+    const n = Number(value);
+    const u = String(units || '').toLowerCase();
+    if (u.indexOf('min') >= 0) return n / 60;
+    if (u.indexOf('sec') >= 0) return n / 3600;
+    if (u.indexOf('hr') >= 0 || u.indexOf('hour') >= 0) return n;
+    // No unit: assume hours if it is a plausible night, minutes otherwise.
+    return n > 24 ? n / 60 : n;
+  }
+
+  /* Returns { rows, kinds, unknown, dates } and NEVER throws.
+     `unknown` is the list of metric names we received but do not map — the
+     single most useful thing to show when a delivery lands and nothing
+     appears. */
+  AppleHealth.parseDelivery = function (payload, userId) {
+    const out = { rows: [], kinds: {}, unknown: [], dates: {} };
+    if (!payload) return out;
+
+    let root = payload;
+    if (typeof root === 'string') {
+      try { root = JSON.parse(root); } catch (e) { return out; }
+    }
+    if (!root || typeof root !== 'object') return out;
+
+    // Health Auto Export nests under data.metrics; some setups post the inner
+    // object directly, and a hand-built shortcut may post a flat map.
+    const data = root.data && typeof root.data === 'object' ? root.data : root;
+    let metrics = data.metrics;
+    if (!Array.isArray(metrics)) {
+      if (Array.isArray(data)) metrics = data;
+      else if (data && typeof data === 'object') {
+        // Flat: { restingHR: {"2026-08-01": 58}, ... }
+        metrics = Object.keys(data).map(function (k) {
+          const v = data[k];
+          if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+          return { name: k, data: Object.keys(v).map(function (d) {
+            return { date: d, qty: v[d] };
+          }) };
+        }).filter(Boolean);
+      }
+    }
+    if (!Array.isArray(metrics)) return out;
+
+    for (let i = 0; i < metrics.length; i++) {
+      const m = metrics[i];
+      if (!m || typeof m !== 'object') continue;
+      const kind = INBOX_KINDS[normKey(m.name)];
+      if (!kind) {
+        if (m.name && out.unknown.indexOf(String(m.name)) < 0) out.unknown.push(String(m.name));
+        continue;
+      }
+      const points = Array.isArray(m.data) ? m.data : [];
+      for (let j = 0; j < points.length; j++) {
+        const pt = points[j];
+        if (!pt || typeof pt !== 'object') continue;
+        const date = inboxDate(pt.date || pt.startDate || pt.day);
+        if (!date) continue;
+        let raw = pt.qty;
+        if (raw === undefined) raw = pt.value;
+        if (raw === undefined) raw = pt.Avg;
+        if (raw === undefined) raw = pt.total;
+        if (raw === undefined || raw === null || raw === '') continue;
+        let value = Number(raw);
+        if (!isFinite(value)) continue;
+        if (kind === 'weightKg') value = toKg(value, m.units);
+        if (kind === 'sleepHours') value = toHours(value, m.units);
+        out.rows.push({ userId: userId, date: date, kind: kind,
+          value: Math.round(value * 100) / 100, source: 'link' });
+        out.kinds[kind] = (out.kinds[kind] || 0) + 1;
+        out.dates[date] = true;
+      }
+    }
+    return out;
+  };
+
+  AppleHealth.INBOX_KINDS = INBOX_KINDS;
+
   AppleHealth.shortcutsGuide = [
     '<div class="ah-guide">',
     '<h3>Import from Apple Health</h3>',

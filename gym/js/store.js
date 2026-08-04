@@ -325,7 +325,8 @@
       routines: [],
       coachChats: [],
       deleted: emptyDeleted(),
-      sync: { url: '', secret: '', enabled: false, lastSyncAt: null, deviceId: U.uid('dev') }
+      sync: { url: '', secret: '', enabled: false, lastSyncAt: null, deviceId: U.uid('dev'),
+        health: { inbox: '', lastAt: null, lastSummary: null, lastRaw: '', outbox: false } }
     };
   }
 
@@ -381,6 +382,26 @@
       st.sync.enabled = !!s.enabled;
       if (typeof s.lastSyncAt === 'number') st.sync.lastSyncAt = s.lastSyncAt;
       if (typeof s.deviceId === 'string' && s.deviceId) st.sync.deviceId = s.deviceId;
+      /* The Apple Health link lives here on purpose. `sync` is the one part of
+         state that Sync DELETES before pushing, so anything under it stays on
+         this device — which is exactly what an inbox address needs to be. It
+         is a credential, and it gets the same treatment as the coach API key:
+         never in a backup that gets shared, never in the family database.
+
+         This block is a whitelist, so a key not named here is silently
+         dropped on the next load. That is why `health` is spelled out. */
+      if (s.health && typeof s.health === 'object') {
+        const h = s.health;
+        st.sync.health = {
+          inbox: typeof h.inbox === 'string' ? h.inbox : '',
+          lastAt: typeof h.lastAt === 'number' ? h.lastAt : null,
+          lastSummary: h.lastSummary && typeof h.lastSummary === 'object' ? h.lastSummary : null,
+          // The raw shape of the most recent delivery, kept so a courier whose
+          // payload we mis-map is DIAGNOSABLE instead of silently ignored.
+          lastRaw: typeof h.lastRaw === 'string' ? h.lastRaw.slice(0, 4000) : '',
+          outbox: h.outbox === true
+        };
+      }
     }
     // Users are shallow-copied (like workouts below) so normalizeState never
     // mutates the caller's objects — mergeRemote feeds caller-owned data here.
