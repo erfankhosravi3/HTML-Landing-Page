@@ -154,14 +154,60 @@ enable sync. Two ways to share between devices:
 2. **Build → Realtime Database → Create database** → pick a location → start in
    **test mode**.
 3. Copy the database URL, e.g. `https://yourname-default-rtdb.firebaseio.com`.
-4. Append a long random path segment to keep it private, e.g.
+4. Append a long random path segment, e.g.
    `https://yourname-default-rtdb.firebaseio.com/ironlog-k92hf83hf`.
 5. IronLog: **Settings → Family Sync** → paste → Enable → Sync now.
-6. Send the same URL to your family; they paste it on their devices.
+6. **Lock the database down** — see below. Until you do, the random segment
+   protects nothing.
+7. Send the same URL to your family; they paste it on their devices.
 
-*Test-mode rules mean anyone with the exact URL can read and write it — the long
-random segment is the secret. Reasonable for a small family log; rotate the
-segment if it ever leaks.*
+### Lock the database down (do not skip this)
+
+Test mode writes its rules at the **root**, and Firebase read permission
+cascades *downward*. So a rule at the root is a rule about the root:
+
+```
+GET https://yourname-default-rtdb.firebaseio.com/.json
+```
+
+returns the entire database in one request. The random path segment is never
+asked for, and the project name is not a secret — it is right there in the
+hostname. Earlier versions of this README said the segment kept the database
+private. That was wrong, and it was wrong from the first day sync shipped.
+
+**Settings → Family Sync → "Who can read this database?" → Check** asks your
+database that exact question, anonymously and with no secret attached, and
+tells you the real answer. The same panel generates the rules below with your
+own path already filled in, so you can copy them straight into
+**Firebase console → Realtime Database → Rules → Publish**:
+
+```json
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+
+    "ironlog-k92hf83hf": {
+      ".read": true,
+      ".write": true
+    },
+
+    "$inbox": {
+      ".read": "$inbox.matches(/^health-[a-z0-9]{24}$/)",
+      ".write": "$inbox.matches(/^health-[a-z0-9]{24}$/)"
+    }
+  }
+}
+```
+
+The root is denied, so nobody can list what exists — which is what turns the
+random segments into actual secrets. The training path is allowed by name;
+health inboxes are allowed by *pattern*, so the app can mint and rotate one
+without you editing rules again. These rules do not expire the way test mode
+does.
+
+*Anyone who knows the full path can still read and write it. That is the design
+— it is a shared family log with no accounts. Rotate a segment if it leaks.*
 
 **Mixed versions are safe.** A phone running an older build merges with a newer
 one without destroying data it does not understand: unknown collections, unknown

@@ -1653,3 +1653,93 @@ state is ever a broken screen.
 New files `js/coach.js` and `js/views-coach.js` must be added to `index.html`
 in load order AND to the `SHELL` array in `sw.js`, and `CACHE_NAME` bumped —
 otherwise installed PWAs serve the pre-coach app forever.
+
+---
+
+# ADDENDUM — THE DATABASE IS NOT PRIVATE BY ACCIDENT
+
+This is a correction, not a phase. From the first sync release until now, the
+app and its README both told the user that a long random path segment kept
+their Firebase database private. It did not, and the reasoning error is worth
+writing down because it is the kind that survives review:
+
+> Firebase test-mode rules are `{ ".read": true, ".write": true }` **at the
+> root**. Read permission cascades *downward*, so a rule at the root is a rule
+> about the root. `GET https://<project>.firebaseio.com/.json` returns the
+> entire database in one request, and the random segment is never consulted.
+> The project name is not a secret either — it is in the hostname.
+
+So the secret was never a secret, and the app's own copy asserted otherwise on
+a screen the user trusted. The fix has three binding parts.
+
+## 1. Ask, do not assert (binding)
+
+`Sync.probeExposure()` requests `<origin>/.json?shallow=true` and maps
+200 → `open`, 401/403 → `locked`, anything else → `unknown`.
+
+**It must never attach `auth=`.** The question is what someone *without* the
+secret can read; sending the secret answers a different question with a
+reassuring yes. For the same reason it must probe the **root**, not the sync
+path — the sync path returns 200 under correct rules and open rules alike, so
+it cannot distinguish them. Both are pinned in `tests/db-rules.js`.
+
+`unknown` is never rendered as safe. A failed probe leaves the warning up.
+
+## 2. The verdict is persisted by the handler that produces it (binding)
+
+`state.sync.exposure` is whitelisted in `normalizeState` and written by the
+Check handler itself. Not by a later save that happens to come along: with sync
+enabled, the debounced push saves ~2s after any config change and will persist
+it for free — which is exactly why the test toggles sync **off** before
+asserting the write. A user who taps Check and closes the app must still see
+the warning next time.
+
+Like everything under `state.sync`, it never leaves the device.
+
+## 3. The rules and the generator are one artefact (binding)
+
+`Sync.rulesJson()` emits the block the user pastes into the console:
+
+```json
+{ "rules": {
+    ".read": false, ".write": false,
+    "<their sync segment>": { ".read": true, ".write": true },
+    "$inbox": { ".read": "$inbox.matches(/^health-[a-z0-9]{24}$/)",
+                ".write": "$inbox.matches(/^health-[a-z0-9]{24}$/)" } } }
+```
+
+Root denied is the whole fix — without the ability to enumerate, the path
+segments finally *are* secrets. The training path is pinned by name; health
+inboxes are matched by **pattern**, because the app mints and rotates them and
+a rule requiring a console edit each time would stop being edited.
+
+That pattern is `Sync.HEALTH_INBOX_RE`, and it is published in three places
+that must agree byte for byte: the generator, the emitted rules, and the README.
+If they drift, every delivery 401s and it reads as the courier's fault.
+`tests/db-rules.js` rebuilds the regex *from the emitted rules text* and runs a
+freshly minted inbox name through it.
+
+Hence `Sync.token(n)` returns **exactly** n characters from `[a-z0-9]`, crypto
+when available, rejection-sampled to avoid modulo bias. The generator it
+replaced concatenated `Math.random().toString(36)` slices, whose length is an
+average rather than a guarantee — `"0.5"` contributes one character. That was
+tolerable when the token was one of several defences and is not tolerable now
+that it is the only one.
+
+A URL with no path segment emits **no rules at all**. There is nothing to pin,
+and locking the root would lock the app out along with everyone else; the UI
+says so inline rather than behind a disclosure.
+
+## Acceptance tests (binding)
+
+1. 500 minted inboxes all match `HEALTH_INBOX_RE`, all exactly 24 characters,
+   all distinct — including on the no-crypto fallback path.
+2. The regex parsed out of `rulesJson()` accepts a freshly minted inbox and
+   rejects the sync segment, a short name, and a suffix walk.
+3. The probe sends no `auth=`, in any form, and targets the root.
+4. 401 and 403 read as locked; 500 and a network failure read as unknown.
+5. The secret never appears in probe error text.
+6. The verdict is on disk immediately after the tap, with sync disabled.
+7. The open state renders as `.link-state.risk` and survives reload.
+8. The README publishes the same pattern as the code, and no longer contains
+   the claim that a random segment keeps the database private.

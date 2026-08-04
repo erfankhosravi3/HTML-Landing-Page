@@ -326,7 +326,8 @@
       coachChats: [],
       deleted: emptyDeleted(),
       sync: { url: '', secret: '', enabled: false, lastSyncAt: null, deviceId: U.uid('dev'),
-        health: { inbox: '', lastAt: null, lastSummary: null, lastRaw: '', outbox: false } }
+        health: { inbox: '', lastAt: null, lastSummary: null, lastRaw: '', outbox: false },
+        exposure: { state: 'unknown', keys: 0, at: null } }
     };
   }
 
@@ -400,6 +401,19 @@
           // payload we mis-map is DIAGNOSABLE instead of silently ignored.
           lastRaw: typeof h.lastRaw === 'string' ? h.lastRaw.slice(0, 4000) : '',
           outbox: h.outbox === true
+        };
+      }
+      /* The last answer the database gave to "what can a stranger read?".
+         Cached so the warning survives a re-render and a reload — an open
+         database that only warns you while the probe is in flight is a
+         warning you will never actually see. Local-only, like the rest of
+         `sync`, and re-probed on demand rather than trusted forever. */
+      if (s.exposure && typeof s.exposure === 'object') {
+        const e = s.exposure;
+        st.sync.exposure = {
+          state: e.state === 'open' || e.state === 'locked' ? e.state : 'unknown',
+          keys: typeof e.keys === 'number' ? e.keys : 0,
+          at: typeof e.at === 'number' ? e.at : null
         };
       }
     }
