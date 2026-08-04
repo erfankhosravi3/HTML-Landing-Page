@@ -1236,6 +1236,17 @@
         return '<div class="link-state off"><span class="dot"></span><span class="txt">' +
           '<b>Not connected</b><span>Nothing is arriving from Health yet.</span></span></div>';
       }
+      /* Ahead of every other paired state, because it outranks them: an
+         address the database rules will reject is a link that dies the moment
+         the user locks the database down, and dies quietly — the courier keeps
+         posting, Firebase keeps answering 401, and the app simply stops seeing
+         new data. Only reachable for addresses minted before the lockdown. */
+      if (window.Sync && Sync.conformingInbox && !Sync.conformingInbox()) {
+        return '<div class="link-state risk"><span class="dot"></span><span class="txt">' +
+          '<b>This address predates the database rules</b><span>It was minted before the lockdown ' +
+          'and the rules would reject it. Tap <b>Mint a new address</b> below, then paste the new ' +
+          'one into Health Auto Export.</span></span></div>';
+      }
       if (!lastAt) {
         return '<div class="link-state waiting"><span class="dot"></span><span class="txt">' +
           '<b>Waiting for the first delivery</b><span>Paste the address into Health Auto Export, ' +
@@ -1282,7 +1293,11 @@
       (inboxUrl
         ? '<div class="field"><label>Deliver to this address</label>' +
             '<div class="pair-key" id="ah-url">' + U.esc(inboxUrl) + '</div>' +
-            '<div class="btn-row"><button type="button" class="btn small" id="ah-copy">Copy address</button>' +
+            '<div class="btn-row">' +
+            (window.Sync && Sync.conformingInbox && !Sync.conformingInbox()
+              ? '<button type="button" class="btn primary small" id="ah-remint">Mint a new address</button>'
+              : '') +
+            '<button type="button" class="btn small" id="ah-copy">Copy address</button>' +
             '<button type="button" class="btn ghost small" id="ah-test">Check now</button>' +
             '<button type="button" class="btn ghost small" id="ah-unpair">Disconnect</button></div>' +
           '</div>' +
@@ -1769,6 +1784,18 @@
         const url = Sync.pairHealth();
         if (!url) { App.toast('Set up Family Sync first', 'err'); return; }
         App.toast('Address ready — paste it into Health Auto Export', 'ok');
+        App.rerender();
+      });
+    }
+
+    /* Same mint, different framing: this one REPLACES a working-looking
+       address, so it says out loud that the courier has to be updated. */
+    const remint = U.$('#ah-remint', card);
+    if (remint) {
+      remint.addEventListener('click', function () {
+        const url = Sync.pairHealth();
+        if (!url) { App.toast('Set up Family Sync first', 'err'); return; }
+        App.toast('New address ready — update it in Health Auto Export', 'ok');
         App.rerender();
       });
     }

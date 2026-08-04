@@ -1704,8 +1704,8 @@ Like everything under `state.sync`, it never leaves the device.
 { "rules": {
     ".read": false, ".write": false,
     "<their sync segment>": { ".read": true, ".write": true },
-    "$inbox": { ".read": "$inbox.matches(/^health-[a-z0-9]{24}$/)",
-                ".write": "$inbox.matches(/^health-[a-z0-9]{24}$/)" } } }
+    "$inbox": { ".read": "$inbox.matches(/^health-[a-z0-9]{16,}$/)",
+                ".write": "$inbox.matches(/^health-[a-z0-9]{16,}$/)" } } }
 ```
 
 Root denied is the whole fix — without the ability to enumerate, the path
@@ -1718,6 +1718,14 @@ that must agree byte for byte: the generator, the emitted rules, and the README.
 If they drift, every delivery 401s and it reads as the courier's fault.
 `tests/db-rules.js` rebuilds the regex *from the emitted rules text* and runs a
 freshly minted inbox name through it.
+
+The bound is a **minimum**, not the generator's exact 24. Addresses minted
+before this shipped came from the variable-length generator; publishing `{24}`
+would have 401'd every one of them the moment the rules were pasted — the very
+failure the pattern exists to prevent, aimed at the only user who could hit it.
+Nothing is given up: what protects an inbox is the entropy of a name you must
+already know in full. `Sync.conformingInbox()` catches anything below the bound
+and the Apple Health card offers a fresh address rather than going quiet.
 
 Hence `Sync.token(n)` returns **exactly** n characters from `[a-z0-9]`, crypto
 when available, rejection-sampled to avoid modulo bias. The generator it

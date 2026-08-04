@@ -85,7 +85,7 @@ function reset(url, secret) {
     seen[box] = (seen[box] || 0) + 1;
   }
   eq(offPattern, 0, '500 minted inboxes ALL match the published pattern');
-  eq(shortest, 24, 'every token is exactly 24 characters — never a short one');
+  eq(shortest, 24, 'every MINTED token is exactly 24 characters — never a short one');
   eq(badChars, 0, 'tokens stay inside [a-z0-9], the charset the rules allow');
   eq(Object.keys(seen).length, 500, '500 mints produced 500 distinct tokens');
 
@@ -104,6 +104,35 @@ function reset(url, secret) {
   eq(fallbackBad, 0, 'the no-crypto fallback also produces conforming tokens');
   eq(fallbackShort, 0, 'and they are the same length — the old code could emit 13');
   Object.defineProperty(global, 'crypto', { value: realCrypto, configurable: true, writable: true });
+
+  /* ==============================================================
+     1b. Addresses that already exist, minted before the lockdown
+     ==============================================================
+     The one person using this feature paired on the previous build. If the
+     published rules reject that address, locking the database down silently
+     kills their health link: the courier keeps posting, Firebase keeps
+     answering 401, and the app just stops seeing new data. That is the exact
+     failure the pattern was supposed to prevent, aimed at the only user who
+     could hit it. */
+  reset();
+  // What the old generator actually produced: uid (11) + two base-36 slices.
+  const LEGACY = 'health-mkq3z8h4t2v9x1c7b5n0w6';       // 26, the common case
+  const LEGACY_SHORT = 'health-mkq3z8h4t2v';             // 12, the pathological case
+  ok(Sync.HEALTH_INBOX_RE.test(LEGACY),
+    'a pre-lockdown address still passes the published rules');
+  ok(!Sync.HEALTH_INBOX_RE.test(LEGACY_SHORT),
+    'but a pathologically short one does not — those need re-minting');
+
+  Store.state.sync.health.inbox = LEGACY;
+  ok(Sync.conformingInbox(), 'a conforming address raises nothing');
+  Store.state.sync.health.inbox = LEGACY_SHORT;
+  ok(!Sync.conformingInbox(),
+    'A NON-CONFORMING ADDRESS IS REPORTED, so the app can offer a new one ' +
+    'instead of going quiet after the rules are published');
+  Store.state.sync.health.inbox = '';
+  ok(Sync.conformingInbox(), 'an unpaired link has nothing to warn about');
+  Sync.pairHealth();
+  ok(Sync.conformingInbox(), 'and a freshly minted address always conforms');
 
   /* ==============================================================
      2. The segment the rules have to pin
@@ -155,8 +184,12 @@ function reset(url, secret) {
     ok(!fromRules.test('ironlog-abc123'),
       'the wildcard does NOT also open the training path — that would undo the pinning');
     ok(!fromRules.test('health-short'), 'a short guessable name is rejected');
-    ok(!fromRules.test('health-' + 'a'.repeat(24) + 'x'),
-      'the pattern is anchored at both ends, so no suffix walk');
+    ok(!fromRules.test('health-' + 'a'.repeat(24) + '/child'),
+      'anchored at the end, so no walking down into a child path');
+    ok(!fromRules.test('notahealth-' + 'a'.repeat(24)),
+      'anchored at the start, so no prefixing your way in');
+    ok(!fromRules.test('health-' + 'a'.repeat(23) + '.'),
+      'punctuation is outside the charset the rules allow');
     eq(R.$inbox['.write'], R.$inbox['.read'],
       'read and write use the same pattern (the courier writes, the app reads and deletes)');
   }

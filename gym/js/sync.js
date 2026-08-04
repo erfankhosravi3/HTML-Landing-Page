@@ -111,8 +111,19 @@
      the database rules the user pastes into the Firebase console (see
      Sync.rulesJson). If the generator drifts from the pattern, the rules stop
      matching and every delivery is rejected with a permission error that looks
-     like the courier's fault. tests/db-rules.js pins them together. */
-  Sync.HEALTH_INBOX_RE = /^health-[a-z0-9]{24}$/;
+     like the courier's fault. tests/db-rules.js pins them together.
+
+     The bound is a MINIMUM, not the generator's exact 24, and that is
+     deliberate. Addresses minted before the lockdown shipped came from a
+     variable-length generator and are typically 27 characters. Publishing
+     {24} would have 401'd every one of them the moment the user pasted the
+     rules — precisely the "it looks like the courier's fault" failure this
+     comment exists to prevent, and it would have hit the one person already
+     using the feature. Nothing is given up: what protects an inbox is the
+     entropy of a name you must already know in full, 16 base-36 characters is
+     82 bits of it, and the rule opens nothing you could not already name.
+     Anything shorter than the bound is caught by Sync.conformingInbox(). */
+  Sync.HEALTH_INBOX_RE = /^health-[a-z0-9]{16,}$/;
 
   const ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
 
@@ -156,6 +167,20 @@
     const o = origin(c.url);
     if (!o) return '';
     return o + '/' + box + '.json' + (c.secret ? '?auth=' + encodeURIComponent(c.secret) : '');
+  };
+
+  /* Would the published rules accept the address the courier is posting to?
+
+     True when there is nothing to worry about — unpaired, or paired with a
+     conforming name. False only when a real address exists that the rules
+     would reject, which is a link that breaks the moment the user locks the
+     database down and breaks SILENTLY: the courier keeps posting, Firebase
+     keeps answering 401, and the app just stops seeing new data. Worth a
+     screen. */
+  Sync.conformingInbox = function () {
+    const box = Sync.healthInbox();
+    if (!box) return true;
+    return Sync.HEALTH_INBOX_RE.test(box);
   };
 
   Sync.pairHealth = function () {
