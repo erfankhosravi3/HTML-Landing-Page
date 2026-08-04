@@ -4745,6 +4745,9 @@ button.std-row:hover .std-name {
 .link-state.waiting .dot { background: var(--blue);   box-shadow: 0 0 0 3px var(--blue-tint); }
 .link-state.stale .dot   { background: var(--orange); box-shadow: 0 0 0 3px var(--amber-tint); }
 .link-state.off .dot     { background: var(--text-muted); }
+.link-state.risk .dot    { background: var(--red);    box-shadow: 0 0 0 3px var(--red-tint); }
+/* An open database is not a status line to skim past — give it the border too. */
+.link-state.risk { border-color: var(--red); background: var(--red-tint); }
 .link-state .txt { flex: 1; min-width: 0; }
 .link-state .txt b { display: block; font-size: var(--fs-sm); }
 .link-state .txt span { font-size: var(--fs-micro); color: var(--text-2); }
@@ -4762,6 +4765,14 @@ button.std-row:hover .std-name {
   margin-bottom: 8px;
   user-select: all;
   -webkit-user-select: all;
+}
+/* Same box, but for something with newlines in it (a rules block). break-all
+   would hyphenate mid-token and make JSON unreadable; break-word only breaks
+   when a line genuinely cannot fit a phone. */
+.pair-key.block {
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.5;
 }
 
 .feed { display: flex; flex-direction: column; }

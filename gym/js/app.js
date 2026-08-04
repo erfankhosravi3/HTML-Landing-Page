@@ -1353,21 +1353,23 @@
           icons.sync + ' Sync now</button>' +
       '</div>' +
       '<div class="small-text" id="sync-status-line">' + syncStatusLine(st) + '</div>' +
+      lockdownBlock(syncState) +
       detailsBlock('How to set up (5 min, free)',
         '<ol style="padding-left:18px;display:flex;flex-direction:column;gap:6px">' +
         '<li>Go to <b>console.firebase.google.com</b> and add a project (any name, Analytics off).</li>' +
         '<li>In the left menu: <b>Build → Realtime Database → Create database</b>.</li>' +
-        '<li>Choose <b>Start in test mode</b>.</li>' +
+        '<li>Choose <b>Start in test mode</b> — you will replace those rules in step 6.</li>' +
         '<li>Copy the database URL (looks like <code>https://myproj-default-rtdb.firebaseio.com/</code>).</li>' +
         '<li>Add a long random path segment to the end, e.g. <code>/ironlog-k9x2m4q8v7</code>, and paste the whole thing above on every family device.</li>' +
-        '<li>Optional: in <b>Project settings → Service accounts → Database secrets</b>, copy a secret and paste it above for extra protection.</li>' +
-        '</ol>' +
-        '<p style="margin-top:8px;color:var(--orange)">⚠️ Test-mode rules let anyone who knows the exact URL read and write it — ' +
-        'that long random path segment is your password, so keep the URL private. Test mode also expires after 30 days; ' +
-        'when it does, set the rules to <code>{ &quot;.read&quot;: true, &quot;.write&quot;: true }</code> to keep going.</p>') +
+        '<li><b>Lock the database down</b> using the rules in “Who can read this database?” above. ' +
+          'Until you do, the random segment is not protecting anything.</li>' +
+        '<li>Optional: in <b>Project settings → Service accounts → Database secrets</b>, copy a secret and paste it above. ' +
+          'With the rules in place you do not need one.</li>' +
+        '</ol>') +
       '</div>');
     el.appendChild(syncCard);
     wireSync(syncCard);
+    wireLockdown(syncCard);
 
     /* ---- 6. Data ---- */
     const noWorkouts = Store.state.workouts.length === 0;
@@ -1632,6 +1634,127 @@
     let out = '<span class="muted">Last synced: ' + U.esc(relTime(st.lastSyncAt)) + '</span>';
     if (st.lastError) out += '<br><span style="color:var(--red)">Error: ' + U.esc(st.lastError) + '</span>';
     return out;
+  }
+
+  /* ---------- database exposure ---------- */
+
+  /* "Who can read this database?"
+
+     Every version of this app before now told the user that a long random path
+     segment kept their log private. It did not. Firebase test-mode rules are
+     written at the root, and read permission cascades downward, so
+     GET /.json hands the whole database to anyone who knows the project name —
+     which is in the hostname. The segment was never asked for.
+
+     This block does three things, in the order that matters: it asks the
+     database itself (as a stranger, with no secret attached), it shows the real
+     answer, and only then offers the fix. Advice you can verify beats advice
+     you have to believe. */
+  function lockdownBlock(syncState) {
+    if (!syncState || !syncState.url) return '';
+    const ex = syncState.exposure || { state: 'unknown' };
+    const rules = window.Sync && Sync.rulesJson ? Sync.rulesJson() : '';
+    const seg = window.Sync && Sync.syncSegment ? Sync.syncSegment() : '';
+
+    let row;
+    if (ex.state === 'open') {
+      row = '<div class="link-state risk"><span class="dot"></span><span class="txt">' +
+        '<b>Anyone can read this database</b><span>A stranger who knows the project name gets ' +
+        'everything — training logs, health metrics, all of it. No password needed. ' +
+        'Fix it below; it takes a minute.</span></span></div>';
+    } else if (ex.state === 'locked') {
+      row = '<div class="link-state live"><span class="dot"></span><span class="txt">' +
+        '<b>Locked down</b><span>The database refused an anonymous read' +
+        (ex.at ? ' · checked ' + U.esc(relTime(ex.at)) : '') +
+        '. Your path segments are doing real work now.</span></span></div>';
+    } else {
+      row = '<div class="link-state off"><span class="dot"></span><span class="txt">' +
+        '<b>Not checked yet</b><span>Firebase starts in test mode, which is open to the whole ' +
+        'internet. One tap finds out.</span></span></div>';
+    }
+
+    /* A URL with no path segment cannot be locked down at all, and that is not
+       a detail to file behind a disclosure triangle — it is the one thing the
+       user has to fix before any of the rest applies. So it renders inline
+       while the rules, which are long and only needed once, stay folded. */
+    if (!seg) {
+      return '<div style="margin-top:14px">' +
+        '<div class="row between" style="margin-bottom:8px">' +
+          '<span style="font-size:14px;font-weight:600">Who can read this database?</span>' +
+          '<button type="button" class="btn ghost small" id="lk-check">Check</button>' +
+        '</div>' + row +
+        '<p class="small-text" style="margin:0;color:var(--orange)">Your database URL has no ' +
+        'private path segment — it points at the root. Add one (e.g. <code>/ironlog-k9x2m4q8v7</code>) ' +
+        'on every family device first; there is nothing to lock down until you do.</p>' +
+        '</div>';
+    }
+
+    const fix = '<ol style="padding-left:18px;display:flex;flex-direction:column;gap:6px;margin:0 0 10px">' +
+        '<li>Firebase console → <b>Realtime Database</b> → <b>Rules</b> tab.</li>' +
+        '<li>Select everything there and replace it with this:</li></ol>' +
+        '<div class="pair-key block" id="lk-rules">' + U.esc(rules) + '</div>' +
+        '<div class="btn-row"><button type="button" class="btn small" id="lk-copy">Copy rules</button></div>' +
+        '<ol start="3" style="padding-left:18px;display:flex;flex-direction:column;gap:6px;margin:10px 0 0">' +
+        '<li><b>Publish</b>, then tap <b>Check</b> above — it should flip to “Locked down”.</li>' +
+        '<li>Sync now, on this device, to confirm your own log still loads.</li></ol>' +
+        '<p class="small-text muted" style="margin:10px 0 0">The root is denied, so nobody can even ' +
+        'list what exists. <code>' + U.esc(seg) + '</code> is allowed by name; health inboxes are allowed ' +
+        'by pattern, so the app can rotate one without you editing this again. These rules do not ' +
+        'expire the way test mode does.</p>';
+
+    return '<div style="margin-top:14px">' +
+      '<div class="row between" style="margin-bottom:8px">' +
+        '<span style="font-size:14px;font-weight:600">Who can read this database?</span>' +
+        '<button type="button" class="btn ghost small" id="lk-check">Check</button>' +
+      '</div>' + row +
+      detailsBlock(ex.state === 'locked' ? 'The rules that lock it down' : 'Lock it down (1 min)', fix) +
+      '</div>';
+  }
+
+  function wireLockdown(card) {
+    const check = U.$('#lk-check', card);
+    if (check) {
+      check.addEventListener('click', function () {
+        if (!window.Sync || !Sync.probeExposure) return;
+        check.disabled = true;
+        const was = check.textContent;
+        check.textContent = 'Checking…';
+        Sync.probeExposure().then(function (res) {
+          check.disabled = false;
+          check.textContent = was;
+          const c = Store.state.sync;
+          if (c) {
+            c.exposure = { state: res.state, keys: res.keys || 0, at: Date.now() };
+            Store.save();
+          }
+          if (res.state === 'open') App.toast('Open to anyone — see the fix below', 'err');
+          else if (res.state === 'locked') App.toast('Locked down', 'ok');
+          else App.toast('Could not tell: ' + (res.reason || 'no answer'), 'err');
+          App.rerender();
+        });
+      });
+    }
+    const copy = U.$('#lk-copy', card);
+    if (copy) {
+      copy.addEventListener('click', function () {
+        const box = U.$('#lk-rules', card);
+        const text = box ? box.textContent : '';
+        function done() { App.toast('Rules copied — paste them in the Rules tab', 'ok'); }
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(done, select);
+        } else select();
+        function select() {
+          // No clipboard permission: select it so a long-press can copy.
+          if (!box) return;
+          const r = document.createRange();
+          r.selectNodeContents(box);
+          const sel = window.getSelection();
+          sel.removeAllRanges();
+          sel.addRange(r);
+          App.toast('Long-press the highlighted rules to copy', 'ok');
+        }
+      });
+    }
   }
 
   /* ---------- Apple Health wiring ---------- */

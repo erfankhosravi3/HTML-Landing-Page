@@ -3,9 +3,8 @@
    or installed PWAs keep serving the old cache forever. */
 'use strict';
 
-/* Coach replies now stream, so js/coach.js, js/views-coach.js and
-   css/styles.css all changed. */
-const CACHE_NAME = 'ironlog-v2p16';
+/* Database lockdown: js/sync.js, js/store.js, js/app.js and css/styles.css. */
+const CACHE_NAME = 'ironlog-v2p17';
 
 const SHELL = [
   './',

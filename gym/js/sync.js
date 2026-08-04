@@ -105,6 +105,43 @@
     return m ? m[1] : '';
   }
 
+  /* The shape of every inbox name this app will ever mint.
+
+     It is published in two places that must agree byte for byte: here, and in
+     the database rules the user pastes into the Firebase console (see
+     Sync.rulesJson). If the generator drifts from the pattern, the rules stop
+     matching and every delivery is rejected with a permission error that looks
+     like the courier's fault. tests/db-rules.js pins them together. */
+  Sync.HEALTH_INBOX_RE = /^health-[a-z0-9]{24}$/;
+
+  const ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
+
+  /* A token of EXACTLY n characters, drawn from crypto when the browser has it.
+
+     The previous version concatenated Math.random().toString(36) slices, which
+     yields a variable length — "0.5" is a legal result and contributes one
+     character, not eight. That mattered more than it looks: this token is now
+     the only thing standing between a stranger and the health inbox, so its
+     length has to be a guarantee rather than an average. */
+  function token(n) {
+    const out = [];
+    const limit = 256 - (256 % ALPHABET.length);   // reject above this: no modulo bias
+    const g = window.crypto && window.crypto.getRandomValues
+      ? function (len) { return window.crypto.getRandomValues(new Uint8Array(len)); }
+      : null;
+    while (out.length < n) {
+      const need = n - out.length;
+      const bytes = g ? g(need + 8) : null;
+      for (let i = 0; i < need + 8 && out.length < n; i++) {
+        const b = bytes ? bytes[i] : Math.floor(Math.random() * 256);
+        if (b >= limit) continue;
+        out.push(ALPHABET[b % ALPHABET.length]);
+      }
+    }
+    return out.join('');
+  }
+  Sync.token = token;
+
   Sync.healthInbox = function () {
     const c = cfg();
     return c && c.health && c.health.inbox ? c.health.inbox : '';
@@ -127,8 +164,7 @@
     if (!c.health) c.health = { inbox: '', lastAt: null, lastSummary: null, lastRaw: '', outbox: false };
     // Long, unguessable, and its own secret — independent of the sync path so
     // rotating one does not disturb the other.
-    c.health.inbox = 'health-' + U.uid('').replace(/[^a-z0-9]/gi, '') +
-      Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 10);
+    c.health.inbox = 'health-' + token(24);
     if (window.Store && window.Store.save) window.Store.save();
     notify();
     return Sync.healthInboxUrl();
@@ -140,6 +176,101 @@
     c.health = { inbox: '', lastAt: null, lastSummary: null, lastRaw: '', outbox: false };
     if (window.Store && window.Store.save) window.Store.save();
     notify();
+  };
+
+  /* ======================================================================
+     IS THE DATABASE ACTUALLY PRIVATE?
+     ======================================================================
+     The setup instructions say to start the database in test mode and append a
+     long random path segment "to keep it private". The second half of that
+     sentence was false, and had been since the first sync shipped.
+
+     Test-mode rules are written at the ROOT:
+
+         { "rules": { ".read": true, ".write": true } }
+
+     Read permission in Firebase cascades DOWNWARD, so a rule at the root is a
+     rule about the root: GET https://<project>.firebaseio.com/.json returns the
+     entire database in one request. The random segment is never asked for. And
+     the project name is not a secret — it is in the hostname, it is short, and
+     it is usually the owner's name.
+
+     So: a strangers' probe, sent WITHOUT the auth parameter (an attacker has no
+     secret either), and a rules block that makes the path segments into real
+     secrets by denying the root outright. */
+
+  // The first path segment of the sync URL — the part that must be pinned.
+  Sync.syncSegment = function () {
+    const c = cfg();
+    if (!c || !c.url) return '';
+    const rest = String(c.url).slice(origin(c.url).length);
+    const parts = rest.split('/').filter(function (p) { return p !== ''; });
+    return parts.length ? decodeURIComponent(parts[0]) : '';
+  };
+
+  /* The rules to paste into Firebase console -> Realtime Database -> Rules.
+
+     Root is denied, so nobody can enumerate what exists. The training path is
+     pinned by name — read access cascades down, so children are covered. Health
+     inboxes are matched by PATTERN rather than by name, because the app mints
+     and rotates them on its own and a rule that had to be edited every time
+     would simply stop being edited.
+
+     Returns '' when the sync URL has no path segment, because there is nothing
+     to pin: locking the root would lock the app out along with everyone else,
+     and saying that plainly is better than emitting rules that break sync. */
+  Sync.rulesJson = function () {
+    const seg = Sync.syncSegment();
+    if (!seg) return '';
+    const pattern = String(Sync.HEALTH_INBOX_RE);
+    return [
+      '{',
+      '  "rules": {',
+      '    ".read": false,',
+      '    ".write": false,',
+      '',
+      '    ' + JSON.stringify(seg) + ': {',
+      '      ".read": true,',
+      '      ".write": true',
+      '    },',
+      '',
+      '    "$inbox": {',
+      '      ".read": "$inbox.matches(' + pattern + ')",',
+      '      ".write": "$inbox.matches(' + pattern + ')"',
+      '    }',
+      '  }',
+      '}'
+    ].join('\n');
+  };
+
+  /* Ask the database what an anonymous stranger can see.
+
+     ?shallow=true returns keys only, so this costs one small response even on a
+     large log. NO auth parameter is attached, deliberately and permanently: the
+     question is what someone WITHOUT your secret can read, and sending the
+     secret would answer a different question with a reassuring yes. */
+  Sync.probeExposure = function () {
+    const c = cfg();
+    if (!c || !c.url) return Promise.resolve({ state: 'unknown', reason: 'Sync is not configured' });
+    const o = origin(c.url);
+    if (!o) return Promise.resolve({ state: 'unknown', reason: 'Sync URL is not a URL' });
+    return request(o + '/.json?shallow=true', { method: 'GET' }).then(function (res) {
+      if (res && (res.status === 401 || res.status === 403)) {
+        return { state: 'locked', keys: 0 };
+      }
+      if (!res || !res.ok) {
+        return { state: 'unknown', reason: 'HTTP ' + (res ? res.status : '?') };
+      }
+      return res.json().then(function (body) {
+        let keys = 0;
+        if (body && typeof body === 'object') { for (const k in body) keys++; }
+        return { state: 'open', keys: keys };
+      }, function () {
+        return { state: 'open', keys: 0 };
+      });
+    }).catch(function (err) {
+      return { state: 'unknown', reason: stripSecret(err) || 'probe failed' };
+    });
   };
 
   /* One delivery, or a map of them. Firebase POST appends under a push key, so
