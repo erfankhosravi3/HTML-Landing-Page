@@ -11,7 +11,7 @@ cd "$(dirname "$0")"
 NODE_ONLY="gtest.js gtest2.js guardrails.test.js test-store.js test-session-core.js
            p6-coach-core.js coach-stream-fuzz.js p6-fleet-safety.js import-fuzz.js
            p45-shell-crawl.js coach-schema.js health-link.js health-drain.js
-           db-rules.js"
+           db-rules.js sync-split.js goals-core.js"
 
 case "${1:-all}" in
   node) SUITES=$NODE_ONLY ;;

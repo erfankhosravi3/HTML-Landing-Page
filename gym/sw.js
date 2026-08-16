@@ -3,9 +3,9 @@
    or installed PWAs keep serving the old cache forever. */
 'use strict';
 
-/* Database lockdown, plus the legacy-address warning: js/sync.js, js/store.js,
-   js/app.js and css/styles.css. */
-const CACHE_NAME = 'ironlog-v2p18';
+/* P7 probe, part 1: the split sync wire (js/sync.js), the five Goals
+   collections (js/store.js), and the judgment engine (js/goals.js, new). */
+const CACHE_NAME = 'ironlog-v2p19';
 
 const SHELL = [
   './',
@@ -19,6 +19,7 @@ const SHELL = [
   './js/loadmodel.js',
   './js/guardrails.js',
   './js/protocols.js',
+  './js/goals.js',
   './js/charts.js',
   './js/musclemap.js',
   './js/applehealth.js',

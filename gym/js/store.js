@@ -3,11 +3,16 @@
   'use strict';
 
   const KEY = 'ironlog/v1';
-  const COLLECTIONS = ['users', 'workouts', 'templates', 'bodyMetrics', 'healthSamples', 'customExercises', 'painLog', 'coachJournal', 'routines', 'coachChats'];
+  const COLLECTIONS = ['users', 'workouts', 'templates', 'bodyMetrics', 'healthSamples', 'customExercises', 'painLog', 'coachJournal', 'routines', 'coachChats',
+    // P7 (Goals). These ride the generic read path on purpose: entities pass
+    // through verbatim (unknown keys preserved), and all judgment lives in
+    // js/goals.js at read time — the store stays a dumb, forward-compatible bag.
+    'goals', 'practices', 'ticks', 'measures', 'accomplishments'];
   // Tombstone buckets. All but 'appleWorkouts' are keyed by entity id; that one
   // is keyed 'userId|appleId' so a deleted Apple Health import stays deleted
   // (a re-import would otherwise mint a brand-new workout id and resurrect it).
-  const DELETED_KEYS = ['workouts', 'templates', 'bodyMetrics', 'healthSamples', 'customExercises', 'users', 'painLog', 'coachJournal', 'routines', 'coachChats', 'appleWorkouts'];
+  const DELETED_KEYS = ['workouts', 'templates', 'bodyMetrics', 'healthSamples', 'customExercises', 'users', 'painLog', 'coachJournal', 'routines', 'coachChats', 'appleWorkouts',
+    'goals', 'practices', 'ticks', 'measures', 'accomplishments'];
   /* ---------- profile identity colours -----------------------------------
      Identity is keyed off the CVD-searched chart series --s1..--s6, which the
      palette deliberately keeps clear of the GO accent hue: an avatar ring must
@@ -324,6 +329,11 @@
       coachJournal: [],
       routines: [],
       coachChats: [],
+      goals: [],
+      practices: [],
+      ticks: [],
+      measures: [],
+      accomplishments: [],
       deleted: emptyDeleted(),
       sync: { url: '', secret: '', enabled: false, lastSyncAt: null, deviceId: U.uid('dev'),
         health: { inbox: '', lastAt: null, lastSummary: null, lastRaw: '', outbox: false },
@@ -1651,6 +1661,180 @@
     });
     if (n) Store.save();
     return n;
+  };
+
+  /* ---------- goals (P7 probe) ---------------------------------------------
+     The store is deliberately dumb here: entities are bags with ids and
+     timestamps, judgment lives in js/goals.js. Two rules ARE enforced at this
+     layer because they are data invariants, not opinions:
+       * at most 3 ACTIVE goals per user (status 'later'/'done'/'archived'
+         are exempt) — addGoal refuses the fourth;
+       * one tick per practice per day, and one measure point per goal per
+         day — repeats update in place instead of duplicating, so a nervous
+         double-tap can never fabricate adherence or a trend point.       */
+
+  function stamped(src, userId) {
+    const now = Date.now();
+    const e = {};
+    for (const k in src) e[k] = src[k];
+    e.id = typeof src.id === 'string' && src.id ? src.id : U.uid('g');
+    e.userId = typeof src.userId === 'string' && src.userId ? src.userId : userId;
+    e.createdAt = typeof src.createdAt === 'number' ? src.createdAt : now;
+    e.updatedAt = now;
+    return e;
+  }
+
+  Store.activeGoals = function (userId) {
+    ensureLoaded();
+    const uid = userId || state.currentUserId;
+    return state.goals.filter(function (g) {
+      return g.userId === uid && (g.status === 'active' || g.status === undefined);
+    });
+  };
+
+  Store.addGoal = function (g) {
+    ensureLoaded();
+    g = g || {};
+    const uid = g.userId || state.currentUserId;
+    if (!uid) return null;
+    const status = g.status || 'active';
+    if (status === 'active' && Store.activeGoals(uid).length >= 3) {
+      return null; // the cap: the UI turns this into the capacity conversation
+    }
+    const goal = stamped(g, uid);
+    goal.status = status;
+    goal.shape = g.shape || 'reach';
+    if (!Array.isArray(goal.versions)) goal.versions = [];
+    if (!goal.versions.length) goal.versions.push({ at: goal.createdAt, note: 'created' });
+    state.goals.push(goal);
+    Store.save();
+    return goal;
+  };
+
+  Store.updateGoal = function (id, patch) {
+    ensureLoaded();
+    const g = state.goals.find(function (x) { return x.id === id; });
+    if (!g) return null;
+    patch = patch || {};
+    // Activating via update respects the same cap addGoal enforces.
+    if (patch.status === 'active' && (g.status || 'active') !== 'active' &&
+        Store.activeGoals(g.userId).length >= 3) {
+      return null;
+    }
+    for (const k in patch) {
+      if (k === 'id' || k === 'userId' || k === 'createdAt') continue;
+      g[k] = patch[k];
+    }
+    g.updatedAt = Date.now();
+    Store.save();
+    return g;
+  };
+
+  Store.deleteGoal = function (id) {
+    ensureLoaded();
+    const i = state.goals.findIndex(function (x) { return x.id === id; });
+    if (i < 0) return false;
+    state.goals.splice(i, 1);
+    state.deleted.goals[id] = Date.now();
+    Store.save();
+    return true;
+  };
+
+  Store.addPractice = function (p) {
+    ensureLoaded();
+    p = p || {};
+    const uid = p.userId || state.currentUserId;
+    if (!uid) return null;
+    const pr = stamped(p, uid);
+    pr.goalId = typeof p.goalId === 'string' ? p.goalId : '';   // '' = standing
+    pr.cadence = p.cadence && typeof p.cadence === 'object' ? p.cadence : { type: 'daily' };
+    state.practices.push(pr);
+    Store.save();
+    return pr;
+  };
+
+  Store.updatePractice = function (id, patch) {
+    ensureLoaded();
+    const p = state.practices.find(function (x) { return x.id === id; });
+    if (!p) return null;
+    patch = patch || {};
+    for (const k in patch) {
+      if (k === 'id' || k === 'userId' || k === 'createdAt') continue;
+      p[k] = patch[k];
+    }
+    p.updatedAt = Date.now();
+    Store.save();
+    return p;
+  };
+
+  Store.deletePractice = function (id) {
+    ensureLoaded();
+    const i = state.practices.findIndex(function (x) { return x.id === id; });
+    if (i < 0) return false;
+    state.practices.splice(i, 1);
+    state.deleted.practices[id] = Date.now();
+    Store.save();
+    return true;
+  };
+
+  // One tick per practice per day, idempotently: a repeat tap returns the
+  // existing tick instead of minting adherence out of enthusiasm.
+  Store.tickPractice = function (practiceId, date) {
+    ensureLoaded();
+    const uid = state.currentUserId;
+    if (!uid || !practiceId || !date) return null;
+    const existing = state.ticks.find(function (t) {
+      return t.practiceId === practiceId && t.date === date && t.userId === uid;
+    });
+    if (existing) return existing;
+    const tick = stamped({ practiceId: practiceId, date: date }, uid);
+    state.ticks.push(tick);
+    Store.save();
+    return tick;
+  };
+
+  Store.untickPractice = function (practiceId, date) {
+    ensureLoaded();
+    const uid = state.currentUserId;
+    const i = state.ticks.findIndex(function (t) {
+      return t.practiceId === practiceId && t.date === date && t.userId === uid;
+    });
+    if (i < 0) return false;
+    state.deleted.ticks[state.ticks[i].id] = Date.now();
+    state.ticks.splice(i, 1);
+    Store.save();
+    return true;
+  };
+
+  // One measure point per goal per day: reporting twice corrects the number
+  // instead of fabricating a second trend point on the same date.
+  Store.reportMeasure = function (goalId, date, value) {
+    ensureLoaded();
+    const uid = state.currentUserId;
+    if (!uid || !goalId || !date || !isFinite(Number(value))) return null;
+    const existing = state.measures.find(function (m) {
+      return m.goalId === goalId && m.date === date && m.userId === uid;
+    });
+    if (existing) {
+      existing.value = Number(value);
+      existing.updatedAt = Date.now();
+      Store.save();
+      return existing;
+    }
+    const m = stamped({ goalId: goalId, date: date, value: Number(value) }, uid);
+    state.measures.push(m);
+    Store.save();
+    return m;
+  };
+
+  Store.addAccomplishment = function (text, kind) {
+    ensureLoaded();
+    const uid = state.currentUserId;
+    if (!uid || !text) return null;
+    const a = stamped({ text: String(text), kind: kind || 'win', at: Date.now() }, uid);
+    state.accomplishments.push(a);
+    Store.save();
+    return a;
   };
 
   /* ---------- backup: export / import ---------- */
