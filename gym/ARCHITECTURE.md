@@ -1751,3 +1751,133 @@ says so inline rather than behind a disclosure.
 7. The open state renders as `.link-state.risk` and survives reload.
 8. The README publishes the same pattern as the code, and no longer contains
    the claim that a random segment keeps the database private.
+
+---
+
+# V2 ADDENDUM — P7: GOALS (PROBE BUILD)
+
+## What this phase is, and what it deliberately is not
+
+A general instrument for life goals — a language, a certification, money,
+discipline — living beside the training tools, **depending on none of them**.
+The training side of this app already has Standards, tests and analytics;
+Goals never reads the workout log, never seeds from the Standards table, and
+never special-cases a training-shaped goal. Every input is something a person
+can type, count, or test on themselves.
+
+This first slice is deliberately a PROBE of the product itself: the smallest
+loop that can answer "do the Sunday reviews actually happen?" — Reach goals
+(a number by a date), practices with manual ticks, self-reported measures,
+and the weekly review. Trials, probe legs, Event goals, readiness models,
+nesting and coach drafting are all designed (see the approved concept and
+screens) and all deferred until the probe earns them.
+
+## Collections (all shim-protected, all tombstoned, all per-user)
+
+  goals           { id, userId, name, why, raw, shape:'reach',
+                    measure:{name, unit, refresh:'asked'|'reported'},
+                    baseline:{value, at}, target:{value, date},
+                    status:'active'|'later'|'done'|'archived',
+                    versions:[{at, note}], createdAt, updatedAt }
+  practices       { id, userId, goalId|'', cue, action, cadence:{type:'daily'}|
+                    {type:'weekly', times}, floor|null, createdAt, updatedAt }
+  ticks           { id, userId, practiceId, date, at }        // one per day max
+  measures        { id, userId, goalId, date, value, at }     // the series
+  accomplishments { id, userId, at, text, kind }
+
+`practices.goalId === ''` is a STANDING practice: no finish line, scored
+against its floor. `goals.status === 'later'` is the Later list. The active
+cap is three per user, enforced at creation, standing practices exempt.
+
+## The judgment spec (BINDING — tests pin every number here)
+
+All verdicts are on-device arithmetic. The optional coach may comment on a
+verdict; it can never produce one.
+
+  requiredRate  = (target.value − latest.value) / daysLeft      (per day)
+  observedRate  = slope of the LAST 5 measure points (least squares),
+                  or of all points when fewer than 5
+  projection    = latest.value + observedRate × daysLeft
+  daysBehind    = date the projection reaches target, minus target.date
+
+Verdicts, in precedence order:
+  1. 'measuring'  — fewer than 3 measure points. NO trend, NO verdict.
+  2. 'stale'      — newest point older than 2× the refresh interval
+                    (refresh interval: 7 days for weekly-asked measures).
+                    The verdict is SUSPENDED and the UI asks for the number.
+  3. 'ontrack'    — |observedRate| ≥ |requiredRate|, signs agreeing.
+  4. 'behind'     — otherwise, with daysBehind attached.
+
+Adherence = ticks ÷ scheduled, over 7 and 28 days. Scheduled for daily = the
+number of days; for weekly×N = N per whole week in window (no partial-week
+inflation). One tick per practice per day; backfill allowed for yesterday
+only.
+
+The Sunday diagnosis crosses adherence with movement:
+  adherence ≥ .80 AND ontrack        → 'holding'
+  adherence ≥ .80 AND flat 3 weeks   → 'pathwrong'   ("the path is wrong,
+                                        not you" — bet falsified)
+  adherence < .80                    → 'doesntfit'   (the path is UNJUDGED —
+                                        a practice that wasn't run cannot be
+                                        evaluated; the problem is fit)
+  flat = observedRate < 25% of requiredRate, sustained across the last
+  3 weekly reviews' windows.
+
+Standing practices: adherence vs floor only. Never a trajectory, never "done".
+
+REFUSALS (binding, mutation-tested):
+  * No percentage is ever rendered for anything but a Reach trajectory.
+  * No verdict from < 3 points; no verdict from a stale measure.
+  * No cause is ever asserted that the data cannot show — miss PATTERNS
+    (day-of-week counts from tick dates) are computed; their MEANING is
+    asked, never guessed.
+  * Verdicts attach to plans and practices, never to the person.
+
+Reviews: due when 7+ days have passed since user.settings.goalsReviewAt
+(default cadence weekly, anchored the day the first goal is created).
+Completing a review stamps it. Wins shown at review close: on-pace streaks,
+adherence bests, definition versions. A goal untouched for 3 consecutive
+reviews is challenged: recommit / revise / move to Later.
+
+## Sync v2 — the split (prerequisite, ships with this phase)
+
+The whole-blob protocol (GET all → merge → PUT all) is replaced by:
+
+  PULL: GET <root>.json with `X-Firebase-ETag: true` / `if-none-match`.
+        304 → nothing changed remotely → skip download AND merge entirely.
+  PUSH: PATCH <root>.json with ONLY the collections dirtied since the last
+        successful push (Store tracks a dirty set; save(name) marks it).
+        PATCH writes only the named keys — sibling collections untouched.
+        The write requests an ETag back; if the server returns one it becomes
+        the new baseline, else the cached ETag is dropped (next pull is full).
+
+Wire-compat is preserved BY CONSTRUCTION: the remote layout is identical
+(collections are keys of one root object), so a P0-era client full-PUTting
+the blob still round-trips everything, and this client's PATCH never deletes
+a key it doesn't name. Ticks — the highest-frequency write in the app from
+now on — cost one small PATCH instead of a full-blob upload, and the idle
+foreground sync costs a 304 instead of a full download.
+
+## Acceptance tests (binding)
+
+1. 500 sync cycles with only ticks dirty never upload any other collection,
+   and a 304 pull performs zero merges.
+2. A P1-era client merges a state containing all five new collections and
+   round-trips them byte-identically (shim).
+3. Every judgment threshold above, mutation-checked: each rule broken on
+   purpose must produce a named test failure.
+4. The compiler refuses a goal without measure+value+date, and refuses a
+   fourth active goal, each with the documented question, not a wall.
+5. Verdict precedence: a 2-point measure is 'measuring' even when on pace;
+   a stale measure is 'stale' even when ahead of required.
+6. The review diagnosis produces 'doesntfit' (not 'pathwrong') when
+   adherence is low and the measure is flat — the path is never judged on
+   work that wasn't done.
+7. Old-client fuzz: unknown keys inside goal/practice/tick objects survive a
+   read-normalize-merge round trip.
+
+## Release
+
+js/goals.js and js/views-goals.js enter index.html load order and sw.js
+SHELL; CACHE_NAME bumps. Goals enters the More sheet; the Today card renders
+on the Dashboard for users with ≥1 practice. Both modes, all profiles.

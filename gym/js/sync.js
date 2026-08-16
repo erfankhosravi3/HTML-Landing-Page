@@ -78,6 +78,9 @@
     c.secret = String(opts.secret === undefined || opts.secret === null ? '' : opts.secret).trim();
     c.enabled = !!url;
     lastError = null;
+    // A different database is a different wire: a cached ETag or push
+    // snapshot from the old one would wrongly suppress pulls and pushes.
+    if (typeof Sync.resetWire === 'function') Sync.resetWire();
     if (window.Store && typeof window.Store.save === 'function') {
       window.Store.save(); // persists config; queues a first push when now enabled
     }
@@ -438,7 +441,45 @@
     try { Store.save(); } finally { suppressQueue = false; }
   }
 
-  /* ---------- sync core: pull -> merge -> push ---------- */
+  /* ---------- sync core: conditional pull -> merge -> diff push ----------
+
+     P7 replaced the whole-blob protocol. It used to GET the entire state and
+     PUT the entire state back on every sync — which meant every logged set,
+     and now every habit tick, cost a full download AND a full upload. With
+     ticks as the highest-frequency write in the app, that protocol was the
+     bandwidth ceiling (Firebase meters download).
+
+     PULL is conditional: the ETag of the last-seen remote rides if-none-match,
+     so an unchanged database answers 304 and we skip the download and the
+     merge outright. Servers that ignore if-none-match degrade gracefully —
+     a 200 whose ETag matches the cached one is treated as a 304 after the
+     download (CPU saved, bandwidth not; still correct).
+
+     PUSH is a diff: each top-level collection is serialized and compared to
+     what THIS DEVICE last successfully pushed; only changed keys go out, via
+     PATCH, which writes the named keys and leaves siblings untouched. The
+     remote layout is byte-identical to the old protocol (collections are keys
+     of one root object), so a P0-era client full-PUTting the blob still
+     round-trips everything — and our PATCH can never delete a newer client's
+     unknown collection, because an unchanged key is never sent.
+
+     lastPushed starts empty, so the first push of a session sends everything
+     once (exactly the old behavior); the steady state sends only what moved. */
+
+  let etag = null;           // ETag of the remote state this device last saw
+  let lastPushed = {};       // collection name -> serialized form last pushed
+
+  Sync.resetWire = function () { etag = null; lastPushed = {}; };
+
+  function serializeState() {
+    const state = window.Store.state;
+    const out = {};
+    for (const k in state) {
+      if (k === 'sync') continue;   // url/secret/health inbox stay on-device
+      out[k] = JSON.stringify(state[k] === undefined ? null : state[k]);
+    }
+    return out;
+  }
 
   async function doSync() {
     const c = cfg();
@@ -446,27 +487,60 @@
     let pulled = false;
     try {
       const url = endpoint(c);
-      const getRes = await request(url, { method: 'GET' });
-      if (!getRes.ok) throw await httpError(getRes);
-      const remote = await getRes.json();
-      if (remote !== null && remote !== undefined) {
-        window.Store.mergeRemote(remote);
-        pulled = true;
+      const getHeaders = { 'X-Firebase-ETag': 'true' };
+      if (etag) getHeaders['if-none-match'] = etag;
+      const getRes = await request(url, { method: 'GET', headers: getHeaders });
+
+      if (getRes.status === 304) {
+        // Nothing changed remotely. No body, no merge.
+      } else {
+        if (!getRes.ok) throw await httpError(getRes);
+        const freshTag = getRes.headers && typeof getRes.headers.get === 'function'
+          ? getRes.headers.get('ETag') : null;
+        if (freshTag && etag && freshTag === etag) {
+          // The server ignored if-none-match but the state is the one we
+          // already merged — same outcome as a 304, minus the bandwidth.
+        } else {
+          const remote = await getRes.json();
+          if (remote !== null && remote !== undefined) {
+            window.Store.mergeRemote(remote);
+            pulled = true;
+          }
+        }
+        if (freshTag) etag = freshTag;
       }
-      // Full serializable state, excluding the sync config (url/secret stay local).
-      const payload = Object.assign({}, window.Store.state);
-      delete payload.sync;
-      const putRes = await request(url, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      if (!putRes.ok) throw await httpError(putRes);
+
+      // Diff push: only the keys whose bytes changed since our last push.
+      const now = serializeState();
+      const dirty = {};
+      let dirtyCount = 0;
+      for (const k in now) {
+        if (now[k] !== lastPushed[k]) { dirty[k] = JSON.parse(now[k]); dirtyCount++; }
+      }
+
+      let pushed = false;
+      if (dirtyCount > 0) {
+        const patchRes = await request(url, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', 'X-Firebase-ETag': 'true' },
+          body: JSON.stringify(dirty)
+        });
+        if (!patchRes.ok) throw await httpError(patchRes);
+        for (const k in now) lastPushed[k] = now[k];
+        // Our own write changed the remote's ETag. If the server told us the
+        // new one, the next pull can still 304; if not, drop the cached tag so
+        // the next pull is honestly full instead of wrongly skipped.
+        const wroteTag = patchRes.headers && typeof patchRes.headers.get === 'function'
+          ? patchRes.headers.get('ETag') : null;
+        etag = wroteTag || null;
+        pushed = true;
+      }
+
       const c2 = cfg();
       if (c2) c2.lastSyncAt = Date.now();
       lastError = null;
       saveQuietly();
-      return { ok: true, pulled: pulled, pushed: true };
+      return { ok: true, pulled: pulled, pushed: pushed };
     } catch (err) {
       lastError = stripSecret(err) || 'Sync failed';
       return { ok: false, pulled: pulled, pushed: false, error: lastError };
