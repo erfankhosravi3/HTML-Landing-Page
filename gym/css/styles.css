@@ -4792,3 +4792,51 @@ button.std-row:hover .std-name {
   font-size: var(--fs-micro);
   font-variant-numeric: tabular-nums;
 }
+
+/* ==========================================================================
+   P7 — Goals (probe). Colours are tokens only, per the P5 rule: a theme can
+   restate every one of these without this block changing.
+   ========================================================================== */
+.micro-label {
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-label-sm);
+  letter-spacing: .02em;
+  color: var(--text-muted);
+}
+.g-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.g-warn-text { color: var(--orange); }
+
+/* verdict chips — one meaning per status colour, same as everywhere else:
+   GO = on track, amber = attention, red = wrong direction / refusal,
+   blue = the machine is still measuring. */
+.g-chip { min-height: 0; padding: 3px 10px; font-size: var(--fs-micro); font-weight: 600; }
+.g-chip.go   { background: var(--accent-tint); border-color: var(--accent); color: var(--accent); }
+.g-chip.warn { background: var(--amber-tint);  border-color: var(--orange); color: var(--orange); }
+.g-chip.stop { background: var(--red-tint);    border-color: var(--red);    color: var(--red); }
+.g-chip.blue { background: var(--blue-tint);   border-color: var(--blue);   color: var(--blue); }
+
+/* the week: seven boxes, oldest left. A miss is a miss — no forgiving grey. */
+.g-dots { display: inline-flex; gap: 3px; flex: none; }
+.g-dots i { width: 8px; height: 8px; border-radius: 2px; background: var(--card-2); }
+.g-dots i.hit { background: var(--accent); }
+.g-dots i.miss { background: var(--red-tint); }
+
+.g-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.g-dot.go   { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-tint); }
+.g-dot.warn { background: var(--orange); box-shadow: 0 0 0 3px var(--amber-tint); }
+
+/* the tick: a 44px target wrapping a 28px circle — thumbs, not cursors */
+.g-tick {
+  width: 28px; height: 28px; border-radius: 50%; flex: none;
+  border: 2px solid var(--text-muted); background: transparent;
+  color: var(--accent-ink); font-size: 14px; font-weight: 800;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; position: relative;
+}
+.g-tick::after { content: ''; position: absolute; inset: -8px; }
+.g-tick.done { background: var(--accent); border-color: var(--accent); }
+.g-tick:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.g-review-due { border-color: var(--accent); background: var(--accent-tint); cursor: pointer; }
+.g-refuse { border-color: var(--red-line); }
+.g-refuse .card-title span:first-child { color: var(--red); }
