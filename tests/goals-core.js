@@ -256,6 +256,62 @@ ok(Goals.reviewDue(null, TODAY), 'never reviewed = due');
 ok(Goals.reviewDue('2026-08-30', TODAY), '7 days since = due');
 ok(!Goals.reviewDue('2026-09-01', TODAY), '5 days since = not due');
 
+
+/* ==================================================================
+   7. ENGINE — progress, streaks, capacity, backfill honesty
+   ================================================================== */
+// Reach progress: honest fraction, clamped.
+let pr = Goals.progress(goal, pts([['2026-09-06', 20.5]]), TODAY);
+ok(Math.abs(pr.frac - 0.5) < 1e-9, 'progress is (latest-baseline)/(target-baseline)');
+pr = Goals.progress(goal, pts([['2026-09-06', 5]]), TODAY);
+eq(pr.frac, 1, 'overshoot clamps to 1');
+pr = Goals.progress(goal, pts([['2026-09-06', 40]]), TODAY);
+eq(pr.frac, 0, 'a regression below baseline clamps to 0');
+pr = Goals.progress(goal, [], TODAY);
+eq(pr.frac, 0, 'no points yet: progress starts at the baseline');
+eq(Goals.progress({ baseline: { value: 5 }, target: { value: 5, date: '2026-12-31' } }, []), null,
+  'a zero-span goal has no fraction');
+
+// Daily streak: unticked today does not break it yet.
+const sd = { id: 'sd', cadence: { type: 'daily' } };
+function tk(id, dates) { return dates.map(function (d) { return { practiceId: id, date: d }; }); }
+eq(Goals.streak(sd, tk('sd', ['2026-09-05', '2026-09-04', '2026-09-03']), TODAY), 3,
+  'daily streak counts back through yesterday when today is still open');
+eq(Goals.streak(sd, tk('sd', ['2026-09-06', '2026-09-05', '2026-09-03']), TODAY), 2,
+  'a gap two days back ends the streak');
+eq(Goals.streak(sd, tk('sd', []), TODAY), 0, 'no ticks, no streak');
+
+// Weekly streak: whole weeks meeting cadence; the open week only adds.
+const sw = { id: 'sw', cadence: { type: 'weekly', times: 2 } };
+eq(Goals.streak(sw, tk('sw', ['2026-09-01', '2026-09-03',              // this week: 2 (met)
+  '2026-08-25', '2026-08-27',                                          // last week: 2 (met)
+  '2026-08-18']), TODAY), 2,                                           // 2 back: 1 (short)
+  'weekly streak counts met weeks, and the short third week ends it');
+eq(Goals.streak(sw, tk('sw', ['2026-09-01',                            // this week: 1 (not yet)
+  '2026-08-25', '2026-08-27']), TODAY), 1,
+  'an in-progress week that has not met N yet does not BREAK the streak');
+
+// Capacity: pooled 28-day adherence over daily practices only.
+const capPr = [
+  { id: 'c1', cadence: { type: 'daily' } },
+  { id: 'c2', cadence: { type: 'daily' } },
+  { id: 'c3', cadence: { type: 'weekly', times: 3 } }
+];
+let capTicks = [];
+for (let i = 0; i < 28; i++) {
+  capTicks.push({ practiceId: 'c1', date: U.addDays(TODAY, -i) }); // c1 perfect
+  if (i % 2 === 0) capTicks.push({ practiceId: 'c2', date: U.addDays(TODAY, -i) }); // c2 half
+}
+const cap = Goals.capacity(capPr, capTicks, TODAY);
+eq(cap.daily, 2, 'weekly practices do not count toward daily capacity');
+ok(Math.abs(cap.adh28 - 0.75) < 0.01, 'pooled adherence over the daily set (got ' + cap.adh28 + ')');
+
+// Backfill: today and yesterday only. The past is the record.
+ok(Goals.canBackfill(TODAY, TODAY), 'today ticks');
+ok(Goals.canBackfill('2026-09-05', TODAY), 'yesterday backfills');
+ok(!Goals.canBackfill('2026-09-04', TODAY), 'two days back is CLOSED');
+ok(!Goals.canBackfill('2026-09-07', TODAY), 'the future is closed too');
+
 console.log('passed:', pass);
 if (fails.length) { fails.forEach(function (f) { console.log('FAIL:', f); }); process.exit(1); }
 console.log('PASS: goals core (' + pass + ' assertions)');

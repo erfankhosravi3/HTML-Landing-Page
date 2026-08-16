@@ -3,9 +3,9 @@
    or installed PWAs keep serving the old cache forever. */
 'use strict';
 
-/* P7 probe: the Goals system — js/goals.js, js/views-goals.js (new),
-   store/sync/insights/css changed. */
-const CACHE_NAME = 'ironlog-v2p20';
+/* P7.1: the tracker surfaces — Habits/Wins tabs, heatmap, streaks, charts.
+   js/goals.js, js/views-goals.js, css/styles.css. */
+const CACHE_NAME = 'ironlog-v2p21';
 
 const SHELL = [
   './',
