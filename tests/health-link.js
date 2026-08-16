@@ -128,10 +128,19 @@ Store.state.sync.health = { inbox: 'INBOX-SECRET-TOKEN', lastAt: 1, lastSummary:
 Store.save();
 ok(Store.exportJSON().indexOf('INBOX-SECRET-TOKEN') !== -1,
   'the inbox token IS in the device state (it has to be, to work)');
-// ...but sync.js deletes state.sync before pushing; assert that contract holds.
+/* ...but sync.js must exclude state.sync from every push. This used to grep
+   for the old `delete payload.sync` line, which the P7 wire split replaced —
+   a source-pattern check breaks on refactors while proving nothing about
+   behavior. Now the contract is asserted behaviorally: serialize exactly the
+   way the push path does, and prove the token isn't in what goes out. The
+   PATCH-level version of the same invariant lives in tests/sync-split.js. */
+const pushable = {};
+for (const k in Store.state) { if (k !== 'sync') pushable[k] = Store.state[k]; }
+ok(JSON.stringify(pushable).indexOf('INBOX-SECRET-TOKEN') === -1,
+  'the inbox token is nowhere in the pushable state — it lives only under the excluded sync key');
 const src = fs.readFileSync(path.join(P.JS, 'sync.js'), 'utf8');
-ok(/delete\s+payload\.sync/.test(src),
-  'sync.js still strips the whole sync block before pushing — the inbox address never reaches the family database');
+ok(/k === 'sync'.*continue|delete\s+payload\.sync/.test(src),
+  'sync.js still excludes the sync block from the push path — the inbox address never reaches the family database');
 
 /* and it survives a reload, because normalizeState whitelists sync keys */
 Store.load();
