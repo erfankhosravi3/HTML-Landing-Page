@@ -1716,6 +1716,11 @@
       : null;
 
     /* recovery strip (P4, performance mode) */
+    // P7: the Goals Today card rides the screen that's already opened daily —
+    // that placement IS the retention strategy. Hook, not import: views-goals
+    // owns everything about it.
+    if (window.GoalsUI) html += GoalsUI.todayCardHTML();
+
     if (perf) html += recoveryCardHTML(u, today, gs, hrInfo, greenWk);
 
     /* readiness snapshot (performance mode + Protocols loaded) */
@@ -1867,6 +1872,7 @@
     }
 
     container.innerHTML = html;
+    if (window.GoalsUI) GoalsUI.wireToday(container);
 
     /* mount charts */
     Charts.rings(U.$('[data-slot="rings"]', container), {

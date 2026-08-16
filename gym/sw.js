@@ -3,9 +3,9 @@
    or installed PWAs keep serving the old cache forever. */
 'use strict';
 
-/* P7 probe, part 1: the split sync wire (js/sync.js), the five Goals
-   collections (js/store.js), and the judgment engine (js/goals.js, new). */
-const CACHE_NAME = 'ironlog-v2p19';
+/* P7 probe: the Goals system — js/goals.js, js/views-goals.js (new),
+   store/sync/insights/css changed. */
+const CACHE_NAME = 'ironlog-v2p20';
 
 const SHELL = [
   './',
@@ -31,6 +31,7 @@ const SHELL = [
   './js/views-insights.js',
   './js/views-standards.js',
   './js/views-coach.js',
+  './js/views-goals.js',
   './manifest.webmanifest',
   './icons/icon.svg'
 ];

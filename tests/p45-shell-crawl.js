@@ -63,7 +63,7 @@ fs.readdirSync(path.join(ROOT, 'js')).filter(f => f.endsWith('.js')).forEach(f =
 const order = [...html.matchAll(/<script src="js\/([a-z-]+)\.js"><\/script>/g)].map(m => m[1]);
 const want = ['util', 'exercises', 'store', 'sync', 'analytics', 'loadmodel', 'guardrails',
   'protocols', 'goals', 'charts', 'musclemap', 'applehealth', 'coach', 'app', 'views-log', 'player',
-  'views-library', 'views-insights', 'views-standards', 'views-coach'];
+  'views-library', 'views-insights', 'views-standards', 'views-coach', 'views-goals'];
 ok(order.join(',') === want.join(','), 'script order changed:\n  got  ' + order.join(',') + '\n  want ' + want.join(','));
 
 console.log('SHELL entries:', shell.length, '| index refs:', refs.size, '| CACHE_NAME:', cn);
