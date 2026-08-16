@@ -178,6 +178,153 @@ const { serve } = require('./lib/hport');
   t = await text();
   ok(/Goals/.test(t) && /Save \$6,000/.test(t), 'Goals is general — no performance gate');
 
+  /* ================================================================
+     P7.1 — the tracker surfaces
+     ================================================================ */
+
+  /* ---- 9. the Habits tab and the form that replaced the prompt ---- */
+  await p.click('[data-tab="habits"]');
+  await p.waitForTimeout(400);
+  t = await text();
+  ok(/Habits/.test(t), 'the Habits tab exists');
+  await p.click('[data-act="habit-new"]');
+  await p.waitForTimeout(300);
+  await p.fill('#h-cue', 'waking');
+  await p.fill('#h-action', 'Up at 05:00');
+  await p.fill('#h-floor', '6');
+  await p.click('[data-act="habit-save"]');
+  await p.waitForTimeout(400);
+  t = await text();
+  ok(/Standing · no finish line/i.test(t), 'a floor habit lands in the Standing section');
+  ok(/Up at 05:00/.test(t) && /floor 6/.test(t), 'with its action and floor visible');
+
+  /* ---- 10. backfill: yesterday bends, the record does not ---- */
+  const dates = await p.evaluate(function () {
+    return { today: U.todayStr(), yesterday: U.addDays(U.todayStr(), -1),
+      old: U.addDays(U.todayStr(), -3) };
+  });
+  const yCell = '[data-cell][data-date="' + dates.yesterday + '"]';
+  await p.click(yCell);
+  await p.waitForTimeout(400);
+  const backfilled = await p.evaluate(function (d) {
+    return Store.state.ticks.some(function (k) { return k.date === d; });
+  }, dates.yesterday);
+  ok(backfilled, 'tapping yesterday\'s cell backfills yesterday');
+  const oldCellIsButton = await p.evaluate(function (d) {
+    const el = document.querySelector('[data-date="' + d + '"]');
+    return el ? el.tagName : null;
+  }, dates.old);
+  ok(oldCellIsButton === null || oldCellIsButton === 'I',
+    'THREE DAYS AGO IS NOT A BUTTON — the record doesn\'t bend (got ' + oldCellIsButton + ')');
+
+  /* ---- 11. habit detail: heatmap, stats, edit, armed delete ---- */
+  const habitId = await p.evaluate(function () {
+    return Store.state.practices.filter(function (x) { return !x.goalId; })[0].id;
+  });
+  await p.click('[data-act="habit-open"][data-id="' + habitId + '"]');
+  await p.waitForTimeout(400);
+  const cells = await p.evaluate(function () { return document.querySelectorAll('.g-heat .g-cell').length; });
+  ok(cells === 28, 'the heatmap is four honest weeks (got ' + cells + ' cells)');
+  t = await text();
+  ok(/Streak/.test(t) && /28 days/.test(t) && /Floor/.test(t), 'streak, adherence and floor stats render');
+  await p.click('[data-act="habit-edit"]');
+  await p.waitForTimeout(300);
+  await p.fill('#h-action', 'Up at 05:00 sharp');
+  await p.click('[data-act="habit-save"]');
+  await p.waitForTimeout(400);
+  const renamed = await p.evaluate(function (id) {
+    var pr = Store.state.practices.find(function (x) { return x.id === id; });
+    return pr ? pr.action : null;
+  }, habitId);
+  ok(renamed === 'Up at 05:00 sharp', 'editing a habit is a form, not a prompt');
+  await p.click('[data-act="habit-open"][data-id="' + habitId + '"]');
+  await p.waitForTimeout(300);
+  await p.click('[data-act="habit-edit"]');
+  await p.waitForTimeout(300);
+  await p.click('[data-act="habit-delete"]');
+  await p.waitForTimeout(200);
+  let stillThere = await p.evaluate(function (id) {
+    return Store.state.practices.some(function (x) { return x.id === id; });
+  }, habitId);
+  ok(stillThere, 'the first delete tap only ARMS — nothing destroyed');
+  await p.click('[data-act="habit-delete"]');
+  await p.waitForTimeout(300);
+  stillThere = await p.evaluate(function (id) {
+    return Store.state.practices.some(function (x) { return x.id === id; });
+  }, habitId);
+  ok(!stillThere, 'the second tap deletes, tombstoned');
+
+  /* ---- 12. goal detail: chart, progress, versioned edit ---- */
+  await p.evaluate(function () {
+    var g = Store.state.goals.find(function (x) { return x.name === 'Save $6,000'; });
+    // an earlier point so the chart has a line to draw
+    Store.reportMeasure(g.id, U.addDays(U.todayStr(), -7), 2500);
+    App.navigate('dashboard');
+  });
+  await p.waitForTimeout(300);
+  await p.evaluate(function () { App.navigate('goals'); });
+  await p.waitForTimeout(400);
+  await p.click('[data-act="open"]');
+  await p.waitForTimeout(400);
+  const hasChart = await p.evaluate(function () { return !!document.querySelector('.g-chart .line'); });
+  ok(hasChart, 'two points draw the trajectory chart');
+  const hasBar = await p.evaluate(function () { return !!document.querySelector('.g-bar i'); });
+  ok(hasBar, 'the honest Reach progress bar renders');
+  await p.click('[data-act="goal-edit"]');
+  await p.waitForTimeout(300);
+  await p.fill('#e-target', '6500');
+  await p.click('[data-act="edit-save"]');
+  await p.waitForTimeout(400);
+  const versioned = await p.evaluate(function () {
+    var g = Store.state.goals.find(function (x) { return x.name === 'Save $6,000'; });
+    return { v: g.versions.length, target: g.target.value };
+  });
+  ok(versioned.v === 2 && versioned.target === 6500, 'edits land as version 2 with the new target');
+  t = await text();
+  ok(/Definition v2/.test(t), 'and the detail says the definition sharpened');
+
+  /* ---- 13. wins: the record ---- */
+  await p.click('[data-act="back"]');
+  await p.waitForTimeout(300);
+  await p.click('[data-tab="wins"]');
+  await p.waitForTimeout(400);
+  t = await text();
+  ok(/Sharpened the definition/i.test(t), 'the revision is on the record automatically');
+  await p.fill('#win-text', 'First sub-21 five-miler');
+  await p.click('[data-act="win-add"]');
+  await p.waitForTimeout(400);
+  t = await text();
+  ok(/sub-21 five-miler/i.test(t), 'a manual win lands on the record');
+
+  /* ---- 14. the capacity conversation ---- */
+  await p.evaluate(function () {
+    for (var i = 0; i < 5; i++) {
+      Store.addPractice({ cue: '', action: 'Daily thing ' + i, cadence: { type: 'daily' }, goalId: '' });
+    }
+    // low adherence: only one of them ever ticked, once
+    Store.tickPractice(Store.state.practices[Store.state.practices.length - 1].id, U.todayStr());
+  });
+  await p.click('[data-tab="habits"]');
+  await p.waitForTimeout(300);
+  await p.click('[data-act="habit-new"]');
+  await p.waitForTimeout(300);
+  t = await text();
+  ok(/Capacity check/i.test(t), 'a strained daily set surfaces the capacity conversation');
+  await p.fill('#h-action', 'One more daily thing');
+  const btnLabel = await p.evaluate(function () {
+    return document.querySelector('[data-act="habit-save"]').textContent;
+  });
+  ok(/Add anyway/i.test(btnLabel), 'and the button says what the tap means');
+  const before = await p.evaluate(function () { return Store.state.practices.length; });
+  await p.click('[data-act="habit-save"]');
+  await p.waitForTimeout(300);
+  let after = await p.evaluate(function () { return Store.state.practices.length; });
+  ok(after === before, 'the first tap is the warning, not the save');
+  await p.click('[data-act="habit-save"]');
+  await p.waitForTimeout(400);
+  after = await p.evaluate(function () { return Store.state.practices.length; });
+  ok(after === before + 1, 'the second tap is the informed one');
+
   ok(errs.length === 0, 'no page errors: ' + errs.slice(0, 2).join(' | '));
 
   console.log('passed:', pass);

@@ -225,5 +225,82 @@
     return days(lastReviewDate, today) >= Goals.REVIEW_DAYS;
   };
 
+  /* ---------- progress (Reach goals only) ----------
+     A Reach goal MAY show a fraction honestly: (latest − baseline) over
+     (target − baseline) is real arithmetic on real numbers, unlike the
+     fabricated readiness percentages the spec forbids for Events. Clamped:
+     an overshoot is 1, a regression below baseline is 0. */
+  Goals.progress = function (goal, measures) {
+    if (!goal || !goal.baseline || !goal.target) return null;
+    const base = Number(goal.baseline.value);
+    const target = Number(goal.target.value);
+    if (!isFinite(base) || !isFinite(target) || base === target) return null;
+    const pts = sortedPoints(measures);
+    const latest = pts.length ? pts[pts.length - 1].value : base;
+    const frac = (latest - base) / (target - base);
+    return { frac: Math.max(0, Math.min(1, frac)), latest: latest };
+  };
+
+  /* ---------- streaks ----------
+     Daily: consecutive ticked days ending today (an unticked today doesn't
+     break it until the day is over). Weekly xN: consecutive whole weeks that
+     met the cadence, counting back from the current week — the current week
+     counts once it has met N, and doesn't break the streak until it's over
+     and short. */
+  Goals.streak = function (practice, ticks, today) {
+    const have = {};
+    (ticks || []).forEach(function (t) {
+      if (t && t.practiceId === practice.id) have[t.date] = true;
+    });
+    const cad = practice.cadence || { type: 'daily' };
+
+    if (cad.type !== 'weekly') {
+      let n = 0;
+      let d = today;
+      if (!have[d]) d = U.addDays(d, -1);
+      while (have[d]) { n++; d = U.addDays(d, -1); }
+      return n;
+    }
+
+    const times = Math.max(1, Number(cad.times) || 1);
+    function weekCount(endDate) {
+      let c = 0;
+      for (let i = 0; i < 7; i++) if (have[U.addDays(endDate, -i)]) c++;
+      return c;
+    }
+    // Weeks end on `today`, stepping back 7 at a time. The in-progress week
+    // only ever ADDS to the streak; it can't break it early.
+    let n = 0;
+    let end = today;
+    if (weekCount(end) >= times) n++;
+    end = U.addDays(end, -7);
+    while (weekCount(end) >= times) { n++; end = U.addDays(end, -7); }
+    return n;
+  };
+
+  /* ---------- capacity ----------
+     The soft check at the door: how many daily practices already exist, and
+     how well they're actually being kept (pooled 28-day adherence). The UI
+     turns a strained answer into a conversation, never a wall. */
+  Goals.capacity = function (practices, ticks, today) {
+    const daily = (practices || []).filter(function (p) {
+      return !p.cadence || p.cadence.type !== 'weekly';
+    });
+    let done = 0, scheduled = 0;
+    daily.forEach(function (p) {
+      const a = Goals.adherence(p, ticks, today, 28);
+      done += a.done;
+      scheduled += a.scheduled;
+    });
+    return { daily: daily.length,
+      adh28: scheduled > 0 ? Math.min(1, done / scheduled) : null };
+  };
+
+  /* Backfill honesty: a tick can be recorded for today or yesterday, never
+     deeper. The past is the record, not an editable surface. */
+  Goals.canBackfill = function (date, today) {
+    return date === today || date === U.addDays(today, -1);
+  };
+
   window.Goals = Goals;
 })();

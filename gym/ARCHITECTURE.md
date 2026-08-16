@@ -1881,3 +1881,25 @@ foreground sync costs a 304 instead of a full download.
 js/goals.js and js/views-goals.js enter index.html load order and sw.js
 SHELL; CACHE_NAME bumps. Goals enters the More sheet; the Today card renders
 on the Dashboard for users with ≥1 practice. Both modes, all profiles.
+
+## P7.1 — the tracker surfaces (shipped after the probe)
+
+The probe's loop, grown into a daily instrument. Binding additions:
+
+  * Goals.progress: a Reach goal MAY render a fraction — (latest−baseline)/
+    (target−baseline), clamped [0,1]. Real arithmetic on real numbers; the
+    no-percentage refusal stays for Events.
+  * Goals.streak: daily = consecutive days (open today doesn't break);
+    weekly×N = consecutive met weeks (the open week only ever ADDS).
+  * Goals.capacity: pooled 28-day adherence over the DAILY practice set.
+    ≥5 daily practices under 80% surfaces the capacity conversation on the
+    habit form; the first save-tap is the warning (the typed draft is
+    preserved), the second is the informed one.
+  * Backfill law, UI-enforced: week strips and the 28-day heatmap render
+    today and yesterday as live buttons; anything older is the record —
+    an <i>, not a button. Goals.canBackfill is the single gate.
+  * Goal edits are versioned (versions[] append, auto-win on the record);
+    the baseline is never editable — it is where you actually started.
+  * The view is three tabs: Goals / Habits / Wins. Habits are created and
+    edited by form (window.prompt is gone), deletes are two-tap armed.
+

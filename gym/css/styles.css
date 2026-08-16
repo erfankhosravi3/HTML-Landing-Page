@@ -4840,3 +4840,43 @@ button.std-row:hover .std-name {
 .g-review-due { border-color: var(--accent); background: var(--accent-tint); cursor: pointer; }
 .g-refuse { border-color: var(--red-line); }
 .g-refuse .card-title span:first-child { color: var(--red); }
+
+/* ---- P7.1: tracker surfaces ---- */
+.g-tabs { display: flex; width: 100%; margin-bottom: 14px; }
+.g-tabs .seg.active { background: var(--card-2); color: var(--text); font-weight: 600; }
+
+/* Reach progress — honest arithmetic, so it may be a bar. GO accent: progress
+   toward a target is exactly what the accent means. */
+.g-bar { height: 6px; border-radius: 3px; background: var(--card-2); overflow: hidden; }
+.g-bar i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+
+/* the week strip and the heatmap share one cell. Live cells (today, yesterday)
+   are buttons; the rest are the record. */
+.g-week { display: inline-flex; gap: 4px; flex: none; }
+.g-heat { display: flex; flex-direction: column; gap: 4px; }
+.g-heat-row { display: flex; gap: 4px; }
+.g-cell {
+  width: 16px; height: 16px; border-radius: 3px; flex: none;
+  background: var(--card-2); border: 0; padding: 0;
+}
+.g-heat .g-cell { width: 100%; max-width: 40px; height: 20px; flex: 1; }
+.g-cell.hit { background: var(--accent); }
+.g-cell.miss { background: var(--red-tint); }
+.g-cell.today { box-shadow: inset 0 0 0 1.5px var(--text-muted); }
+.g-cell.today.hit { box-shadow: none; }
+button.g-cell.live { cursor: pointer; position: relative; }
+button.g-cell.live::after { content: ''; position: absolute; inset: -6px; }
+button.g-cell.live:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.g-habit { padding: 10px 0 4px; }
+.g-habit.bordered { border-top: 1px solid var(--border); }
+
+.g-capacity { border-color: var(--orange); background: var(--amber-tint); }
+
+/* the trajectory chart — geometry in JS, every colour here */
+.g-chart .grid { stroke: var(--border); stroke-width: 1; }
+.g-chart .grid.faint { opacity: .5; }
+.g-chart .req { stroke: var(--text-muted); stroke-width: 1.5; stroke-dasharray: 5 5; fill: none; }
+.g-chart .line { stroke: var(--accent); stroke-width: 2.5; fill: none; }
+.g-chart .pt { fill: var(--accent); }
+.g-chart .target { fill: var(--yellow); }
