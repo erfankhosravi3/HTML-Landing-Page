@@ -1720,6 +1720,7 @@
     // that placement IS the retention strategy. Hook, not import: views-goals
     // owns everything about it.
     if (window.GoalsUI) html += GoalsUI.todayCardHTML();
+    if (window.NutritionUI) html += NutritionUI.dashCardHTML();
 
     if (perf) html += recoveryCardHTML(u, today, gs, hrInfo, greenWk);
 
@@ -1873,6 +1874,7 @@
 
     container.innerHTML = html;
     if (window.GoalsUI) GoalsUI.wireToday(container);
+    if (window.NutritionUI) NutritionUI.wireDash(container);
 
     /* mount charts */
     Charts.rings(U.$('[data-slot="rings"]', container), {

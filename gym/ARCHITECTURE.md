@@ -1961,3 +1961,24 @@ basalEnergyKcal) and the HAE setup list.
 5. UI: draft-not-meal, edited-kcal-is-what-saves, reject-saves-nothing,
    keyless manual entry, photo-never-stored, per-profile gate both ways.
 
+## P8.1 — the pillar (shipped after P8.0)
+
+MyFitnessPal-shaped, IronLog-honest. Binding additions:
+
+  * Meals carry a SLOT (breakfast/lunch/dinner/snack); the clock only ever
+    SUGGESTS a slot, and a P8.0 record without one reads as a snack —
+    rendered, counted, never guessed into a mealtime.
+  * foods — a new collection (shim, tombstones, per-user): the personal
+    library. Frequency is MEASURED (every quick-log bumps uses); ranking is
+    uses then recency. Saving is one tap from any meal or draft.
+  * The calorie budget comes from REAL burn: TDEE = mean of complete burn
+    days over the trailing 14 (>= 5 required, else the budget REFUSES —
+    no age/height formulas, ever), moved by the goal rate at 7700 kcal/kg/wk.
+    A manual override is allowed and labeled as such.
+  * Day navigation: any PAST day is browsable and loggable (dietary recall
+    is normal); the future is closed. Distinct from the tick law on purpose.
+  * Copy-yesterday clones a slot; quick-log is two taps; both are honest
+    store writes attributed source 'manual'.
+  * The Dashboard card renders ONLY for opted-in profiles — the gate is on
+    the card itself, mutation-tested, not just on the view.
+

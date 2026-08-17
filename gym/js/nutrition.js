@@ -289,3 +289,82 @@
 
   window.Nutrition = Nutrition;
 })();
+/* ======================================================================
+   P8.1 — the diary machinery: slots, the budget, the week, the library
+   ====================================================================== */
+(function () {
+  'use strict';
+  const U = window.U;
+  const Nutrition = window.Nutrition;
+
+  Nutrition.SLOTS = ['breakfast', 'lunch', 'dinner', 'snack'];
+  Nutrition.SLOT_NAMES = { breakfast: 'Breakfast', lunch: 'Lunch', dinner: 'Dinner', snack: 'Snacks' };
+
+  // Default slot from the clock — a suggestion the user can override, never
+  // a claim about what the meal "was".
+  Nutrition.slotFor = function (hour) {
+    if (hour < 10) return 'breakfast';
+    if (hour < 15) return 'lunch';
+    if (hour < 21) return 'dinner';
+    return 'snack';
+  };
+
+  // A logged meal without a slot (P8.0 records) reads as a snack — rendered,
+  // counted, never guessed into a mealtime it may not have been.
+  Nutrition.slotOf = function (meal) {
+    return Nutrition.SLOTS.indexOf(meal && meal.slot) >= 0 ? meal.slot : 'snack';
+  };
+
+  Nutrition.TDEE_WINDOW = 14;     // days the burn average looks back
+  Nutrition.TDEE_MIN_DAYS = 5;    // complete burn days before a target exists
+
+  /* The daily calorie target, MyFitnessPal-shaped but honest about where the
+     number comes from: TDEE is the average of REAL burn days from the health
+     link (never an age/height formula), and the goal rate moves it by
+     7700 kcal per kg per week. No burn history -> no target, said plainly. */
+  Nutrition.kcalTarget = function (samples, userId, today, cfg) {
+    cfg = cfg || {};
+    if (isFinite(Number(cfg.kcalOverride)) && Number(cfg.kcalOverride) > 0) {
+      return { state: 'ok', target: Math.round(Number(cfg.kcalOverride)), source: 'manual' };
+    }
+    let sum = 0, n = 0;
+    for (let i = 0; i < Nutrition.TDEE_WINDOW; i++) {
+      const b = Nutrition.dayBurn(samples, userId, U.addDays(today, -i));
+      if (b.burn !== null) { sum += b.burn; n++; }
+    }
+    if (n < Nutrition.TDEE_MIN_DAYS) {
+      return { state: 'insufficient', burnDays: n, needed: Nutrition.TDEE_MIN_DAYS };
+    }
+    const tdee = sum / n;
+    const rate = Number(cfg.rateKgPerWeek) || 0;   // negative = cut
+    const target = Math.round(tdee + (rate * Nutrition.KCAL_PER_KG) / 7);
+    return { state: 'ok', target: target, tdee: Math.round(tdee), rate: rate, source: 'burn' };
+  };
+
+  /* Seven days for the week strip: intake, burn, balance, completeness.
+     Incomplete days carry their intake but NO balance — the strip renders
+     what happened, never a number the data can't fund. */
+  Nutrition.weekSeries = function (meals, samples, userId, today) {
+    const out = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = U.addDays(today, -i);
+      out.push(Nutrition.dayLedger(meals, samples, userId, d));
+    }
+    return out;
+  };
+
+  // The library's order: what you use most, then what you used last.
+  Nutrition.rankFoods = function (foods) {
+    return (foods || []).slice().sort(function (a, b) {
+      const ub = (Number(b.uses) || 0) - (Number(a.uses) || 0);
+      if (ub !== 0) return ub;
+      return (Number(b.lastUsedAt) || 0) - (Number(a.lastUsedAt) || 0);
+    });
+  };
+
+  // Meals may be logged to any past day (dietary recall is normal); the
+  // future stays closed. Distinct from the tick law on purpose.
+  Nutrition.canLogOn = function (date, today) {
+    return typeof date === 'string' && date <= today;
+  };
+})();
