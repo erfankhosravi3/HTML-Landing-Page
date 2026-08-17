@@ -4880,3 +4880,6 @@ button.g-cell.live:focus-visible { outline: 2px solid var(--accent); outline-off
 .g-chart .line { stroke: var(--accent); stroke-width: 2.5; fill: none; }
 .g-chart .pt { fill: var(--accent); }
 .g-chart .target { fill: var(--yellow); }
+
+/* ---- P8: nutrition ---- */
+.g-draft { border-color: var(--accent); }

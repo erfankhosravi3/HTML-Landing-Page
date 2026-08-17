@@ -3,9 +3,9 @@
    or installed PWAs keep serving the old cache forever. */
 'use strict';
 
-/* P7.1: the tracker surfaces — Habits/Wins tabs, heatmap, streaks, charts.
-   js/goals.js, js/views-goals.js, css/styles.css. */
-const CACHE_NAME = 'ironlog-v2p21';
+/* P8: Nutrition — js/nutrition.js, js/views-nutrition.js (new), meals in
+   store, basal energy in the health link. */
+const CACHE_NAME = 'ironlog-v2p22';
 
 const SHELL = [
   './',
@@ -20,6 +20,7 @@ const SHELL = [
   './js/guardrails.js',
   './js/protocols.js',
   './js/goals.js',
+  './js/nutrition.js',
   './js/charts.js',
   './js/musclemap.js',
   './js/applehealth.js',
@@ -32,6 +33,7 @@ const SHELL = [
   './js/views-standards.js',
   './js/views-coach.js',
   './js/views-goals.js',
+  './js/views-nutrition.js',
   './manifest.webmanifest',
   './icons/icon.svg'
 ];
