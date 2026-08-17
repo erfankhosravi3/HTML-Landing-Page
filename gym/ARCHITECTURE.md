@@ -1982,3 +1982,23 @@ MyFitnessPal-shaped, IronLog-honest. Binding additions:
   * The Dashboard card renders ONLY for opted-in profiles — the gate is on
     the card itself, mutation-tested, not just on the view.
 
+## P8.2 — Energy: exercise and health data, one ledger
+
+The Nutrition view gains a second tab. Binding rules:
+
+  * energySeries joins meals, health-link burn and the WORKOUT LOG per day.
+    'trained' comes only from this user's logged sessions — never inferred
+    from calories, never leaked across users (mutation-tested).
+  * The chart draws what happened and claims nothing: intake bars (muted
+    when the day is incomplete), the burn line BREAKS on days the link
+    missed — a gap is a gap, not a bridge (mutation-tested) — and training
+    triangles mark logged sessions.
+  * trainingSplit answers "where does the deficit live?": averages over
+    complete days split trained/rest, refusing until BOTH sides have 3
+    complete days — a two-day side is an anecdote wearing a chart.
+  * The finding sentence is computed from the split's own numbers and
+    renders them; it states facts ("burn jumps +700, intake moves +0 — the
+    deficit lives on training days"), never diet advice.
+  * The deficit flag and the scale-referee calibration live on this tab,
+    with the analysis they belong to.
+

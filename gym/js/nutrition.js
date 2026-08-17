@@ -368,3 +368,68 @@
     return typeof date === 'string' && date <= today;
   };
 })();
+/* ======================================================================
+   P8.2 — ENERGY: exercise and health data joined into one ledger
+   ====================================================================== */
+(function () {
+  'use strict';
+  const U = window.U;
+  const Nutrition = window.Nutrition;
+
+  Nutrition.ENERGY_WINDOW = 14;   // the chart and the split look back this far
+  Nutrition.SPLIT_MIN_DAYS = 3;   // complete days of EACH kind before the split speaks
+
+  /* One row per day, newest last: intake, burn (with its basal/active parts),
+     balance on complete days only, and whether training was LOGGED that day.
+     'trained' comes from the workout log — the app's own record — never
+     inferred from calorie numbers. */
+  Nutrition.energySeries = function (meals, samples, workouts, userId, today, days) {
+    const n = days || Nutrition.ENERGY_WINDOW;
+    const trainedOn = {};
+    (workouts || []).forEach(function (w) {
+      if (w && w.userId === userId && typeof w.date === 'string') trainedOn[w.date] = true;
+    });
+    const out = [];
+    for (let i = n - 1; i >= 0; i--) {
+      const d = U.addDays(today, -i);
+      const led = Nutrition.dayLedger(meals, samples, userId, d);
+      const burn = Nutrition.dayBurn(samples, userId, d);
+      out.push({ date: d, intake: led.intake, burn: led.burn,
+        basal: burn.basal, active: burn.active,
+        balance: led.balance, complete: led.complete,
+        trained: !!trainedOn[d] });
+    }
+    return out;
+  };
+
+  /* The split that answers the question every training log + food diary
+     combination exists to answer: WHERE DOES THE DEFICIT LIVE? Averages over
+     complete days only, split by trained/rest, refusing until both sides
+     have SPLIT_MIN_DAYS — a comparison with two data points on one side is
+     an anecdote wearing a chart. */
+  Nutrition.trainingSplit = function (series) {
+    const train = { burn: 0, intake: 0, balance: 0, n: 0 };
+    const rest = { burn: 0, intake: 0, balance: 0, n: 0 };
+    (series || []).forEach(function (day) {
+      if (!day.complete) return;
+      const side = day.trained ? train : rest;
+      side.burn += day.burn;
+      side.intake += day.intake.kcal;
+      side.balance += day.balance;
+      side.n++;
+    });
+    if (train.n < Nutrition.SPLIT_MIN_DAYS || rest.n < Nutrition.SPLIT_MIN_DAYS) {
+      return { state: 'insufficient', trainDays: train.n, restDays: rest.n,
+        needed: Nutrition.SPLIT_MIN_DAYS };
+    }
+    function avg(s) {
+      return { burn: Math.round(s.burn / s.n), intake: Math.round(s.intake / s.n),
+        balance: Math.round(s.balance / s.n), n: s.n };
+    }
+    const a = avg(train), b = avg(rest);
+    return { state: 'ok', train: a, rest: b,
+      deltaBurn: a.burn - b.burn,
+      deltaIntake: a.intake - b.intake,
+      deltaBalance: a.balance - b.balance };
+  };
+})();
