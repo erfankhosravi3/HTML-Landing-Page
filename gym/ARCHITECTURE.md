@@ -1903,3 +1903,61 @@ The probe's loop, grown into a daily instrument. Binding additions:
   * The view is three tabs: Goals / Habits / Wins. Habits are created and
     edited by form (window.prompt is gone), deletes are two-tap armed.
 
+---
+
+# V2 ADDENDUM — P8: NUTRITION
+
+Opt-in per profile, and off is really off: a profile that never enabled it
+never sees a calorie. The setting rides user.settings.nutrition (synced,
+shim-preserved).
+
+## The photo loop (binding)
+
+A meal photo is downscaled in a canvas (max 1024px, JPEG), sent to the API
+with the user's own on-device key (the coach's key, same storage), and
+DROPPED. Photos are never stored anywhere — not in state, not in
+localStorage, nothing base64-shaped near the store (mutation-tested).
+The reply is a STRUCTURED DRAFT under the P6 contract, verbatim: every item
+editable (edits write through to the draft live, surviving rerenders),
+per-item drop, accept/reject — THE MODEL HAS NO WRITE PATH. Wire rules as
+P6: additionalProperties:false on every schema object, no sampling knobs,
+adaptive thinking, refusal stop_reason surfaced. This request does not
+stream: one image in, ~400 tokens out, bounded.
+
+Manual entry is first-class and keyless: the same draft card, human-authored.
+
+## The arithmetic (binding thresholds)
+
+  meals            new collection (shim, tombstones, per-user) — totals plus
+                   the item list; source 'photo'|'manual'; confidence kept.
+  burn             basal + active from the health link. HALF A BURN IS NO
+                   BURN: either missing -> null, never a silent half.
+  complete day     intake logged AND full burn. Balance/calibration/flag
+                   stand only on complete days.
+  calibration      trailing 21 days; REFUSES under 14 complete days or
+                   fewer than 2 weights. Predicted delta = avg balance x
+                   span / 7700 kcal/kg; the gap vs the scale, per day, is
+                   the stated correction. This is what makes +-30%% photo
+                   estimates into a trustworthy weekly signal.
+  deficit flag     14-day window, >=7 complete days to speak at all;
+                   flags at avg deficit >= 750 kcal/day AND >= 8 training
+                   sessions in the window. No override, same as every
+                   guardrail. Cutting while resting is not flagged.
+  protein target   1.8 g/kg of latest weight; null when no weight is known
+                   (no invented defaults). User-editable override.
+
+Basal energy joins the health-link kinds (basal_energy_burned et al ->
+basalEnergyKcal) and the HAE setup list.
+
+## Acceptance tests (binding)
+
+1. Schema strictness walked object-by-object; the wire carries the exact
+   schema; junk replies never throw; refusals surface; negative macros clamp.
+2. Half a burn refuses; incomplete days carry no balance.
+3. Calibration: the closed loop recovers a planted ~500 kcal/day estimation
+   error against a flat scale; refuses at 13 complete days or 1 weight.
+4. The flag fires at 750x8 and stays quiet for the same deficit at rest or
+   on thin data.
+5. UI: draft-not-meal, edited-kcal-is-what-saves, reject-saves-nothing,
+   keyless manual entry, photo-never-stored, per-profile gate both ways.
+

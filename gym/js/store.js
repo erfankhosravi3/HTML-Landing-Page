@@ -7,12 +7,14 @@
     // P7 (Goals). These ride the generic read path on purpose: entities pass
     // through verbatim (unknown keys preserved), and all judgment lives in
     // js/goals.js at read time — the store stays a dumb, forward-compatible bag.
-    'goals', 'practices', 'ticks', 'measures', 'accomplishments'];
+    'goals', 'practices', 'ticks', 'measures', 'accomplishments',
+    // P8 (Nutrition): structured meal records — never photos, only arithmetic.
+    'meals'];
   // Tombstone buckets. All but 'appleWorkouts' are keyed by entity id; that one
   // is keyed 'userId|appleId' so a deleted Apple Health import stays deleted
   // (a re-import would otherwise mint a brand-new workout id and resurrect it).
   const DELETED_KEYS = ['workouts', 'templates', 'bodyMetrics', 'healthSamples', 'customExercises', 'users', 'painLog', 'coachJournal', 'routines', 'coachChats', 'appleWorkouts',
-    'goals', 'practices', 'ticks', 'measures', 'accomplishments'];
+    'goals', 'practices', 'ticks', 'measures', 'accomplishments', 'meals'];
   /* ---------- profile identity colours -----------------------------------
      Identity is keyed off the CVD-searched chart series --s1..--s6, which the
      palette deliberately keeps clear of the GO accent hue: an avatar ring must
@@ -334,6 +336,7 @@
       ticks: [],
       measures: [],
       accomplishments: [],
+      meals: [],
       deleted: emptyDeleted(),
       sync: { url: '', secret: '', enabled: false, lastSyncAt: null, deviceId: U.uid('dev'),
         health: { inbox: '', lastAt: null, lastSummary: null, lastRaw: '', outbox: false },
@@ -1835,6 +1838,51 @@
     state.accomplishments.push(a);
     Store.save();
     return a;
+  };
+
+  /* ---------- meals (P8) ----------
+     A meal is the ACCEPTED form of a draft — totals plus the item list that
+     produced them. Photos never touch this store. */
+
+  Store.addMeal = function (m) {
+    ensureLoaded();
+    m = m || {};
+    const uid = m.userId || state.currentUserId;
+    if (!uid || !m.date) return null;
+    const meal = stamped(m, uid);
+    meal.items = Array.isArray(m.items) ? m.items : [];
+    meal.kcal = Number(m.kcal) || 0;
+    meal.proteinG = Number(m.proteinG) || 0;
+    meal.carbsG = Number(m.carbsG) || 0;
+    meal.fatG = Number(m.fatG) || 0;
+    meal.source = m.source === 'photo' ? 'photo' : 'manual';
+    state.meals.push(meal);
+    Store.save();
+    return meal;
+  };
+
+  Store.updateMeal = function (id, patch) {
+    ensureLoaded();
+    const m = state.meals.find(function (x) { return x.id === id; });
+    if (!m) return null;
+    patch = patch || {};
+    for (const k in patch) {
+      if (k === 'id' || k === 'userId' || k === 'createdAt') continue;
+      m[k] = patch[k];
+    }
+    m.updatedAt = Date.now();
+    Store.save();
+    return m;
+  };
+
+  Store.deleteMeal = function (id) {
+    ensureLoaded();
+    const i = state.meals.findIndex(function (x) { return x.id === id; });
+    if (i < 0) return false;
+    state.meals.splice(i, 1);
+    state.deleted.meals[id] = Date.now();
+    Store.save();
+    return true;
   };
 
   /* ---------- backup: export / import ---------- */

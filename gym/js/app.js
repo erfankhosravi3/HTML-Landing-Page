@@ -1266,7 +1266,7 @@
       if (!sum) return '';
       const kinds = sum.kinds || {};
       const names = { restingHR: 'Resting heart rate', sleepHours: 'Sleep', steps: 'Steps',
-        activeEnergyKcal: 'Active energy', exerciseMin: 'Exercise minutes',
+        activeEnergyKcal: 'Active energy', basalEnergyKcal: 'Basal energy', exerciseMin: 'Exercise minutes',
         vo2max: 'VO2 max', weightKg: 'Body weight', bodyFatPct: 'Body fat' };
       const keys = Object.keys(kinds).sort();
       let h = '';
@@ -1308,7 +1308,7 @@
               '— it appears in Health → Sharing → Apps because it is a native app.</li>' +
             '<li>In the app: <b>Automations → Add Automation</b>.</li>' +
             '<li>Type <b>REST API</b>, method <b>POST</b>, and paste the address above as the URL.</li>' +
-            '<li>Pick the metrics: resting heart rate, sleep analysis, step count, active energy, ' +
+            '<li>Pick the metrics: resting heart rate, sleep analysis, step count, active energy, basal energy burned, ' +
               'exercise time, VO2 max, weight.</li>' +
             '<li>Set it to run <b>daily</b>, early morning. Save.</li>' +
             '<li>Run it once by hand, then tap <b>Check now</b> here.</li></ol>') +
