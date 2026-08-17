@@ -204,6 +204,67 @@ ok(Store.state.meals.length === 1 && Store.state.meals[0].id === m2.id,
 ok(!('nutrition' in {}) && JSON.stringify(Store.state.meals).indexOf('image') === -1,
   'nothing image-shaped is anywhere near the store');
 
+
+/* ==================================================================
+   5. P8.1 — slots, the budget, the week, the library
+   ================================================================== */
+eq(Nutrition.slotFor(7), 'breakfast', 'morning defaults to breakfast');
+eq(Nutrition.slotFor(12), 'lunch', 'noon to lunch');
+eq(Nutrition.slotFor(19), 'dinner', 'evening to dinner');
+eq(Nutrition.slotFor(23), 'snack', 'late is a snack');
+eq(Nutrition.slotOf({ slot: 'dinner' }), 'dinner', 'a slotted meal keeps its slot');
+eq(Nutrition.slotOf({ slot: 'brunch' }), 'snack', 'an unknown slot reads as snack, never guessed');
+eq(Nutrition.slotOf({}), 'snack', 'P8.0 records without slots read as snacks');
+
+/* the budget: TDEE from real burn days, moved by the goal rate */
+samples = [];
+for (let i = 0; i < 10; i++) {
+  const d = U.addDays(TODAY, -i);
+  samples.push(sample(d, 'basalEnergyKcal', 1700));
+  samples.push(sample(d, 'activeEnergyKcal', 800));
+}
+let tgt = Nutrition.kcalTarget(samples, UID, TODAY, {});
+eq(tgt.state, 'ok', 'ten complete burn days make a target');
+eq(tgt.target, 2500, 'maintain = TDEE');
+tgt = Nutrition.kcalTarget(samples, UID, TODAY, { rateKgPerWeek: -0.25 });
+eq(tgt.target, 2500 - 275, 'a quarter-kilo cut is 275 kcal/day off TDEE');
+tgt = Nutrition.kcalTarget(samples, UID, TODAY, { rateKgPerWeek: 0.25 });
+eq(tgt.target, 2500 + 275, 'and a gain adds the same');
+tgt = Nutrition.kcalTarget(samples.slice(0, 8), UID, TODAY, {});
+eq(tgt.state, 'insufficient', 'FOUR BURN DAYS IS NO TDEE — the target refuses');
+tgt = Nutrition.kcalTarget([], UID, TODAY, { kcalOverride: 2800 });
+eq(tgt.target, 2800, 'a manual override needs no burn history');
+eq(tgt.source, 'manual', 'and says where it came from');
+
+/* the week strip: incomplete days carry intake but no balance */
+const wk = Nutrition.weekSeries([meal(TODAY, 2000)], samples, UID, TODAY);
+eq(wk.length, 7, 'seven days, oldest first');
+eq(wk[6].date, TODAY, 'ending today');
+eq(wk[6].balance, 2000 - 2500, 'the complete day carries its balance');
+eq(wk[5].balance, null, 'a day with burn but NO logged intake carries none');
+
+/* the library ranking */
+const ranked = Nutrition.rankFoods([
+  { name: 'rice', uses: 2, lastUsedAt: 10 },
+  { name: 'oats', uses: 9, lastUsedAt: 5 },
+  { name: 'eggs', uses: 2, lastUsedAt: 99 }]);
+eq(ranked[0].name, 'oats', 'most used first');
+eq(ranked[1].name, 'eggs', 'ties break by most recent');
+
+/* meals log to any past day; the future stays closed */
+ok(Nutrition.canLogOn(TODAY, TODAY), 'today logs');
+ok(Nutrition.canLogOn('2026-08-20', TODAY), 'dietary recall: any past day logs');
+ok(!Nutrition.canLogOn('2026-09-07', TODAY), 'the future is closed');
+
+/* foods CRUD + tombstones */
+const f1 = Store.addFood({ name: 'Oats + eggs', kcal: 520, proteinG: 32, carbsG: 60, fatG: 14 });
+ok(!!f1 && f1.id, 'addFood stamps');
+Store.bumpFoodUse(f1.id);
+Store.bumpFoodUse(f1.id);
+eq(Store.state.foods[0].uses, 2, 'quick-logs bump the measured frequency');
+Store.deleteFood(f1.id);
+ok(Store.state.deleted.foods[f1.id] > 0, 'foods tombstone');
+
 console.log('passed:', pass);
 if (fails.length) { fails.forEach(function (f) { console.log('FAIL:', f); }); process.exit(1); }
 console.log('PASS: nutrition core (' + pass + ' assertions)');

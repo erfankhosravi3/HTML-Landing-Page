@@ -3,9 +3,9 @@
    or installed PWAs keep serving the old cache forever. */
 'use strict';
 
-/* P8: Nutrition — js/nutrition.js, js/views-nutrition.js (new), meals in
-   store, basal energy in the health link. */
-const CACHE_NAME = 'ironlog-v2p22';
+/* P8.1: the nutrition pillar — slotted diary, food library, calorie budget,
+   week strip, Dashboard card. */
+const CACHE_NAME = 'ironlog-v2p23';
 
 const SHELL = [
   './',

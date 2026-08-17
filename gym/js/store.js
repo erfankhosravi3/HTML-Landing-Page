@@ -9,12 +9,13 @@
     // js/goals.js at read time — the store stays a dumb, forward-compatible bag.
     'goals', 'practices', 'ticks', 'measures', 'accomplishments',
     // P8 (Nutrition): structured meal records — never photos, only arithmetic.
-    'meals'];
+    // P8.1: foods — the personal library that makes repeat logging two taps.
+    'meals', 'foods'];
   // Tombstone buckets. All but 'appleWorkouts' are keyed by entity id; that one
   // is keyed 'userId|appleId' so a deleted Apple Health import stays deleted
   // (a re-import would otherwise mint a brand-new workout id and resurrect it).
   const DELETED_KEYS = ['workouts', 'templates', 'bodyMetrics', 'healthSamples', 'customExercises', 'users', 'painLog', 'coachJournal', 'routines', 'coachChats', 'appleWorkouts',
-    'goals', 'practices', 'ticks', 'measures', 'accomplishments', 'meals'];
+    'goals', 'practices', 'ticks', 'measures', 'accomplishments', 'meals', 'foods'];
   /* ---------- profile identity colours -----------------------------------
      Identity is keyed off the CVD-searched chart series --s1..--s6, which the
      palette deliberately keeps clear of the GO accent hue: an avatar ring must
@@ -337,6 +338,7 @@
       measures: [],
       accomplishments: [],
       meals: [],
+      foods: [],
       deleted: emptyDeleted(),
       sync: { url: '', secret: '', enabled: false, lastSyncAt: null, deviceId: U.uid('dev'),
         health: { inbox: '', lastAt: null, lastSummary: null, lastRaw: '', outbox: false },
@@ -1883,6 +1885,60 @@
     state.deleted.meals[id] = Date.now();
     Store.save();
     return true;
+  };
+
+  /* ---------- foods (P8.1): the personal library ---------- */
+
+  Store.addFood = function (f) {
+    ensureLoaded();
+    f = f || {};
+    const uid = f.userId || state.currentUserId;
+    if (!uid || !f.name) return null;
+    const food = stamped(f, uid);
+    food.kcal = Number(f.kcal) || 0;
+    food.proteinG = Number(f.proteinG) || 0;
+    food.carbsG = Number(f.carbsG) || 0;
+    food.fatG = Number(f.fatG) || 0;
+    food.uses = Number(f.uses) || 0;
+    state.foods.push(food);
+    Store.save();
+    return food;
+  };
+
+  Store.updateFood = function (id, patch) {
+    ensureLoaded();
+    const f = state.foods.find(function (x) { return x.id === id; });
+    if (!f) return null;
+    patch = patch || {};
+    for (const k in patch) {
+      if (k === 'id' || k === 'userId' || k === 'createdAt') continue;
+      f[k] = patch[k];
+    }
+    f.updatedAt = Date.now();
+    Store.save();
+    return f;
+  };
+
+  Store.deleteFood = function (id) {
+    ensureLoaded();
+    const i = state.foods.findIndex(function (x) { return x.id === id; });
+    if (i < 0) return false;
+    state.foods.splice(i, 1);
+    state.deleted.foods[id] = Date.now();
+    Store.save();
+    return true;
+  };
+
+  // Every quick-log bumps the counter — 'frequent' is measured, not curated.
+  Store.bumpFoodUse = function (id) {
+    ensureLoaded();
+    const f = state.foods.find(function (x) { return x.id === id; });
+    if (!f) return null;
+    f.uses = (Number(f.uses) || 0) + 1;
+    f.lastUsedAt = Date.now();
+    f.updatedAt = Date.now();
+    Store.save();
+    return f;
   };
 
   /* ---------- backup: export / import ---------- */

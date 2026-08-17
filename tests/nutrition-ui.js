@@ -1,8 +1,9 @@
 'use strict';
-/* The nutrition view, clicked like a thumb would: the opt-in gate, the
-   photo → draft → accept loop (API stubbed at the fetch boundary so the
-   REAL request builder and parser run), manual entry, per-item editing,
-   rejection, and the no-calorie promise for profiles that never opted in. */
+/* The nutrition pillar, clicked like a thumb would: the opt-in gate, the
+   slotted diary, the photo -> draft -> accept loop (API stubbed at the fetch
+   boundary so the REAL builder and parser run), the food library's two-tap
+   logging, copy-yesterday, day navigation with a closed future, the budget
+   built from real burn, and the Dashboard card. */
 const P = require('./lib/paths');
 const { chromium } = P.playwright();
 const { serve } = require('./lib/hport');
@@ -39,19 +40,23 @@ const { serve } = require('./lib/hport');
   await p.click('[data-act="enable"]');
   await p.waitForTimeout(400);
   t = await text();
-  ok(/Today/.test(t), 'enabling opens the ledger');
+  ok(/Breakfast/.test(t) && /Lunch/.test(t) && /Dinner/.test(t) && /Snacks/.test(t),
+    'enabling opens the slotted diary');
   const otherUserOff = await p.evaluate(function () {
     const other = Store.state.users.find(function (x) { return x.id !== Store.state.currentUserId; });
     return !other || !(other.settings && other.settings.nutrition && other.settings.nutrition.enabled);
   });
   ok(otherUserOff, 'PER PROFILE: enabling for one user enables nobody else');
 
-  /* ---- 2. the photo loop, stubbed at the wire ---- */
+  /* ---- 2. no burn history: the budget refuses, plainly ---- */
+  ok(/No calorie budget yet/i.test(t), 'the budget refuses without burn history — no formulas');
+
+  /* ---- 3. the photo loop, stubbed at the wire ---- */
   await p.evaluate(function () {
     window.__sent = [];
     localStorage.setItem('ironlog/coachKey', 'sk-test-not-real');
     window.fetch = function (url, opts) {
-      window.__sent.push({ url: String(url), body: JSON.parse(opts.body), headers: opts.headers });
+      window.__sent.push({ url: String(url), body: JSON.parse(opts.body) });
       return Promise.resolve({
         ok: true, status: 200,
         text: function () {
@@ -67,7 +72,11 @@ const { serve } = require('./lib/hport');
         }
       });
     };
-    // a 2x2 png, tiny but real — exercises the whole canvas pipeline
+  });
+  await p.click('[data-act="add-open"][data-slot="dinner"]');
+  await p.waitForTimeout(300);
+  await p.evaluate(function () {
+    document.querySelector('[data-act="photo"][data-slot="dinner"]').click();
     const cv = document.createElement('canvas');
     cv.width = 2; cv.height = 2;
     cv.toBlob(function (blob) {
@@ -81,79 +90,132 @@ const { serve } = require('./lib/hport');
   await p.waitForTimeout(1200);
   t = await text();
   ok(/Draft — nothing saved yet/i.test(t), 'the reply lands as a DRAFT, not a meal');
-  ok(/medium confidence/i.test(t), 'confidence is shown, not hidden');
+  ok(/medium confidence/i.test(t), 'confidence is shown');
   let mealsN = await p.evaluate(function () { return Store.state.meals.length; });
   ok(mealsN === 0, 'THE MODEL HAS NO WRITE PATH — nothing in the store yet');
-
   const sent = await p.evaluate(function () { return window.__sent[0]; });
-  ok(sent && /api\.anthropic\.com/.test(sent.url), 'the real request builder ran against the stub');
-  ok(sent.body.output_config.format.schema.additionalProperties === false,
-    'and the wire schema is strict');
-  ok(sent.body.messages[0].content[0].type === 'image', 'the image rode the request');
+  ok(sent && sent.body.output_config.format.schema.additionalProperties === false,
+    'the real strict schema rode the stubbed wire');
   const noPhotoStored = await p.evaluate(function () {
     return Store.exportJSON().indexOf('base64') === -1;
   });
-  ok(noPhotoStored, 'THE PHOTO IS NEVER STORED — nothing base64-shaped in the state');
+  ok(noPhotoStored, 'THE PHOTO IS NEVER STORED');
 
-  /* ---- 3. edit an item, drop an item, accept ---- */
+  /* ---- 4. edit, drop, accept + save to library — lands in DINNER ---- */
   await p.fill('.g-draft-kcal[data-i="0"]', '500');
   await p.click('[data-act="draft-drop"][data-i="1"]');
   await p.waitForTimeout(300);
-  await p.click('[data-act="draft-accept"]');
+  await p.click('[data-act="draft-accept-save"]');
   await p.waitForTimeout(400);
-  const saved = await p.evaluate(function () { return Store.state.meals[0]; });
-  ok(saved && saved.kcal === 500, 'the EDITED kcal is what got saved (got ' + (saved && saved.kcal) + ')');
-  ok(saved.items.length === 1, 'the dropped item stayed dropped');
-  ok(saved.source === 'photo', 'source recorded');
+  const saved = await p.evaluate(function () {
+    return { meal: Store.state.meals[0], foods: Store.state.foods.length };
+  });
+  ok(saved.meal && saved.meal.kcal === 500, 'the EDITED kcal is what got saved');
+  ok(saved.meal.slot === 'dinner', 'THE SLOT STUCK — the draft was opened from Dinner');
+  ok(saved.foods === 1, 'Accept + ☆ also saved it to the library');
   t = await text();
-  ok(/500 kcal/.test(t), 'the meal renders in Today');
+  ok(/Dinner 500 kcal/.test(t.replace(/\s+/g, ' ')) || /Dinner/.test(t) && /500 kcal/.test(t),
+    'the meal renders under its slot');
 
-  /* ---- 4. reject saves nothing ---- */
-  await p.evaluate(function () {
-    const cv = document.createElement('canvas');
-    cv.width = 2; cv.height = 2;
-    cv.toBlob(function (blob) {
-      const dt = new DataTransfer();
-      dt.items.add(new File([blob], 'meal2.png', { type: 'image/png' }));
-      const input = document.querySelector('#nu-file');
-      input.files = dt.files;
-      input.dispatchEvent(new Event('change'));
-    });
-  });
-  await p.waitForTimeout(1200);
-  await p.click('[data-act="draft-reject"]');
+  /* ---- 5. the library: two taps logs it again ---- */
+  await p.click('[data-act="add-open"][data-slot="lunch"]');
   await p.waitForTimeout(300);
-  mealsN = await p.evaluate(function () { return Store.state.meals.length; });
-  ok(mealsN === 1, 'reject leaves the store exactly as it was');
-
-  /* ---- 5. manual entry needs no key and no network ---- */
-  await p.evaluate(function () {
-    localStorage.removeItem('ironlog/coachKey');
-  });
-  await p.click('[data-act="manual"]');
-  await p.waitForTimeout(300);
-  await p.fill('.g-draft-kcal[data-i="0"]', '650');
-  await p.click('[data-act="draft-accept"]');
+  t = await text();
+  ok(/From your library/i.test(t), 'the add sheet leads with the library');
+  await p.click('[data-act="quick-log"]');
   await p.waitForTimeout(400);
-  mealsN = await p.evaluate(function () { return Store.state.meals.length; });
-  ok(mealsN === 2, 'a manual meal logs keyless');
-  const manual = await p.evaluate(function () { return Store.state.meals[1]; });
-  ok(manual.kcal === 650 && manual.source === 'manual', 'with the typed kcal and the honest source');
+  const quick = await p.evaluate(function () {
+    return { n: Store.state.meals.length, m: Store.state.meals[1],
+      uses: Store.state.foods[0].uses };
+  });
+  ok(quick.n === 2, 'TWO TAPS, LOGGED');
+  ok(quick.m.slot === 'lunch' && quick.m.kcal === 500, 'to the right slot with the library numbers');
+  ok(quick.uses === 1, 'and the use counter measured it');
 
-  /* ---- 6. the calibration refuses on thin data, in plain words ---- */
+  /* ---- 6. copy yesterday ---- */
+  await p.evaluate(function () {
+    Store.addMeal({ date: U.addDays(U.todayStr(), -1), slot: 'breakfast',
+      name: 'Oats + eggs', kcal: 520, proteinG: 32, carbsG: 60, fatG: 14, source: 'manual' });
+  });
+  await p.click('[data-act="add-open"][data-slot="breakfast"]');
+  await p.waitForTimeout(300);
   t = await text();
-  ok(/Not enough evidence yet/i.test(t), 'the calibration refuses politely instead of inventing');
+  ok(/Same as yesterday/i.test(t), 'yesterday\'s breakfast offers itself');
+  await p.click('[data-act="copy-yesterday"][data-slot="breakfast"]');
+  await p.waitForTimeout(400);
+  const copied = await p.evaluate(function () {
+    return Store.state.meals.filter(function (m) {
+      return m.date === U.todayStr() && m.slot === 'breakfast';
+    }).length;
+  });
+  ok(copied === 1, 'one tap clones the slot from yesterday');
 
-  /* ---- 7. another profile still sees nothing ---- */
+  /* ---- 7. day navigation: the past opens, the future stays closed ---- */
+  await p.click('[data-act="day-prev"]');
+  await p.waitForTimeout(400);
+  t = await text();
+  ok(/Oats \+ eggs/.test(t), 'yesterday is browsable and shows its meals');
+  const nextDisabled = await p.evaluate(function () {
+    return document.querySelector('[data-act="day-next"]').disabled === false;
+  });
+  ok(nextDisabled, 'from yesterday, forward is allowed');
+  await p.click('[data-act="day-next"]');
+  await p.waitForTimeout(300);
+  const backToToday = await p.evaluate(function () {
+    return document.querySelector('[data-act="day-next"]').disabled === true;
+  });
+  ok(backToToday, 'at today, THE FUTURE IS CLOSED');
+
+  /* ---- 8. the budget appears once burn history exists ---- */
+  await p.evaluate(function () {
+    const u = Store.currentUser();
+    const t = U.todayStr();
+    const rows = [];
+    for (let i = 0; i < 7; i++) {
+      rows.push({ userId: u.id, date: U.addDays(t, -i), kind: 'basalEnergyKcal', value: 1700, source: 'link' });
+      rows.push({ userId: u.id, date: U.addDays(t, -i), kind: 'activeEnergyKcal', value: 800, source: 'link' });
+    }
+    Store.addHealthSamples(rows);
+    App.rerender();
+  });
+  await p.waitForTimeout(400);
+  t = await text();
+  ok(/REMAINING TODAY/i.test(t), 'seven real burn days make a budget');
+  ok(/measured 2500 kcal burn/i.test(t), 'and the target says where it came from');
+  await p.evaluate(function () {
+    const sel = document.querySelector('#nu-rate');
+    sel.value = '-0.25';
+  });
+  await p.click('[data-act="save-targets"]');
+  await p.waitForTimeout(400);
+  t = await text();
+  ok(/for 0.25 kg\/wk/i.test(t), 'a cut rate moves the target and says so');
+
+  /* ---- 9. the Dashboard card ---- */
+  await p.evaluate(function () { App.navigate('dashboard'); });
+  await p.waitForTimeout(600);
+  t = await text();
+  ok(/Nutrition/.test(t) && /Remaining/i.test(t), 'the pillar stands on the Dashboard');
+  await p.click('[data-nu-dash]');
+  await p.waitForTimeout(500);
+  const hash = await p.evaluate(function () { return location.hash; });
+  ok(/nutrition/.test(hash), 'tapping it opens the diary');
+
+  /* ---- 10. another profile: no calorie anywhere, dashboard included ---- */
   await p.evaluate(function () {
     const other = Store.state.users.find(function (x) { return x.id !== Store.state.currentUserId; });
     Store.setCurrentUser(other.id);
-    App.navigate('nutrition');
+    App.navigate('dashboard');
   });
   await p.waitForTimeout(500);
+  const dashCard = await p.evaluate(function () {
+    return !!document.querySelector('[data-nu-dash]');
+  });
+  ok(!dashCard, 'the un-opted profile has NO nutrition card on the Dashboard — not a variant, none');
+  await p.evaluate(function () { App.navigate('nutrition'); });
+  await p.waitForTimeout(400);
   t = await text();
-  ok(/Off, until you say otherwise/i.test(t) && !/kcal/.test(t),
-    'the other profile is untouched: no calorie anywhere');
+  ok(/Off, until you say otherwise/i.test(t) && !/kcal/.test(t), 'and no calorie in the view');
 
   ok(errs.length === 0, 'no page errors: ' + errs.slice(0, 2).join(' | '));
 

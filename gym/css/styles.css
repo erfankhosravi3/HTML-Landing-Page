@@ -4883,3 +4883,24 @@ button.g-cell.live:focus-visible { outline: 2px solid var(--accent); outline-off
 
 /* ---- P8: nutrition ---- */
 .g-draft { border-color: var(--accent); }
+
+/* ---- P8.1: the diary ---- */
+.nu-daynav { margin-bottom: 12px; }
+.nu-remaining { font-size: 30px; font-weight: 600; margin: 4px 0 8px; }
+.nu-kcal-bar { height: 8px; }
+.nu-week { display: flex; gap: 6px; align-items: flex-end; margin: 0 0 14px; }
+.nu-day {
+  flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px;
+  background: transparent; border: 0; padding: 4px 0; cursor: pointer; border-radius: var(--radius-sm);
+}
+.nu-day.sel { background: var(--card); }
+.nu-day i { display: block; width: 70%; border-radius: 2px 2px 0 0; background: var(--card-2); }
+.nu-day i.in { background: var(--accent); }
+.nu-day i.over { background: var(--orange); }
+.nu-add { border-top: 1px dashed var(--border); margin-top: 8px; }
+.nu-food {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  background: var(--card-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 9px 12px; margin-top: 6px; cursor: pointer; color: var(--text);
+}
+.nu-food:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
