@@ -4904,3 +4904,17 @@ button.g-cell.live:focus-visible { outline: 2px solid var(--accent); outline-off
   padding: 9px 12px; margin-top: 6px; cursor: pointer; color: var(--text);
 }
 .nu-food:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ---- P8.2: the energy chart ---- */
+.nu-echart .axis { stroke: var(--border); stroke-width: 1; }
+.nu-echart .bar { fill: var(--accent); opacity: .85; }
+.nu-echart .bar.na { fill: var(--card-2); opacity: 1; }
+.nu-echart .burnline { stroke: var(--text-2); stroke-width: 1.5; fill: none; }
+.nu-echart .dot { fill: var(--text-2); }
+.nu-echart .tmark { fill: var(--blue); }
+table.nu-split { border-collapse: collapse; width: 100%; font-size: var(--fs-sm); }
+.nu-split th { text-align: right; font-size: var(--fs-micro); color: var(--text-muted);
+  font-weight: 600; padding: 4px 0 6px 12px; border-bottom: 1px solid var(--border); }
+.nu-split th:first-child, .nu-split td:first-child { text-align: left; padding-left: 0; }
+.nu-split td { text-align: right; padding: 7px 0 0 12px; }
+.tbl-scroll { overflow-x: auto; }

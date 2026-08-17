@@ -217,6 +217,82 @@ const { serve } = require('./lib/hport');
   t = await text();
   ok(/Off, until you say otherwise/i.test(t) && !/kcal/.test(t), 'and no calorie in the view');
 
+  /* ================================================================
+     P8.2 — the Energy tab: expenditure vs intake, joined
+     ================================================================ */
+  await p.evaluate(function () {
+    const u = Store.state.users.find(function (x) { return x.name === 'Erfan'; }) || Store.state.users[0];
+    Store.setCurrentUser(u.id);
+    const t = U.todayStr();
+    // a clean slate for THIS user's training in the window — the demo seed
+    // already has workouts that would blur the split
+    Store.state.workouts = Store.state.workouts.filter(function (w) { return w.userId !== u.id; });
+    Store.save();
+    // 14 complete days: training every other day burns 700 more; intake flat
+    const rows = [];
+    for (let i = 0; i < 14; i++) {
+      const d = U.addDays(t, -i);
+      rows.push({ userId: u.id, date: d, kind: 'basalEnergyKcal', value: 1700, source: 'link' });
+      rows.push({ userId: u.id, date: d, kind: 'activeEnergyKcal', value: i % 2 === 0 ? 1200 : 500, source: 'link' });
+      if (i % 2 === 0) Store.addWorkout({ userId: u.id, date: d, entries: [] });
+      if (i > 1) Store.addMeal({ date: d, slot: 'dinner', name: 'Day ' + i, items: [],
+        kcal: 2400, proteinG: 120, carbsG: 220, fatG: 70, source: 'manual' });
+    }
+    Store.addHealthSamples(rows);
+    App.navigate('nutrition');
+  });
+  await p.waitForTimeout(500);
+  await p.click('[data-nutab="energy"]');
+  await p.waitForTimeout(500);
+  t = await text();
+  ok(/Last 14 days/i.test(t), 'the Energy tab renders the fortnight');
+  const chart = await p.evaluate(function () {
+    return { bars: document.querySelectorAll('.nu-echart .bar').length,
+      na: document.querySelectorAll('.nu-echart .bar.na').length,
+      dots: document.querySelectorAll('.nu-echart .dot').length,
+      marks: document.querySelectorAll('.nu-echart .tmark').length };
+  });
+  ok(chart.bars >= 10, 'intake bars drawn (' + chart.bars + ')');
+  eq14: ok(chart.dots === 14, 'burn dots on every day the link delivered (' + chart.dots + ')');
+  ok(chart.marks === 7, 'training triangles come from the WORKOUT LOG (' + chart.marks + ')');
+  ok(/Training days vs rest days/i.test(t), 'the split card renders');
+  ok(/2900/.test(t) && /2200/.test(t), 'training and rest burns shown from real numbers');
+  ok(/DEFICIT LIVES ON TRAINING DAYS/i.test(t),
+    'THE FINDING: flat intake across a 700 kcal burn gap is named, with the numbers');
+  ok(/The scale as referee/i.test(t), 'calibration lives with the analysis');
+
+  /* the split refuses when one side is thin */
+  await p.evaluate(function () {
+    const u = Store.currentUser();
+    Store.state.workouts = Store.state.workouts.filter(function (w) {
+      return w.userId !== u.id || w.date < U.addDays(U.todayStr(), -13);
+    });
+    Store.save();
+    App.rerender();
+  });
+  await p.waitForTimeout(400);
+  t = await text();
+  ok(/needs 3 complete days of each kind/i.test(t),
+    'zero training days in the window: the split refuses instead of comparing anecdotes');
+
+  /* a day the health link missed must BREAK the burn line, not be bridged */
+  await p.evaluate(function () {
+    const u = Store.currentUser();
+    const gap = U.addDays(U.todayStr(), -6);
+    Store.state.healthSamples = Store.state.healthSamples.filter(function (s) {
+      return !(s.userId === u.id && s.date === gap &&
+        (s.kind === 'basalEnergyKcal' || s.kind === 'activeEnergyKcal'));
+    });
+    Store.save();
+    App.rerender();
+  });
+  await p.waitForTimeout(400);
+  const lineBreaks = await p.evaluate(function () {
+    const el = document.querySelector('.nu-echart .burnline');
+    return el ? (el.getAttribute('d').match(/M/g) || []).length : 0;
+  });
+  ok(lineBreaks === 2, 'A MISSING BURN DAY BREAKS THE LINE — never bridged (' + lineBreaks + ' segments)');
+
   ok(errs.length === 0, 'no page errors: ' + errs.slice(0, 2).join(' | '));
 
   console.log('passed:', pass);

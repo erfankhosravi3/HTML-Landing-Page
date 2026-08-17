@@ -67,6 +67,7 @@
 
   /* ---------- state ---------- */
 
+  let nuTab = 'diary';     // 'diary' | 'energy'
   let viewDate = null;     // the browsed day; null = today
   let draft = null;        // the editable proposal; NOT in the store
   let draftBusy = false;
@@ -81,7 +82,7 @@
       const to = String((e && e.newURL) || '').split('#')[1] || '';
       const from = String((e && e.oldURL) || '').split('#')[1] || '';
       if (to.indexOf('/nutrition') === 0 && from.indexOf('/nutrition') !== 0) {
-        viewDate = null; draft = null; draftBusy = false; addSlot = null; showLibrary = false;
+        nuTab = 'diary'; viewDate = null; draft = null; draftBusy = false; addSlot = null; showLibrary = false;
       }
     });
   }
@@ -107,6 +108,16 @@
   }
 
   function mainHTML() {
+    let h = '<div class="view-head"><h2>Nutrition</h2></div>' +
+      '<div class="segmented g-tabs">' +
+      '<button type="button" class="seg' + (nuTab === 'diary' ? ' active' : '') + '" data-nutab="diary">Diary</button>' +
+      '<button type="button" class="seg' + (nuTab === 'energy' ? ' active' : '') + '" data-nutab="energy">Energy</button>' +
+      '</div>';
+    h += nuTab === 'energy' ? energyHTML() : diaryHTML();
+    return h;
+  }
+
+  function diaryHTML() {
     const u = curUser();
     const t = today();
     const d = vday();
@@ -118,7 +129,7 @@
     const tgt = N().kcalTarget(mySamples(), u.id, t, cfg);
     const proteinTarget = cfg.proteinG || N().proteinTargetG(myWeights(), u.id);
 
-    let h = '<div class="view-head"><h2>Nutrition</h2></div>';
+    let h = '';
 
     /* ---- day nav ---- */
     h += '<div class="g-row nu-daynav">' +
@@ -207,35 +218,6 @@
     });
 
     h += '<input type="file" id="nu-file" accept="image/*" capture="environment" style="display:none">';
-
-    /* ---- calibration + flag ---- */
-    const calib = N().calibration(myMeals(), mySamples(), myWeights(), u.id, t);
-    const flag = N().deficitFlag(myMeals(), mySamples(),
-      Store.state.workouts.filter(function (w) { return w.userId === u.id; }), u.id, t);
-
-    if (flag.state === 'flag') {
-      h += '<section class="card g-refuse"><div class="card-title"><span>Eating too little for this much training</span>' +
-        '<span class="chip g-chip stop">' + flag.avgDeficit + ' kcal/day under</span></div>' +
-        '<p class="small-text" style="margin:0">Two weeks averaging ' + flag.avgDeficit +
-        ' kcal under across ' + flag.sessions + ' sessions. Injury and performance risk; no off ' +
-        'switch, same as every guardrail. Fuel the work.</p></section>';
-    }
-
-    h += '<section class="card"><div class="card-title"><span>Calibration</span></div>';
-    if (calib.state === 'insufficient') {
-      h += '<p class="small-text muted" style="margin:0">The scale check needs ' + N().CALIB_MIN_DAYS +
-        ' complete days in three weeks plus two weights; it has ' + calib.completeDays +
-        '. Photo estimates are ±25–40% — this loop is what makes the weekly signal trustworthy anyway.</p>';
-    } else {
-      h += '<p class="small-text" style="margin:0 0 8px">Ledger predicted <b class="num">' + calib.predictedDeltaKg +
-        ' kg</b>; the scale says <b class="num">' + calib.actualDeltaKg + ' kg</b>. Your numbers run ' +
-        '<b class="num">' + Math.abs(calib.correctionKcalPerDay) + ' kcal/day ' +
-        (calib.correctionKcalPerDay > 0 ? 'low' : 'high') + '</b>.</p>' +
-        '<div class="g-row"><span class="small-text text-2">True daily balance ≈</span>' +
-        '<span class="num small-text">' + (calib.correctedAvgBalance > 0 ? '+' : '') +
-        calib.correctedAvgBalance + ' kcal</span></div>';
-    }
-    h += '</section>';
 
     /* ---- library manager ---- */
     h += '<section class="card"><div class="card-title"><span>Food library</span>' +
@@ -341,6 +323,141 @@
     return h;
   }
 
+  /* ======================================================================
+     ENERGY — exercise and health data joined into one honest ledger
+     ====================================================================== */
+
+  /* The chart: intake as bars, burn as a line, training days marked from the
+     workout log. Geometry here, every colour in styles.css. Incomplete days
+     render muted — what happened is shown, what it means is not claimed. */
+  function energyChartSVG(series) {
+    const W = 340, H = 150, PADX = 8, TOP = 8, BASE = H - 22;
+    const max = Math.max(1, Math.max.apply(null, series.map(function (d) {
+      return Math.max(d.intake.kcal, d.burn || 0);
+    })));
+    const slotW = (W - 2 * PADX) / series.length;
+    const barW = Math.max(6, slotW - 8);
+    function Y(v) { return BASE - (v / max) * (BASE - TOP); }
+
+    let bars = '', line = '', dots = '', marks = '', started = false;
+    series.forEach(function (d, i) {
+      const cx = PADX + slotW * i + slotW / 2;
+      if (d.intake.meals > 0) {
+        bars += '<rect class="bar' + (d.complete ? '' : ' na') + '" x="' + (cx - barW / 2).toFixed(1) +
+          '" y="' + Y(d.intake.kcal).toFixed(1) + '" width="' + barW.toFixed(1) +
+          '" height="' + (BASE - Y(d.intake.kcal)).toFixed(1) + '"/>';
+      }
+      if (d.burn !== null) {
+        line += (started ? ' L' : 'M') + cx.toFixed(1) + ' ' + Y(d.burn).toFixed(1);
+        started = true;
+        dots += '<circle class="dot" cx="' + cx.toFixed(1) + '" cy="' + Y(d.burn).toFixed(1) + '" r="2.5"/>';
+      } else {
+        started = false; // a gap in burn is a gap in the line, not a bridge
+      }
+      if (d.trained) {
+        marks += '<path class="tmark" d="M' + (cx - 4).toFixed(1) + ' ' + (H - 6) + ' L' +
+          (cx + 4).toFixed(1) + ' ' + (H - 6) + ' L' + cx.toFixed(1) + ' ' + (H - 13) + ' Z"/>';
+      }
+    });
+
+    return '<svg class="nu-echart" viewBox="0 0 ' + W + ' ' + H + '" width="100%" height="' + H + '" ' +
+      'role="img" aria-label="Fourteen days of intake bars against the burn line; triangles mark training days">' +
+      '<line class="axis" x1="' + PADX + '" y1="' + BASE + '" x2="' + (W - PADX) + '" y2="' + BASE + '"/>' +
+      bars + '<path class="burnline" d="' + line + '"/>' + dots + marks + '</svg>' +
+      '<div class="g-row micro-label"><span>▮ intake</span><span>— burn</span><span>▲ trained (from your log)</span></div>';
+  }
+
+  function energyHTML() {
+    const u = curUser();
+    const t = today();
+    const workouts = Store.state.workouts.filter(function (w) { return w.userId === u.id; });
+    const series = N().energySeries(myMeals(), mySamples(), workouts, u.id, t);
+    const split = N().trainingSplit(series);
+    const completeN = series.filter(function (d) { return d.complete; }).length;
+
+    let h = '';
+
+    /* ---- the picture ---- */
+    h += '<section class="card"><div class="card-title"><span>Last 14 days</span>' +
+      '<span class="small-text muted num">' + completeN + ' complete</span></div>' +
+      energyChartSVG(series);
+    if (completeN < series.length) {
+      h += '<p class="micro-label" style="margin:6px 0 0">Muted bars are incomplete days — intake ' +
+        'without a full burn, or the reverse. They are drawn, never judged.</p>';
+    }
+    h += '</section>';
+
+    /* ---- where the deficit lives ---- */
+    h += '<section class="card"><div class="card-title"><span>Training days vs rest days</span></div>';
+    if (split.state !== 'ok') {
+      h += '<p class="small-text muted" style="margin:0">This comparison needs ' + N().SPLIT_MIN_DAYS +
+        ' complete days of each kind in two weeks — it has ' + split.trainDays + ' training and ' +
+        split.restDays + ' rest. Log meals and keep the health link delivering, and it will speak.</p>';
+    } else {
+      h += '<div class="tbl-scroll"><table class="nu-split"><tr><th></th>' +
+        '<th class="num">Burn</th><th class="num">Eat</th><th class="num">Balance</th></tr>' +
+        '<tr><td>Training · ' + split.train.n + 'd</td><td class="num">' + split.train.burn +
+        '</td><td class="num">' + split.train.intake + '</td><td class="num' +
+        (split.train.balance < 0 ? ' g-warn-text' : '') + '">' +
+        (split.train.balance > 0 ? '+' : '') + split.train.balance + '</td></tr>' +
+        '<tr><td>Rest · ' + split.rest.n + 'd</td><td class="num">' + split.rest.burn +
+        '</td><td class="num">' + split.rest.intake + '</td><td class="num' +
+        (split.rest.balance < 0 ? ' g-warn-text' : '') + '">' +
+        (split.rest.balance > 0 ? '+' : '') + split.rest.balance + '</td></tr></table></div>';
+
+      /* the finding, computed from the numbers on screen and nothing else */
+      let finding;
+      if (split.deltaBurn > 200 && split.deltaIntake < split.deltaBurn * 0.4) {
+        finding = 'Your burn jumps +' + split.deltaBurn + ' kcal on training days but intake only moves ' +
+          (split.deltaIntake >= 0 ? '+' : '') + split.deltaIntake +
+          ' — THE DEFICIT LIVES ON TRAINING DAYS (' + split.train.balance + ' there vs ' +
+          (split.rest.balance > 0 ? '+' : '') + split.rest.balance + ' at rest). ' +
+          'If you fuel anywhere, fuel the sessions.';
+      } else if (split.deltaBalance < -200) {
+        finding = 'Training days run ' + Math.abs(split.deltaBalance) +
+          ' kcal deeper than rest days even with intake moving — the gap is the sessions.';
+      } else if (split.deltaBalance > 200) {
+        finding = 'Rest days carry the deficit (' + (split.rest.balance) + ' vs ' +
+          (split.train.balance > 0 ? '+' : '') + split.train.balance +
+          ' on training days) — you eat with the work but not without it.';
+      } else {
+        finding = 'Intake tracks burn — the balance holds steady across both kinds of day.';
+      }
+      h += '<p class="small-text" style="margin:10px 0 0"><b>' + finding + '</b></p>';
+    }
+    h += '</section>';
+
+    /* ---- the deficit flag and the scale, moved here with the analysis ---- */
+    const calib = N().calibration(myMeals(), mySamples(), myWeights(), u.id, t);
+    const flag = N().deficitFlag(myMeals(), mySamples(), workouts, u.id, t);
+
+    if (flag.state === 'flag') {
+      h += '<section class="card g-refuse"><div class="card-title"><span>Eating too little for this much training</span>' +
+        '<span class="chip g-chip stop">' + flag.avgDeficit + ' kcal/day under</span></div>' +
+        '<p class="small-text" style="margin:0">Two weeks averaging ' + flag.avgDeficit +
+        ' kcal under across ' + flag.sessions + ' sessions. Injury and performance risk; no off ' +
+        'switch, same as every guardrail. Fuel the work.</p></section>';
+    }
+
+    h += '<section class="card"><div class="card-title"><span>The scale as referee</span></div>';
+    if (calib.state === 'insufficient') {
+      h += '<p class="small-text muted" style="margin:0">The scale check needs ' + N().CALIB_MIN_DAYS +
+        ' complete days in three weeks plus two weights; it has ' + calib.completeDays +
+        '. Photo estimates are ±25–40% — this loop is what makes the weekly signal trustworthy anyway.</p>';
+    } else {
+      h += '<p class="small-text" style="margin:0 0 8px">Ledger predicted <b class="num">' + calib.predictedDeltaKg +
+        ' kg</b>; the scale says <b class="num">' + calib.actualDeltaKg + ' kg</b>. Your numbers run ' +
+        '<b class="num">' + Math.abs(calib.correctionKcalPerDay) + ' kcal/day ' +
+        (calib.correctionKcalPerDay > 0 ? 'low' : 'high') + '</b>.</p>' +
+        '<div class="g-row"><span class="small-text text-2">True daily balance ≈</span>' +
+        '<span class="num small-text">' + (calib.correctedAvgBalance > 0 ? '+' : '') +
+        calib.correctedAvgBalance + ' kcal</span></div>';
+    }
+    h += '</section>';
+
+    return h;
+  }
+
   /* ---------- the photo pipeline: downscale, send, drop ---------- */
 
   function handleFile(file) {
@@ -405,6 +522,11 @@
   /* ---------- wiring ---------- */
 
   function wire(container) {
+    U.on(container, 'click', '[data-nutab]', function (e, el) {
+      nuTab = el.getAttribute('data-nutab');
+      addSlot = null;
+      App.rerender();
+    });
     U.on(container, 'click', '[data-day]', function (e, el) {
       viewDate = el.getAttribute('data-day');
       if (viewDate === today()) viewDate = null;

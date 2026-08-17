@@ -265,6 +265,56 @@ eq(Store.state.foods[0].uses, 2, 'quick-logs bump the measured frequency');
 Store.deleteFood(f1.id);
 ok(Store.state.deleted.foods[f1.id] > 0, 'foods tombstone');
 
+
+/* ==================================================================
+   6. P8.2 — the energy series and the training split
+   ================================================================== */
+meals = []; samples = []; workouts = [];
+for (let i = 0; i < 14; i++) {
+  const d = U.addDays(TODAY, -i);
+  samples.push(sample(d, 'basalEnergyKcal', 1700));
+  // training every other day burns 700 more
+  const training = i % 2 === 0;
+  samples.push(sample(d, 'activeEnergyKcal', training ? 1200 : 500));
+  if (training) workouts.push({ userId: UID, date: d });
+  meals.push(meal(d, 2400));                      // flat intake — the classic athlete failure
+}
+let series = Nutrition.energySeries(meals, samples, workouts, UID, TODAY);
+eq(series.length, 14, 'fourteen days, oldest first');
+eq(series[13].date, TODAY, 'ending today');
+ok(series[13].trained, 'training days are read from the WORKOUT LOG, not inferred');
+eq(series[13].burn, 2900, 'a training day burns basal + its bigger active');
+eq(series[12].burn, 2200, 'a rest day burns less');
+ok(series.every(function (d) { return d.complete; }), 'all complete in this fixture');
+
+let split = Nutrition.trainingSplit(series);
+eq(split.state, 'ok', 'seven of each kind: the split speaks');
+eq(split.train.burn, 2900, 'training-day average burn');
+eq(split.rest.burn, 2200, 'rest-day average burn');
+eq(split.deltaBurn, 700, 'the burn gap');
+eq(split.deltaIntake, 0, 'flat intake measured as flat');
+eq(split.deltaBalance, -700, 'THE FINDING: the deficit lives on training days');
+eq(split.train.balance, -500, 'under by 500 on training days');
+eq(split.rest.balance, 200, 'over by 200 at rest');
+
+/* refusals */
+const thin = Nutrition.energySeries(meals, samples, workouts.slice(0, 2), UID, TODAY);
+split = Nutrition.trainingSplit(thin);
+eq(split.state, 'insufficient', 'two training days is an anecdote — the split refuses');
+const incompleteSeries = Nutrition.energySeries(meals.slice(0, 6), samples, workouts, UID, TODAY);
+ok(incompleteSeries.some(function (d) { return !d.complete && d.balance === null; }),
+  'days without logged intake stay incomplete with NO balance');
+split = Nutrition.trainingSplit(incompleteSeries);
+ok(split.state === 'insufficient' || (split.train.n + split.rest.n) <= 6,
+  'and the split never counts them');
+
+/* training attribution is PER USER — a family member's session on the same
+   database must never mark your day as trained */
+series = Nutrition.energySeries(meals, samples,
+  [{ userId: 'somebody-else', date: TODAY }], UID, TODAY);
+ok(series.every(function (d) { return !d.trained; }),
+  "ANOTHER USER'S WORKOUT NEVER MARKS YOUR DAY AS TRAINED");
+
 console.log('passed:', pass);
 if (fails.length) { fails.forEach(function (f) { console.log('FAIL:', f); }); process.exit(1); }
 console.log('PASS: nutrition core (' + pass + ' assertions)');
