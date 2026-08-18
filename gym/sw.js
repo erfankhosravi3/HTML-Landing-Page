@@ -3,9 +3,9 @@
    or installed PWAs keep serving the old cache forever. */
 'use strict';
 
-/* P8.2: Energy — expenditure vs intake joined with the training log:
-   the 14-day chart, the training/rest split, the finding. */
-const CACHE_NAME = 'ironlog-v2p24';
+/* Version visibility: Settings shows installed vs latest and can force an
+   update check. sw.js + js/app.js. */
+const CACHE_NAME = 'ironlog-v2p25';
 
 const SHELL = [
   './',
@@ -56,9 +56,15 @@ self.addEventListener('install', function (event) {
   );
 });
 
-// The page asks for the handover once the user has accepted it.
+// The page asks for the handover once the user has accepted it — and can ask
+// which version is actually RUNNING, so "it hasn't updated" is checkable in
+// Settings instead of being a mystery on both ends of a conversation.
 self.addEventListener('message', function (event) {
-  if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting();
+  if (!event.data) return;
+  if (event.data.type === 'SKIP_WAITING') self.skipWaiting();
+  if (event.data.type === 'GET_VERSION' && event.ports && event.ports[0]) {
+    event.ports[0].postMessage(CACHE_NAME);
+  }
 });
 
 self.addEventListener('activate', function (event) {
@@ -83,6 +89,12 @@ self.addEventListener('fetch', function (event) {
   let url;
   try { url = new URL(req.url); } catch (e) { return; }
   if (url.origin !== self.location.origin) return;
+
+  // Never intercept sw.js ITSELF. The cache-first branch below would store
+  // the first copy it ever saw and serve it forever — which silently broke
+  // App.latestVersion() (it "checked for updates" against the cache) and
+  // was caught by the version-visibility test, not by eyes.
+  if (url.pathname.slice(-6) === '/sw.js') return;
 
   // Navigations: network-first so app updates land, cache fallback for offline.
   if (req.mode === 'navigate') {

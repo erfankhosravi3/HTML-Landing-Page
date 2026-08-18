@@ -80,7 +80,9 @@ function serveNoStore(root) {
   const errs = [];
   page.on('pageerror', function (e) { errs.push(e.message); });
   const navs = [];
-  page.on('framenavigated', function (f) { if (f === page.mainFrame()) navs.push(Date.now()); });
+  // Document loads, not framenavigated: App.navigate() is a same-document
+  // hash change and must not read as a reload.
+  page.on('load', function () { navs.push(Date.now()); });
 
   /* ---------- first load: install, and stay quiet ---------- */
   await page.goto(base, { waitUntil: 'load' });
@@ -102,6 +104,39 @@ function serveNoStore(root) {
 
   const v1 = await page.evaluate(function () { return window.__BUILD_MARK || null; });
 
+  /* ---------- version visibility: the page can ASK what is running ---------- */
+  const verInstalled = await page.evaluate(function () { return App.installedVersion(); });
+  ok(typeof verInstalled === 'string' && verInstalled.indexOf('ironlog-') === 0,
+    'the RUNNING worker answers GET_VERSION (' + verInstalled + ')');
+  const verLatest = await page.evaluate(function () { return App.latestVersion(); });
+  eq(verLatest, verInstalled, 'before a deploy, installed and latest agree');
+  const verCard = await page.evaluate(function () {
+    Store.seedDemo();
+    Store.setCurrentUser(Store.state.users[0].id);
+    App.navigate('settings');
+    return new Promise(function (resolve) {
+      setTimeout(function () {
+        resolve({
+          hasCard: !!document.querySelector('#ver-installed'),
+          hasBtn: !!document.querySelector('#ver-check')
+        });
+      }, 800);
+    });
+  });
+  ok(verCard.hasCard && verCard.hasBtn, 'Settings shows the App version card with a check button');
+  await page.waitForFunction(function () {
+    const el = document.querySelector('#ver-installed');
+    return el && el.textContent.indexOf('ironlog-') === 0;
+  }, null, { timeout: 8000 });
+  const shown = await page.evaluate(function () {
+    return { installed: document.querySelector('#ver-installed').textContent,
+      verdict: document.querySelector('#ver-verdict').textContent };
+  });
+  eq(shown.installed, verInstalled, 'the card shows the real running version');
+  ok(/latest version/i.test(shown.verdict), 'and says you are current when you are');
+  await page.evaluate(function () { App.navigate('dashboard'); });
+  await page.waitForTimeout(400);
+
   /* ---------- deploy: change a shell file and the cache name ---------- */
   const swPath = path.join(ROOT, 'sw.js');
   fs.writeFileSync(swPath, fs.readFileSync(swPath, 'utf8')
@@ -116,6 +151,19 @@ function serveNoStore(root) {
   });
 
   await page.waitForTimeout(1500);
+
+  /* Source-pinned, not behavioral, and honestly so: the fixture server sends
+     no-store on everything (it must — the browser HTTP cache would otherwise
+     stand in for the SW cache), which makes it impossible to reproduce the
+     production CDN's max-age=600 here. The defense against THAT layer is the
+     no-store on the request itself. */
+  const appSrc = fs.readFileSync(path.join(ROOT, 'js', 'app.js'), 'utf8');
+  ok(/fetch\('\.\/sw\.js',\s*\{\s*cache:\s*'no-store'/.test(appSrc),
+    "latestVersion carries cache:'no-store' — GitHub Pages caches sw.js for 10 minutes");
+
+  const latestAfterDeploy = await page.evaluate(function () { return App.latestVersion(); });
+  eq(latestAfterDeploy, 'ironlog-TEST-NEXT',
+    'after a deploy, latestVersion reads the NEW build past every cache');
 
   await waitForBar();
   const offered = await page.evaluate(function () {

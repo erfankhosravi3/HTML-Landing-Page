@@ -1467,6 +1467,20 @@
       }
     }
 
+    /* ---- 6b. App version ---- */
+    const verCard = U.el('<div class="card">' +
+      cardTitle(icons.sync, 'App version') +
+      '<div class="g-row" style="padding:4px 0"><span class="small-text text-2">Installed on this device</span>' +
+        '<span class="num small-text" id="ver-installed">checking…</span></div>' +
+      '<div class="g-row" style="padding:4px 0"><span class="small-text text-2">Latest available</span>' +
+        '<span class="num small-text" id="ver-latest">checking…</span></div>' +
+      '<div class="small-text" id="ver-verdict" style="margin:8px 0 0"></div>' +
+      '<div class="btn-row" style="margin-top:10px">' +
+        '<button type="button" class="btn ghost small" id="ver-check">Check for updates</button></div>' +
+      '</div>');
+    el.appendChild(verCard);
+    wireVersionCard(verCard);
+
     /* ---- 7. Danger zone ---- */
     // ONE red, from the token: the rule and the title are both --red (see
     // .card.danger in css/styles.css) instead of two different retired reds.
@@ -1770,6 +1784,62 @@
         }
       });
     }
+  }
+
+  /* ---------- app version wiring ---------- */
+
+  function fillVersions(card, then) {
+    const inst = U.$('#ver-installed', card);
+    const late = U.$('#ver-latest', card);
+    const verdict = U.$('#ver-verdict', card);
+    Promise.all([App.installedVersion(), App.latestVersion()]).then(function (pair) {
+      const installed = pair[0], latest = pair[1];
+      if (!inst || !late) return;               // navigated away mid-fetch
+      inst.textContent = installed || 'unknown';
+      late.textContent = latest || 'unreachable';
+      if (verdict) {
+        if (installed && latest && installed === latest) {
+          verdict.innerHTML = '<span style="color:var(--accent)">You are on the latest version.</span>';
+        } else if (installed && latest) {
+          verdict.innerHTML = '<span style="color:var(--orange)">An update is available. ' +
+            'Tap Check for updates — the Update bar will appear when it\'s staged.</span>';
+        } else if (!latest) {
+          verdict.innerHTML = '<span class="muted">Could not reach the server to compare — offline?</span>';
+        } else {
+          verdict.innerHTML = '<span class="muted">No service worker is controlling this page yet — ' +
+            'reload once and check again.</span>';
+        }
+      }
+      if (then) then(installed, latest);
+    });
+  }
+
+  function wireVersionCard(card) {
+    fillVersions(card, null);
+    const btn = U.$('#ver-check', card);
+    if (!btn) return;
+    btn.addEventListener('click', function () {
+      btn.disabled = true;
+      const was = btn.textContent;
+      btn.textContent = 'Checking…';
+      // The same path a foreground uses: ask the registration to re-fetch
+      // sw.js and offer whatever ends up waiting.
+      if (App._swCheck) { try { App._swCheck(); } catch (e) { /* offline */ } }
+      // Give the browser a moment to install a newly found worker, then
+      // re-offer and re-report. Two beats, because install takes one.
+      setTimeout(function () {
+        if (App._offerIfWaiting) App._offerIfWaiting();
+        fillVersions(card, function (installed, latest) {
+          btn.disabled = false;
+          btn.textContent = was;
+          if (installed && latest && installed !== latest) {
+            App.toast('Update staged — take it from the Update bar', 'ok');
+          } else if (installed && latest) {
+            App.toast('You are current', 'ok');
+          }
+        });
+      }, 2500);
+    });
   }
 
   /* ---------- Apple Health wiring ---------- */
@@ -2337,6 +2407,37 @@
   // Exposed so a test can drive the UI without a real service worker.
   App._showUpdateBar = showUpdateBar;
 
+  /* ---------- version visibility ----------
+     "It hasn't updated" must be answerable inside the app. Installed = what
+     the RUNNING service worker says it is (asked over a MessageChannel);
+     latest = what the server would hand a new visitor (sw.js fetched with
+     no-store, bypassing every cache including the CDN's). */
+
+  App.installedVersion = function () {
+    return new Promise(function (resolve) {
+      const ctrl = ('serviceWorker' in navigator) && navigator.serviceWorker.controller;
+      if (!ctrl) { resolve(null); return; }
+      const ch = new MessageChannel();
+      const timer = setTimeout(function () { resolve(null); }, 2500);
+      ch.port1.onmessage = function (e) {
+        clearTimeout(timer);
+        resolve(typeof e.data === 'string' ? e.data : null);
+      };
+      try { ctrl.postMessage({ type: 'GET_VERSION' }, [ch.port2]); }
+      catch (e) { clearTimeout(timer); resolve(null); }
+    });
+  };
+
+  App.latestVersion = function () {
+    return fetch('./sw.js', { cache: 'no-store' }).then(function (r) {
+      if (!r.ok) return null;
+      return r.text().then(function (t) {
+        const m = /CACHE_NAME = '([^']+)'/.exec(t);
+        return m ? m[1] : null;
+      });
+    }).catch(function () { return null; });
+  };
+
   function initServiceWorker() {
     if (!('serviceWorker' in navigator)) return;
     // Never on file:// — registration throws there and the app works fine
@@ -2387,6 +2488,8 @@
         // above turns up anything newer.
         offerIfWaiting();
       }
+      // Settings' "Check for updates" runs the same path a foreground does.
+      App._swCheck = check;
       document.addEventListener('visibilitychange', function () {
         if (document.hidden) return;
         dismissed = false;  // a fresh look at the app is a fresh chance to ask
